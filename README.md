@@ -1,18 +1,19 @@
-# endstone-spark
+# spark for Endstone
 
-A [spark](https://spark.lucko.me/)-style sampling profiler for
-[Endstone](https://github.com/EndstoneMC/endstone) — find out where your Bedrock
-Dedicated Server is actually spending its tick time.
+An implementation of the [spark](https://spark.lucko.me/) profiler for
+[Endstone](https://github.com/EndstoneMC/endstone) — a native port of spark to the
+Bedrock Dedicated Server. Find out where your server is actually spending its tick
+time, in spark's own web viewer.
 
-Unlike a plugin-only timings system, endstone-spark is a **native statistical
-sampling profiler**: it periodically snapshots the BDS server thread's real call
-stack, so it covers **all** of BDS's internal work (chunk gen, entity ticking,
-redstone, pathfinding, …), not just plugin code — even though the server binary is
-stripped. Results are uploaded to spark's own viewer and open as an interactive
-flame graph at `https://spark.lucko.me/<id>`.
+It is a **native statistical sampling profiler**: it periodically snapshots the BDS
+server thread's real call stack, so it covers **all** of BDS's internal work (chunk
+gen, entity ticking, redstone, pathfinding, …), not just plugin code — even though
+the server binary is stripped. It produces genuine spark profiles, uploaded to
+spark's bytebin and opened as an interactive flame graph at
+`https://spark.lucko.me/<id>`.
 
-> The profile format and the web viewer are spark's. endstone-spark produces
-> spark-compatible data; all credit for the viewer and format goes to
+> This is spark, ported to Endstone. The profile format, protocol, and web viewer
+> are spark's — all credit for those goes to
 > [lucko/spark](https://github.com/lucko/spark).
 
 ## Commands

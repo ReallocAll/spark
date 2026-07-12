@@ -8,7 +8,7 @@
 
 namespace spark {
 
-// A spark-style command argument parser: a leading sub-command followed by
+// A command argument parser matching spark's: a leading sub-command followed by
 // `--flag [value]` options (a flag may repeat). Endstone hands commands a single
 // rest-of-line string, so we tokenize it ourselves.
 class Arguments {
