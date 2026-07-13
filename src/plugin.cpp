@@ -148,8 +148,11 @@ public:
             main_tid_.store(currentThreadId());
         }
 
-        std::string line = args.empty() ? std::string() : args[0];
-        std::vector<std::string> tokens = spark::Arguments::tokenize(line);
+        std::vector<std::string> tokens;
+        for (const auto &arg : args) {
+            auto parsed = spark::Arguments::tokenize(arg);
+            tokens.insert(tokens.end(), parsed.begin(), parsed.end());
+        }
         std::string module = tokens.empty() ? std::string() : tokens[0];
 
         if (module.empty()) {
@@ -190,7 +193,7 @@ private:
     void sendHelp(endstone::CommandSender &sender)
     {
         sender.sendMessage("{}endstone-spark {}v{}", ColorFormat::Gold, ColorFormat::Gray, spark::kVersion);
-        sender.sendMessage("{}/spark profiler start {}- begin profiling the server thread", ColorFormat::Yellow,
+        sender.sendMessage("{}/spark profiler start [flags] {}- begin profiling the server thread", ColorFormat::Yellow,
                            ColorFormat::Gray);
         sender.sendMessage("{}/spark profiler stop {}- stop & upload a flame graph", ColorFormat::Yellow,
                            ColorFormat::Gray);
@@ -199,6 +202,8 @@ private:
         sender.sendMessage("{}/spark tps {}- ticks per second & tick duration", ColorFormat::Yellow,
                            ColorFormat::Gray);
         sender.sendMessage("{}/spark health {}- server health report", ColorFormat::Yellow, ColorFormat::Gray);
+        sender.sendMessage("{}Flags: --interval <ms>, --timeout <seconds>, --only-ticks-over <ms>", ColorFormat::Gray);
+        sender.sendMessage("{}       --save-to-file, --comment <text>, --include-sleeping", ColorFormat::Gray);
     }
 
     void cmdProfiler(endstone::CommandSender &sender, const spark::Arguments &args)
@@ -528,7 +533,9 @@ ENDSTONE_PLUGIN("spark", "0.1.0", SparkPlugin)
 
     command("spark")
         .description("spark profiler")
-        .usages("/spark [args: message]")
+        .usages("/spark", "/spark (tps|health|healthreport)<module: SparkStatusModule>",
+                "/spark (profiler|sampler)<module: SparkProfilerModule> "
+                "(start|stop|info|cancel|open|upload)[action: SparkProfilerAction] [flags: message]")
         .permissions("endstone.command.spark");
 
     permission("endstone.command.spark")
