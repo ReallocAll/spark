@@ -18,9 +18,9 @@ struct ResolvedFrame {
     std::int32_t line = -1;   // source line if DWARF is present, else -1
 };
 
-// Resolve a batch of unique frame keys via cpptrace (reads DWARF/symbols off disk).
-// Frames whose symbol cannot be recovered fall back to "0x<rva>" — expected for the
-// stripped BDS binary and offline-symbolicatable later against IDA/PDB.
+// Resolve a batch of unique frame keys via the platform symbol backend. Frames whose
+// symbol cannot be recovered fall back to "0x<rva>" — expected for stripped binaries
+// and offline-symbolicatable later against IDA/PDB.
 std::unordered_map<FrameKey, ResolvedFrame, FrameKeyHash> resolveFrames(const ModuleTable &modules,
                                                                         const std::vector<FrameKey> &keys);
 

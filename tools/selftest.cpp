@@ -12,8 +12,12 @@
 #include <string>
 #include <thread>
 
+#if defined(_WIN32)
+#include <windows.h>
+#else
 #include <sys/syscall.h>
 #include <unistd.h>
+#endif
 
 #include "net/bytebin.h"
 #include "net/gzip.h"
@@ -52,7 +56,11 @@ std::atomic<bool> g_run{true};
 
 void worker()
 {
+#if defined(_WIN32)
+    g_worker_tid.store(static_cast<std::uint64_t>(GetCurrentThreadId()));
+#else
     g_worker_tid.store(static_cast<std::uint64_t>(::syscall(SYS_gettid)));
+#endif
     while (g_run.load()) {
         hotOuter();
         std::this_thread::sleep_for(std::chrono::milliseconds(300));  // the "off-tick" sleep

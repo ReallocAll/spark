@@ -43,9 +43,11 @@ target_link_libraries(spark_core PUBLIC cpptrace::cpptrace concurrentqueue::conc
 set_target_properties(spark_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 # Keep our vendored cpptrace/zlib symbols local to the .so that embeds spark_core so
 # they never interpose with Endstone core's own (differently-built) cpptrace copy.
-target_compile_options(spark_core PRIVATE -fvisibility=hidden -fvisibility-inlines-hidden)
+if (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(spark_core PRIVATE -fvisibility=hidden -fvisibility-inlines-hidden)
+endif ()
 if (WIN32)
-    target_link_libraries(spark_core PUBLIC dbghelp)
+    target_link_libraries(spark_core PUBLIC dbghelp psapi advapi32)
 endif ()
 
 # --- the Endstone plugin (links only its own static core + Endstone headers) ---
@@ -54,11 +56,11 @@ endstone_add_plugin(spark
         src/command/arguments.cpp)
 target_include_directories(spark PRIVATE src)
 target_link_libraries(spark PRIVATE spark_core)
-target_compile_options(spark PRIVATE -fvisibility=hidden -fvisibility-inlines-hidden)
 # Localize every symbol from the static archives (zlib, cpptrace, libunwind, libc++)
 # so they can't interpose with Endstone core's own copies in the BDS process. Only
 # init_endstone_plugin (default visibility via the macro) stays exported.
-if (UNIX)
+if (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(spark PRIVATE -fvisibility=hidden -fvisibility-inlines-hidden)
     target_link_options(spark PRIVATE "-Wl,--exclude-libs,ALL")
 endif ()
 

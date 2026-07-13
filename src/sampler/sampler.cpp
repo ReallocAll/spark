@@ -6,6 +6,13 @@
 
 #include <cpptrace/cpptrace.hpp>
 
+#if defined(_WIN32)
+// clang-format off
+#include <windows.h>
+#include <dbghelp.h>
+// clang-format on
+#endif
+
 #include "sampler/capture.h"
 #include "sampler/symbolicate.h"
 
@@ -104,6 +111,26 @@ void Sampler::samplerLoop()
         sample.window = currentWindow();
         sample.frames.reserve(buf.count);
         for (std::size_t i = kLeadingDrop; i < buf.count; ++i) {
+#if defined(_WIN32)
+            std::uint64_t raw_address = static_cast<std::uint64_t>(buf.ips[i]);
+            DWORD64 module_base = SymGetModuleBase64(GetCurrentProcess(), raw_address);
+
+            std::string path = "unknown";
+            if (module_base != 0) {
+                char module_path[MAX_PATH]{};
+                DWORD length = GetModuleFileNameA(
+                    reinterpret_cast<HMODULE>(static_cast<std::uintptr_t>(module_base)), module_path,
+                    static_cast<DWORD>(sizeof(module_path)));
+                if (length > 0) {
+                    path.assign(module_path, length);
+                }
+            }
+
+            FrameKey key;
+            key.module = modules_.intern(path);
+            key.rva = module_base != 0 ? raw_address - module_base : raw_address;
+            key.raw_address = raw_address;
+#else
             cpptrace::safe_object_frame frame;
             cpptrace::get_safe_object_frame(buf.ips[i], &frame);
             std::string_view path =
@@ -112,6 +139,7 @@ void Sampler::samplerLoop()
             key.module = modules_.intern(path);
             key.rva = static_cast<std::uint64_t>(frame.address_relative_to_object_start);
             key.raw_address = static_cast<std::uint64_t>(frame.raw_address);
+#endif
             sample.frames.push_back(key);
         }
         if (sample.frames.empty()) {

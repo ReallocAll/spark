@@ -3,7 +3,10 @@
 #include <string_view>
 
 #if defined(_WIN32)
-#include <cpptrace/cpptrace.hpp>
+// clang-format off
+#include <windows.h>
+#include <dbghelp.h>
+// clang-format on
 #else
 #include <cstdlib>
 
@@ -14,6 +17,36 @@
 namespace spark {
 
 namespace {
+
+#if defined(_WIN32)
+struct SymbolBuffer {
+    SYMBOL_INFO info;
+    char name[MAX_SYM_NAME];
+};
+
+class DbgHelpSession {
+public:
+    explicit DbgHelpSession(HANDLE process) : process_(process), initialized_(SymInitialize(process, nullptr, TRUE))
+    {
+    }
+
+    ~DbgHelpSession()
+    {
+        if (initialized_) {
+            SymCleanup(process_);
+        }
+    }
+
+    bool initialized() const
+    {
+        return initialized_ != FALSE;
+    }
+
+private:
+    HANDLE process_;
+    BOOL initialized_;
+};
+#endif
 
 std::string basename(const std::string &path)
 {
@@ -104,39 +137,42 @@ bool isSleepFrame(std::uint64_t raw_address)
 
 #else
 
-// Windows: cpptrace resolves via DbgHelp/PDB (BDS ships a PDB), giving real names.
+// Windows: resolve directly through DbgHelp. Sampling has already stopped and the
+// capture session has been cleaned up, so use a short-lived symbol session for the
+// export batch.
 std::unordered_map<FrameKey, ResolvedFrame, FrameKeyHash> resolveFrames(const ModuleTable &modules,
                                                                         const std::vector<FrameKey> &keys)
 {
     std::unordered_map<FrameKey, ResolvedFrame, FrameKeyHash> out;
     out.reserve(keys.size());
 
+    HANDLE process = GetCurrentProcess();
+    SymSetOptions(SymGetOptions() | SYMOPT_DEFERRED_LOADS | SYMOPT_UNDNAME | SYMOPT_LOAD_LINES);
+    DbgHelpSession session(process);
+
     for (const FrameKey &key : keys) {
-        cpptrace::object_frame frame;
-        frame.raw_address = static_cast<cpptrace::frame_ptr>(key.raw_address);
-        frame.object_address = static_cast<cpptrace::frame_ptr>(key.rva);
-        frame.object_path = modules.path(key.module);
-
-        cpptrace::object_trace trace;
-        trace.frames.push_back(frame);
-        cpptrace::stacktrace resolved = trace.resolve();
-
         ResolvedFrame rf;
         rf.class_name = basename(modules.path(key.module));
-        const cpptrace::stacktrace_frame *pick = nullptr;
-        for (const cpptrace::stacktrace_frame &f : resolved.frames) {
-            if (!f.symbol.empty()) {
-                pick = &f;
-                break;
+
+        if (session.initialized() && key.raw_address != 0) {
+            SymbolBuffer symbol{};
+            symbol.info.SizeOfStruct = sizeof(SYMBOL_INFO);
+            symbol.info.MaxNameLen = MAX_SYM_NAME;
+
+            DWORD64 displacement = 0;
+            if (SymFromAddr(process, key.raw_address, &displacement, &symbol.info)) {
+                rf.method_name.assign(symbol.info.Name, symbol.info.NameLen);
+
+                IMAGEHLP_LINE64 line{};
+                line.SizeOfStruct = sizeof(line);
+                DWORD line_displacement = 0;
+                if (SymGetLineFromAddr64(process, key.raw_address, &line_displacement, &line)) {
+                    rf.line = static_cast<std::int32_t>(line.LineNumber);
+                }
             }
         }
-        if (pick != nullptr) {
-            rf.method_name = pick->symbol;
-            if (pick->line.has_value()) {
-                rf.line = static_cast<std::int32_t>(pick->line.value());
-            }
-        }
-        else {
+
+        if (rf.method_name.empty()) {
             rf.method_name = hex(key.rva);
         }
         out.emplace(key, std::move(rf));
@@ -144,9 +180,42 @@ std::unordered_map<FrameKey, ResolvedFrame, FrameKeyHash> resolveFrames(const Mo
     return out;
 }
 
-bool isSleepFrame(std::uint64_t /*raw_address*/)
+bool isSleepFrame(std::uint64_t raw_address)
 {
-    return false;  // TODO(windows): detect sleep/wait frames via symbol name
+    if (raw_address == 0) {
+        return false;
+    }
+
+    DWORD64 module_base = SymGetModuleBase64(GetCurrentProcess(), raw_address);
+    HMODULE module = reinterpret_cast<HMODULE>(static_cast<std::uintptr_t>(module_base));
+    if (module == nullptr ||
+        (module != GetModuleHandleW(L"kernel32.dll") && module != GetModuleHandleW(L"KernelBase.dll") &&
+         module != GetModuleHandleW(L"ntdll.dll"))) {
+        return false;
+    }
+
+    SymbolBuffer symbol{};
+    symbol.info.SizeOfStruct = sizeof(SYMBOL_INFO);
+    symbol.info.MaxNameLen = MAX_SYM_NAME;
+    DWORD64 displacement = 0;
+    if (!SymFromAddr(GetCurrentProcess(), raw_address, &displacement, &symbol.info)) {
+        return false;
+    }
+
+    std::string_view name(symbol.info.Name, symbol.info.NameLen);
+    for (std::string_view wait : {std::string_view("Sleep"), std::string_view("SleepEx"),
+                                  std::string_view("WaitForSingleObject"),
+                                  std::string_view("WaitForSingleObjectEx"),
+                                  std::string_view("NtWaitForSingleObject"),
+                                  std::string_view("ZwWaitForSingleObject"),
+                                  std::string_view("NtDelayExecution"),
+                                  std::string_view("ZwDelayExecution"),
+                                  std::string_view("RtlDelayExecution")}) {
+        if (name == wait) {
+            return true;
+        }
+    }
+    return false;
 }
 
 #endif

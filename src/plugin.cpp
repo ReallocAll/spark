@@ -37,14 +37,13 @@ std::uint64_t currentThreadId()
 #endif
 }
 
-long nowMs()
+std::int64_t nowMs()
 {
-    return static_cast<long>(std::chrono::duration_cast<std::chrono::milliseconds>(
-                                 std::chrono::system_clock::now().time_since_epoch())
-                                 .count());
+    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
+        .count();
 }
 
-std::string formatDuration(long seconds)
+std::string formatDuration(std::int64_t seconds)
 {
     if (seconds < 60) {
         return std::to_string(seconds) + "s";
@@ -180,7 +179,7 @@ private:
         }
         if (profiler_.running()) {
             profiler_.onTick(getServer().getCurrentMillisecondsPerTick());
-            long auto_end = profiler_.autoEndTimeMs();
+            std::int64_t auto_end = profiler_.autoEndTimeMs();
             if (auto_end > 0 && nowMs() >= auto_end) {
                 bool save = profiler_.options().save_to_file;
                 finishProfiler(start_sender_name_, save, std::string());
@@ -327,10 +326,10 @@ private:
             return;
         }
         sender.sendMessage("{}Profiler is already running!", ColorFormat::Gold);
-        long ran = (nowMs() - profiler_.startTimeMs()) / 1000;
+        std::int64_t ran = (nowMs() - profiler_.startTimeMs()) / 1000;
         sender.sendMessage("So far it has profiled for {} ({} samples).", formatDuration(ran),
                            profiler_.sampleCount());
-        long auto_end = profiler_.autoEndTimeMs();
+        std::int64_t auto_end = profiler_.autoEndTimeMs();
         if (auto_end <= 0) {
             sender.sendMessage("To stop & upload, run: {}/spark profiler stop", ColorFormat::Gray);
         }
@@ -366,9 +365,9 @@ private:
         pending_ctx_.player_count = static_cast<long>(getServer().getOnlinePlayers().size());
         pending_ctx_.online_mode = getServer().getOnlineMode() ? 2 : 1;
         {
-            long start_ms = static_cast<long>(std::chrono::duration_cast<std::chrono::milliseconds>(
-                                                  getServer().getStartTime().time_since_epoch())
-                                                  .count());
+            std::int64_t start_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                        getServer().getStartTime().time_since_epoch())
+                                        .count();
             pending_ctx_.uptime_ms = nowMs() - start_ms;
         }
 

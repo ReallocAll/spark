@@ -52,11 +52,11 @@ public:
     {
         return running_.load();
     }
-    long startTimeMs() const
+    std::int64_t startTimeMs() const
     {
         return start_time_ms_;
     }
-    long autoEndTimeMs() const
+    std::int64_t autoEndTimeMs() const
     {
         return auto_end_time_ms_;
     }
@@ -87,8 +87,8 @@ private:
     Sampler sampler_;
     ProfilerOptions options_;
     std::atomic<bool> running_{false};
-    long start_time_ms_ = 0;
-    long auto_end_time_ms_ = -1;
+    std::int64_t start_time_ms_ = 0;
+    std::int64_t auto_end_time_ms_ = -1;
     int interval_us_ = 4000;
     CpuSnapshot cpu_baseline_{};
 };

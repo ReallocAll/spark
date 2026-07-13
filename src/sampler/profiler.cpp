@@ -9,11 +9,10 @@ namespace spark {
 
 namespace {
 
-long nowMs()
+std::int64_t nowMs()
 {
-    return static_cast<long>(std::chrono::duration_cast<std::chrono::milliseconds>(
-                                 std::chrono::system_clock::now().time_since_epoch())
-                                 .count());
+    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
+        .count();
 }
 
 }  // namespace
@@ -35,14 +34,16 @@ bool Profiler::start(const ProfilerOptions &options, std::uint64_t main_tid, std
 
     sampler_.setTarget(main_tid);
     if (!sampler_.start(config)) {
-        error = "async-signal-safe stack unwinding is unavailable (cpptrace must be built with libunwind)";
+        error = "the platform stack-capture backend could not be initialized";
         return false;
     }
 
     running_.store(true);
     start_time_ms_ = nowMs();
     cpu_baseline_ = captureCpuSnapshot();  // CPU usage is measured over the profiling window
-    auto_end_time_ms_ = options.timeout_seconds > 0 ? start_time_ms_ + options.timeout_seconds * 1000 : -1;
+    auto_end_time_ms_ = options.timeout_seconds > 0
+                            ? start_time_ms_ + static_cast<std::int64_t>(options.timeout_seconds) * 1000
+                            : -1;
     return true;
 }
 
