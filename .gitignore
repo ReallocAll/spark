@@ -4,6 +4,12 @@
 
 # Conan
 CMakeUserPresets.json
+/.conan2/p/
+/.conan2/d/
+/.conan2/c/
+/.conan2/*
+!/.conan2/profiles/
+!/.conan2/profiles/default
 
 # Profiles produced by --save-to-file
 *.sparkprofile
@@ -12,3 +18,4 @@ CMakeUserPresets.json
 .idea/
 .vscode/
 __pycache__/
+.conan-test

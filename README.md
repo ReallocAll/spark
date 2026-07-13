@@ -18,14 +18,14 @@ spark's bytebin and opened as an interactive flame graph at
 
 ## Commands
 
-| Command | Description |
-| --- | --- |
-| `/spark profiler start` | Start profiling the server thread (background). |
-| `/spark profiler stop` | Stop, upload, and print the viewer link. |
-| `/spark profiler info` | Show status of the running profiler. |
-| `/spark profiler cancel` | Stop without uploading. |
-| `/spark tps` | Ticks-per-second and tick duration (MSPT). |
-| `/spark health` | TPS/MSPT plus process memory, threads, uptime. |
+| Command                    | Description                                     |
+| -------------------------- | ----------------------------------------------- |
+| `/spark profiler start`  | Start profiling the server thread (background). |
+| `/spark profiler stop`   | Stop, upload, and print the viewer link.        |
+| `/spark profiler info`   | Show status of the running profiler.            |
+| `/spark profiler cancel` | Stop without uploading.                         |
+| `/spark tps`             | Ticks-per-second and tick duration (MSPT).      |
+| `/spark health`          | TPS/MSPT plus process memory, threads, uptime.  |
 
 Permission: `endstone.command.spark` (operators by default).
 
@@ -57,24 +57,41 @@ Permission: `endstone.command.spark` (operators by default).
 
 ## Building
 
-Requires the same toolchain Endstone uses: **Clang 18+ with libc++**, CMake 3.23+,
-Ninja, and Conan 2.
+
+The platform requirements are:
+
+- **Linux:** Clang, libc++, Ninja, and Conan 2.
+- **Windows:** LLVM clang-cl, Visual Studio Build Tools, the Windows SDK,
+  Ninja, and Conan 2. clang-cl must target the MSVC ABI.
+
+Install Conan, resolve the dependencies, then configure CMake directly with the
+generated toolchain file:
 
 ```shell
 pip install conan
-conan install . --build=missing -pr:a <endstone-conan-profile>
-cmake --preset conan-relwithdebinfo
-cmake --build --preset conan-relwithdebinfo
+
+conan install . --build=missing
+
+cmake -S . -B build -G Ninja "-DCMAKE_TOOLCHAIN_FILE=build/RelWithDebInfo/generators/conan_toolchain.cmake" "-DCMAKE_BUILD_TYPE=RelWithDebInfo"
+
+cmake --build build
 ```
 
-The plugin is emitted as `endstone_spark.so` (Linux) / `endstone_spark.dll`
+On Linux, the bundled profile selects libunwind because the SIGPROF sampler
+requires cpptrace's async-signal-safe unwinding path. Windows does not use
+libunwind; cpptrace uses its native Windows backend while spark captures stacks
+with StackWalk64.
+
+The plugin is emitted as `build/endstone_spark.so` (Linux) / `build/endstone_spark.dll`
 (Windows). Drop it in your server's `plugins/` directory.
 
-> **Toolchain / ABI note.** A C++ Endstone plugin shares the process's libc++ with
-> the Endstone runtime. Build endstone-spark with a libc++ that is ABI-compatible
-> with the Endstone build you deploy into (in practice: the same major Clang the
-> Endstone release was built with). Mismatched libc++ can corrupt objects passed
-> across the plugin/runtime boundary.
+> **Toolchain / ABI note.** A C++ Endstone plugin must use the runtime ABI expected
+> by the Endstone build it is loaded into. Match its compiler, compiler ABI, C++
+> standard, and standard library/runtime. On Linux, use an ABI-compatible libc++;
+> on Windows, use clang-cl with the matching MSVC runtime. Do not mix incompatible
+> STL or runtime ABIs: every C++ type crossing the Endstone plugin boundary must
+> have the same ABI on both sides. A mismatch can corrupt objects passed across the
+> plugin boundary.
 
 ## License
 
