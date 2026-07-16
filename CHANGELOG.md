@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Upload Linux and Windows plugin binaries from every Build workflow run.
+- Support manually building a selected Git ref for release testing.
 - Generate release notes and changelog entries from one normalized release section.
 
 ## [0.1.0] - 2026-07-16
