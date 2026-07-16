@@ -1,0 +1,105 @@
+name: Build
+
+on:
+  push:
+    branches: [develop]
+  pull_request:
+    branches: [develop]
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    name: Linux
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Clang 20
+        run: |
+          wget -qO /tmp/llvm.sh https://apt.llvm.org/llvm.sh
+          chmod +x /tmp/llvm.sh
+          sudo /tmp/llvm.sh 20
+          sudo apt-get install -y libc++-20-dev libc++abi-20-dev
+          sudo ln -sf /usr/bin/clang-20 /usr/local/bin/clang
+          sudo ln -sf /usr/bin/clang++-20 /usr/local/bin/clang++
+          clang --version | grep -E "clang version 20\\."
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install Conan
+        run: python -m pip install "conan>=2,<3"
+
+      - name: Cache Conan packages
+        uses: actions/cache@v5
+        with:
+          path: .conan2
+          key: ${{ runner.os }}-clang20-conan-${{ hashFiles('conanfile.txt', '.conan2/profiles/default') }}
+
+      - name: Install dependencies
+        run: conan install . --build=missing
+
+      - name: Configure
+        run: cmake --preset conan-relwithdebinfo
+
+      - name: Build
+        run: cmake --build --preset conan-relwithdebinfo
+
+      - name: Run self-test
+        run: ./build/RelWithDebInfo/spark_selftest --seconds=1
+
+  windows:
+    name: Windows
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up MSVC environment
+        uses: TheMrMilchmann/setup-msvc-dev@v4
+        with:
+          arch: x64
+
+      - name: Select clang-cl 20
+        shell: pwsh
+        run: |
+          $llvmBin = "C:\Program Files\LLVM\bin"
+          $llvmBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          $version = & "$llvmBin\clang-cl.exe" --version
+          $version
+          if (-not ($version | Select-String "clang version 20\.")) {
+            throw "clang-cl 20 is required"
+          }
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install Conan
+        run: python -m pip install "conan>=2,<3"
+
+      - name: Cache Conan packages
+        uses: actions/cache@v5
+        with:
+          path: .conan2
+          key: ${{ runner.os }}-clang20-conan-${{ hashFiles('conanfile.txt', '.conan2/profiles/default') }}
+
+      - name: Install dependencies
+        run: conan install . --build=missing
+
+      - name: Configure
+        run: cmake --preset conan-relwithdebinfo
+
+      - name: Build
+        run: cmake --build --preset conan-relwithdebinfo
+
+      - name: Run self-test
+        run: .\build\RelWithDebInfo\spark_selftest.exe --seconds=1
