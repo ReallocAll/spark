@@ -619,7 +619,7 @@ private:
     bool pending_ok_ = false;
 };
 
-ENDSTONE_PLUGIN("spark", "0.1.0", SparkPlugin)
+ENDSTONE_PLUGIN("spark", "0.1.1", SparkPlugin)
 {
     description = "spark profiler for Endstone — find what's slowing your server down.";
     authors = {"endstone-spark (profiler format & viewer by lucko/spark)"};
