@@ -67,6 +67,81 @@ void worker()
     }
 }
 
+bool verifySessionIsolation(std::uint64_t worker_tid)
+{
+    using namespace std::chrono_literals;
+
+    spark::SamplerConfig config;
+    config.interval_us = 1000;
+    config.ignore_sleeping = false;
+
+    spark::Sampler sampler;
+    sampler.setTarget(worker_tid);
+    if (!sampler.start(config)) {
+        std::fprintf(stderr, "session isolation: sampler start failed\n");
+        return false;
+    }
+    std::uint64_t observed_samples = 0;
+    for (int i = 0; i < 50; ++i) {
+        std::this_thread::sleep_for(1ms);
+        sampler.onTick(50.0);
+        std::uint64_t current_samples = sampler.sampleCount();
+        if (current_samples < observed_samples) {
+            std::fprintf(stderr, "session isolation: live sample count moved backwards\n");
+            sampler.stop();
+            return false;
+        }
+        observed_samples = current_samples;
+    }
+    sampler.stop();
+    if (sampler.sampleCount() == 0 || sampler.sampleCount() != sampler.tree().sampleCount() ||
+        sampler.modules().size() == 0 || sampler.numberOfTicks() != 50 || sampler.windowTicks().empty()) {
+        std::fprintf(stderr, "session isolation: first sampler session did not collect expected state\n");
+        return false;
+    }
+
+    sampler.setTarget(0);
+    if (!sampler.start(config)) {
+        std::fprintf(stderr, "session isolation: sampler restart failed\n");
+        return false;
+    }
+    sampler.stop();
+    if (sampler.sampleCount() != 0 || sampler.modules().size() != 0 || sampler.numberOfTicks() != 0 ||
+        !sampler.windowTicks().empty()) {
+        std::fprintf(stderr, "session isolation: stop/restart retained sampler state\n");
+        return false;
+    }
+
+    spark::Profiler profiler;
+    spark::ProfilerOptions options;
+    options.interval_ms = 1;
+    options.ignore_sleeping = false;
+    std::string error;
+    if (!profiler.start(options, worker_tid, error)) {
+        std::fprintf(stderr, "session isolation: profiler start failed: %s\n", error.c_str());
+        return false;
+    }
+    std::this_thread::sleep_for(50ms);
+    profiler.cancel();
+    if (profiler.sampleCount() == 0) {
+        std::fprintf(stderr, "session isolation: cancelled session did not collect a sample\n");
+        return false;
+    }
+
+    if (!profiler.start(options, 0, error)) {
+        std::fprintf(stderr, "session isolation: profiler restart failed: %s\n", error.c_str());
+        return false;
+    }
+    spark::ExportContext context;
+    profiler.stop(context);
+    if (profiler.sampleCount() != 0) {
+        std::fprintf(stderr, "session isolation: cancel/restart retained samples\n");
+        return false;
+    }
+
+    return true;
+}
+
 }  // namespace
 
 int main(int argc, char **argv)
@@ -113,6 +188,12 @@ int main(int argc, char **argv)
     std::thread w(worker);
     while (g_worker_tid.load() == 0) {
         std::this_thread::sleep_for(1ms);
+    }
+
+    if (!verifySessionIsolation(g_worker_tid.load())) {
+        g_run.store(false);
+        w.join();
+        return 1;
     }
 
     spark::Profiler profiler;

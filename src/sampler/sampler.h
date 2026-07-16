@@ -69,7 +69,7 @@ public:
     }
     std::uint64_t sampleCount() const
     {
-        return tree_.sampleCount();
+        return sample_count_.load(std::memory_order_relaxed);
     }
 
 private:
@@ -80,7 +80,9 @@ private:
 
     void samplerLoop();
     void aggregatorLoop();
+    void acceptSample(const Sample &sample);
     void flushOrDrop(std::uint64_t tick_id, bool keep);
+    void resetSession();
     std::int32_t currentWindow() const;
 
     SamplerConfig config_;
@@ -88,6 +90,7 @@ private:
     std::atomic<bool> agg_running_{false};  // aggregator (consumer) thread
     std::atomic<std::uint64_t> target_tid_{0};
     std::atomic<std::uint64_t> current_tick_{0};
+    std::atomic<std::uint64_t> sample_count_{0};
     std::chrono::steady_clock::time_point start_time_{};
 
     std::thread sampler_thread_;

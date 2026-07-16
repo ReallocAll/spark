@@ -45,6 +45,7 @@ bool Sampler::start(const SamplerConfig &config)
     if (!Capture::arm()) {
         return false;
     }
+    resetSession();
     start_time_ = std::chrono::steady_clock::now();
     running_.store(true);
     agg_running_.store(true);
@@ -66,6 +67,23 @@ void Sampler::stop()
         aggregator_thread_.join();  // drains everything the sampler left behind
     }
     Capture::disarm();
+}
+
+void Sampler::resetSession()
+{
+    Sample sample;
+    while (samples_.try_dequeue(sample)) {
+    }
+    TickEvent tick;
+    while (ticks_.try_dequeue(tick)) {
+    }
+
+    tree_ = CallTree{};
+    buckets_.clear();
+    modules_ = ModuleTable{};
+    window_ticks_.clear();
+    current_tick_.store(0);
+    sample_count_.store(0, std::memory_order_relaxed);
 }
 
 std::int32_t Sampler::currentWindow() const
@@ -154,6 +172,12 @@ void Sampler::samplerLoop()
     }
 }
 
+void Sampler::acceptSample(const Sample &sample)
+{
+    tree_.log(sample.frames, sample.window);
+    sample_count_.fetch_add(1, std::memory_order_relaxed);
+}
+
 void Sampler::flushOrDrop(std::uint64_t tick_id, bool keep)
 {
     auto it = buckets_.find(tick_id);
@@ -162,7 +186,7 @@ void Sampler::flushOrDrop(std::uint64_t tick_id, bool keep)
     }
     if (keep) {
         for (const Sample &s : it->second) {
-            tree_.log(s.frames, s.window);
+            acceptSample(s);
         }
     }
     buckets_.erase(it);
@@ -183,7 +207,7 @@ void Sampler::aggregatorLoop()
                 if (it->first + 8 < ev.tick_id) {
                     if (!ticked) {
                         for (const Sample &s : it->second) {
-                            tree_.log(s.frames, s.window);
+                            acceptSample(s);
                         }
                     }
                     it = buckets_.erase(it);
@@ -208,7 +232,7 @@ void Sampler::aggregatorLoop()
     if (!ticked) {  // disabled => keep everything still buffered
         for (auto &[tick_id, samples] : buckets_) {
             for (const Sample &s : samples) {
-                tree_.log(s.frames, s.window);
+                acceptSample(s);
             }
         }
     }
