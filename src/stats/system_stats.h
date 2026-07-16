@@ -16,17 +16,29 @@ struct PluginInfo {
     std::string description;
 };
 
-// Per-dimension entity totals + an aggregate type breakdown, for the World view.
+struct WorldChunk {
+    int x = 0;
+    int z = 0;
+    int total_entities = 0;
+    std::map<std::string, int> entity_counts;
+};
+
+struct WorldRegion {
+    int total_entities = 0;
+    std::vector<WorldChunk> chunks;
+};
+
 struct WorldEntry {
     std::string name;
     int total_entities = 0;
+    std::vector<WorldRegion> regions;
 };
 
 struct WorldInfo {
     bool present = false;
     int total_entities = 0;
     std::map<std::string, int> entity_counts;  // entity type -> count
-    std::vector<WorldEntry> worlds;            // one per dimension
+    std::vector<WorldEntry> worlds;
 };
 
 // Server-side statistics sourced from the Endstone API (on the main thread).

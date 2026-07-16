@@ -194,11 +194,32 @@ std::string buildMetadata(const ProfileMetadata &m)
                 ecw.int32(2, count);
                 wsw.message(2, ec);
             }
-            for (const WorldEntry &we : m.world.worlds) {  // worlds (3) repeated World { name, total_entities }
+            for (const WorldEntry &we : m.world.worlds) {
                 std::string world;
                 ProtoWriter worldw(world);
                 worldw.string(1, we.name);
                 worldw.int32(2, we.total_entities);
+                for (const WorldRegion &re : we.regions) {
+                    std::string region;
+                    ProtoWriter regionw(region);
+                    regionw.int32(1, re.total_entities);
+                    for (const WorldChunk &ce : re.chunks) {
+                        std::string chunk;
+                        ProtoWriter chunkw(chunk);
+                        chunkw.int32(1, ce.x);
+                        chunkw.int32(2, ce.z);
+                        chunkw.int32(3, ce.total_entities);
+                        for (const auto &[type, count] : ce.entity_counts) {
+                            std::string entity_count;
+                            ProtoWriter entity_count_writer(entity_count);
+                            entity_count_writer.string(1, type);
+                            entity_count_writer.int32(2, count);
+                            chunkw.message(4, entity_count);
+                        }
+                        regionw.message(2, chunk);
+                    }
+                    worldw.message(3, region);
+                }
                 wsw.message(3, world);
             }
             pw.message(8, ws);

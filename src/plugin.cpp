@@ -4,10 +4,12 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <memory>
 #include <string>
 #include <system_error>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include <endstone/endstone.hpp>
@@ -42,6 +44,13 @@ std::int64_t nowMs()
 {
     return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
         .count();
+}
+
+int floorDiv(int value, int divisor)
+{
+    int quotient = value / divisor;
+    int remainder = value % divisor;
+    return remainder < 0 ? quotient - 1 : quotient;
 }
 
 std::string formatDuration(std::int64_t seconds)
@@ -412,15 +421,55 @@ private:
 
         pending_ctx_.world = spark::WorldInfo{};
         if (endstone::Level *level = getServer().getLevel()) {
-            pending_ctx_.world.present = true;
             for (endstone::Dimension *dimension : level->getDimensions()) {
-                std::vector<endstone::Actor *> actors = dimension->getActors();
-                pending_ctx_.world.worlds.push_back({dimension->getName(), static_cast<int>(actors.size())});
-                pending_ctx_.world.total_entities += static_cast<int>(actors.size());
-                for (endstone::Actor *actor : actors) {
-                    pending_ctx_.world.entity_counts[actor->getType()]++;
+                std::map<std::pair<int, int>, spark::WorldChunk> chunks;
+                for (const auto &chunk : dimension->getLoadedChunks()) {
+                    if (chunk) {
+                        int x = chunk->getX();
+                        int z = chunk->getZ();
+                        chunks.try_emplace({x, z}, spark::WorldChunk{x, z});
+                    }
                 }
+                if (chunks.empty()) {
+                    continue;
+                }
+
+                for (endstone::Actor *actor : dimension->getActors()) {
+                    if (!actor) {
+                        continue;
+                    }
+                    endstone::Location location = actor->getLocation();
+                    int chunk_x = floorDiv(location.getBlockX(), 16);
+                    int chunk_z = floorDiv(location.getBlockZ(), 16);
+                    auto it = chunks.find({chunk_x, chunk_z});
+                    if (it == chunks.end()) {
+                        continue;
+                    }
+                    it->second.total_entities++;
+                    it->second.entity_counts[actor->getType()]++;
+                }
+
+                spark::WorldEntry world;
+                world.name = dimension->getName();
+                std::map<std::pair<int, int>, spark::WorldRegion> regions;
+                for (auto &[coordinate, chunk] : chunks) {
+                    auto region_coordinate = std::pair{floorDiv(coordinate.first, 32),
+                                                       floorDiv(coordinate.second, 32)};
+                    spark::WorldRegion &region = regions[region_coordinate];
+                    region.total_entities += chunk.total_entities;
+                    world.total_entities += chunk.total_entities;
+                    for (const auto &[type, count] : chunk.entity_counts) {
+                        pending_ctx_.world.entity_counts[type] += count;
+                    }
+                    region.chunks.push_back(std::move(chunk));
+                }
+                for (auto &entry : regions) {
+                    world.regions.push_back(std::move(entry.second));
+                }
+                pending_ctx_.world.total_entities += world.total_entities;
+                pending_ctx_.world.worlds.push_back(std::move(world));
             }
+            pending_ctx_.world.present = !pending_ctx_.world.worlds.empty();
         }
 
         pending_save_ = save;
