@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-07-16
+
 ### Fixed
 
 - Preserve `--save-to-file` for the entire profiler session, including manual
@@ -26,5 +28,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `dladdr` symbolization (module + RVA fallback for stripped frames).
 - Windows backend: `SuspendThread` + `StackWalk64` capture with PDB symbolization.
 
-[Unreleased]: https://github.com/EndstoneMC/endstone-spark/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/EndstoneMC/spark/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/EndstoneMC/spark/releases/tag/v0.1.0
 [0.1.0]: https://github.com/EndstoneMC/endstone-spark/releases/tag/v0.1.0
