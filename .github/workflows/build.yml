@@ -36,6 +36,9 @@ jobs:
       - name: Install Conan
         run: python -m pip install "conan>=2,<3"
 
+      - name: Test release tooling
+        run: python tools/test_release_changelog.py
+
       - name: Cache Conan packages
         uses: actions/cache@v5
         with:
@@ -53,6 +56,14 @@ jobs:
 
       - name: Run self-test
         run: ./build/RelWithDebInfo/spark_selftest --seconds=1
+
+      - name: Upload test artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: spark-linux-${{ github.sha }}
+          path: build/RelWithDebInfo/endstone_spark.so
+          if-no-files-found: error
+          retention-days: 14
 
   windows:
     name: Windows
@@ -103,3 +114,13 @@ jobs:
 
       - name: Run self-test
         run: .\build\RelWithDebInfo\spark_selftest.exe --seconds=1
+
+      - name: Upload test artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: spark-windows-${{ github.sha }}
+          path: |
+            build/RelWithDebInfo/endstone_spark.dll
+            build/RelWithDebInfo/endstone_spark.pdb
+          if-no-files-found: error
+          retention-days: 14
