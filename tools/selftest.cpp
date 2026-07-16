@@ -242,6 +242,21 @@ bool verifyArgumentParsing()
     return true;
 }
 
+bool verifyUploadFailure()
+{
+    using namespace std::chrono_literals;
+
+    auto before = std::chrono::steady_clock::now();
+    spark::UploadResult result =
+        spark::uploadToBytebin("test", "http://127.0.0.1:1", "application/octet-stream", "spark-selftest");
+    auto elapsed = std::chrono::steady_clock::now() - before;
+    if (result.ok || result.error.empty() || elapsed >= 5s) {
+        std::fprintf(stderr, "upload failure: invalid target was not rejected promptly\n");
+        return false;
+    }
+    return true;
+}
+
 }  // namespace
 
 int main(int argc, char **argv)
@@ -290,7 +305,8 @@ int main(int argc, char **argv)
         std::this_thread::sleep_for(1ms);
     }
 
-    if (!verifyArgumentParsing() || !verifyCaptureLifecycle() || !verifyStopResponsiveness() ||
+    if (!verifyArgumentParsing() || !verifyUploadFailure() || !verifyCaptureLifecycle() ||
+        !verifyStopResponsiveness() ||
         !verifySessionIsolation(g_worker_tid.load())) {
         g_run.store(false);
         w.join();

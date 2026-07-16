@@ -147,7 +147,8 @@ UploadResult uploadToBytebin(const std::string &gzipped_body, const std::string 
     std::filesystem::path err_file;
     bool has_err_file = createTempFile(err_file);
 
-    std::wstring cmd = L"C:\\Windows\\System32\\curl.exe -s -S -X POST --data-binary @" + commandQuote(tmpfile.wstring()) + L" -H " +
+    std::wstring cmd = L"C:\\Windows\\System32\\curl.exe -s -S --fail --connect-timeout 10 "
+                       L"--max-time 30 -X POST --data-binary @" + commandQuote(tmpfile.wstring()) + L" -H " +
                        commandQuote(utf8ToWide("Content-Type: " + content_type)) + L" -H " +
                        commandQuote(L"Content-Encoding: gzip") + L" -H " +
                        commandQuote(utf8ToWide("User-Agent: " + user_agent)) + L" -D - -o NUL " +
@@ -258,7 +259,8 @@ UploadResult uploadToBytebin(const std::string &gzipped_body, const std::string 
         err_file = err_template;
     }
 
-    std::string cmd = "PATH=\"$PATH:/usr/bin:/usr/local/bin:/bin\" curl -s -S -X POST --data-binary @" +
+    std::string cmd = "PATH=\"$PATH:/usr/bin:/usr/local/bin:/bin\" curl -s -S --fail "
+                      "--connect-timeout 10 --max-time 30 -X POST --data-binary @" +
                       shellQuote(tmpfile) + " -H " + shellQuote("Content-Type: " + content_type) + " -H " +
                       shellQuote("Content-Encoding: gzip") + " -H " + shellQuote("User-Agent: " + user_agent) +
                       " -D - -o /dev/null " + shellQuote(url);

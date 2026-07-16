@@ -1,6 +1,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -334,7 +335,7 @@ private:
                                                  : "There isn't an active profiler running.");
             return;
         }
-        bool save = args.boolFlag("save-to-file");
+        bool save = profiler_.options().save_to_file || args.boolFlag("save-to-file");
         std::string comment;
         auto comments = args.stringFlag("comment");
         if (!comments.empty()) {
@@ -438,31 +439,44 @@ private:
         if (export_thread_.joinable()) {
             export_thread_.join();
         }
-        export_thread_ = std::thread([this]() { runExport(); });
+        export_thread_ = std::thread([this]() {
+            try {
+                runExport();
+            }
+            catch (const std::exception &e) {
+                std::fprintf(stderr, "[spark] export thread failed: %s\n", e.what());
+                exporting_.store(false);
+            }
+            catch (...) {
+                std::fprintf(stderr, "[spark] export thread failed with an unknown exception\n");
+                exporting_.store(false);
+            }
+        });
     }
 
     // Background thread: no Endstone API except the scheduler hop-back at the end.
     void runExport()
     {
-        std::string body = profiler_.exportData(pending_ctx_);
         bool ok = false;
         std::string message;
-        if (pending_save_) {
-            std::error_code ec;
-            std::filesystem::create_directories(pending_folder_, ec);
-            std::filesystem::path path = pending_folder_ / ("profile-" + std::to_string(nowMs()) + ".sparkprofile");
-            std::ofstream out(path, std::ios::binary);
-            out.write(body.data(), static_cast<std::streamsize>(body.size()));
-            if (out) {
-                ok = true;
-                message = "Saved to " + path.string() + " — open it at " + spark::kViewerUrl;
+        try {
+            std::string body = profiler_.exportData(pending_ctx_);
+            if (pending_save_) {
+                std::error_code ec;
+                std::filesystem::create_directories(pending_folder_, ec);
+                std::filesystem::path path =
+                    pending_folder_ / ("profile-" + std::to_string(nowMs()) + ".sparkprofile");
+                std::ofstream out(path, std::ios::binary);
+                out.write(body.data(), static_cast<std::streamsize>(body.size()));
+                if (out) {
+                    ok = true;
+                    message = "Saved to " + path.string() + " — open it at " + spark::kViewerUrl;
+                }
+                else {
+                    message = "Failed to write the profile to disk.";
+                }
             }
             else {
-                message = "Failed to write the profile to disk.";
-            }
-        }
-        else {
-            try {
                 std::string gz = spark::gzipCompress(body);
                 spark::UploadResult result =
                     spark::uploadToBytebin(gz, spark::kBytebinUrl, spark::kSamplerContentType,
@@ -475,13 +489,22 @@ private:
                     message = "Upload failed (" + result.error + "). Retry with --save-to-file.";
                 }
             }
-            catch (const std::exception &e) {
-                message = std::string("Export failed: ") + e.what();
-            }
+        }
+        catch (const std::exception &e) {
+            message = std::string("Export failed: ") + e.what();
+        }
+        catch (...) {
+            message = "Export failed with an unknown error.";
         }
         pending_ok_ = ok;
         pending_result_ = std::move(message);
-        getServer().getScheduler().runTask(*this, [this]() { announceResult(); });
+        try {
+            getServer().getScheduler().runTask(*this, [this]() { announceResult(); });
+        }
+        catch (...) {
+            exporting_.store(false);
+            throw;
+        }
     }
 
     // Back on the main thread.

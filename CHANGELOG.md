@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Preserve `--save-to-file` for the entire profiler session, including manual
+  `stop` and `upload` commands.
+
 ## [0.1.0] - 2026-07-11
 
 ### Added
