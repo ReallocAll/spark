@@ -66,6 +66,6 @@ endif ()
 
 # --- offline self-test (no BDS needed) ---
 if (ENDSTONE_SPARK_BUILD_SELFTEST)
-    add_executable(spark_selftest tools/selftest.cpp)
+    add_executable(spark_selftest tools/selftest.cpp src/command/arguments.cpp)
     target_link_libraries(spark_selftest PRIVATE spark_core)
 endif ()

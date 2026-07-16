@@ -1,6 +1,7 @@
 #include "command/arguments.h"
 
-#include <cstdlib>
+#include <charconv>
+#include <cmath>
 #include <sstream>
 
 namespace spark {
@@ -50,22 +51,35 @@ bool Arguments::boolFlag(const std::string &name) const
     return present_.count(name) > 0;
 }
 
-long Arguments::intFlag(const std::string &name, long fallback) const
+std::optional<long> Arguments::intFlag(const std::string &name) const
 {
     auto it = values_.find(name);
     if (it == values_.end()) {
-        return fallback;
+        return std::nullopt;
     }
-    return std::strtol(it->second.c_str(), nullptr, 10);
+    const std::string &text = it->second;
+    long value = 0;
+    auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), value);
+    if (error != std::errc{} || end != text.data() + text.size()) {
+        return std::nullopt;
+    }
+    return value;
 }
 
-double Arguments::doubleFlag(const std::string &name, double fallback) const
+std::optional<double> Arguments::doubleFlag(const std::string &name) const
 {
     auto it = values_.find(name);
     if (it == values_.end()) {
-        return fallback;
+        return std::nullopt;
     }
-    return std::strtod(it->second.c_str(), nullptr);
+    const std::string &text = it->second;
+    double value = 0.0;
+    auto [end, error] =
+        std::from_chars(text.data(), text.data() + text.size(), value, std::chars_format::general);
+    if (error != std::errc{} || end != text.data() + text.size() || !std::isfinite(value)) {
+        return std::nullopt;
+    }
+    return value;
 }
 
 std::vector<std::string> Arguments::stringFlag(const std::string &name) const

@@ -2,6 +2,7 @@
 #define ENDSTONE_SPARK_ARGUMENTS_H
 
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -28,8 +29,8 @@ public:
     }
 
     bool boolFlag(const std::string &name) const;
-    long intFlag(const std::string &name, long fallback = -1) const;
-    double doubleFlag(const std::string &name, double fallback = -1.0) const;
+    std::optional<long> intFlag(const std::string &name) const;
+    std::optional<double> doubleFlag(const std::string &name) const;
     std::vector<std::string> stringFlag(const std::string &name) const;
 
 private:

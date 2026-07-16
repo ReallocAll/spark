@@ -247,24 +247,46 @@ private:
         }
 
         spark::ProfilerOptions options;
-        double interval = args.doubleFlag("interval", -1.0);
-        if (interval > spark::kMaxSamplingIntervalMs) {
+        auto interval = args.doubleFlag("interval");
+        if (args.boolFlag("interval") && !interval) {
+            sender.sendErrorMessage("The sampling interval must be a finite number.");
+            return;
+        }
+        if (interval && *interval <= 0.0) {
+            sender.sendErrorMessage("The sampling interval must be greater than 0ms.");
+            return;
+        }
+        if (interval && *interval > spark::kMaxSamplingIntervalMs) {
             sender.sendErrorMessage("The sampling interval must not exceed {}ms.", spark::kMaxSamplingIntervalMs);
             return;
         }
-        options.interval_ms = interval > 0.0 ? static_cast<int>(interval + 0.5) : 4;
+        options.interval_ms = interval ? static_cast<int>(*interval + 0.5) : 4;
         if (options.interval_ms < 1) {
             options.interval_ms = 1;
         }
 
-        long timeout = args.intFlag("timeout", -1);
-        if (timeout != -1 && timeout <= 10) {
+        auto timeout_flag = args.intFlag("timeout");
+        if (args.boolFlag("timeout") && !timeout_flag) {
+            sender.sendErrorMessage("The timeout must be a whole number of seconds.");
+            return;
+        }
+        long timeout = timeout_flag.value_or(-1);
+        if (timeout_flag && timeout <= 10) {
             sender.sendErrorMessage("The timeout is too short for useful results — choose a value over 10 seconds.");
             return;
         }
         options.timeout_seconds = timeout;
 
-        options.only_ticks_over_ms = args.intFlag("only-ticks-over", -1);
+        auto tick_threshold = args.intFlag("only-ticks-over");
+        if (args.boolFlag("only-ticks-over") && !tick_threshold) {
+            sender.sendErrorMessage("The tick threshold must be a whole number of milliseconds.");
+            return;
+        }
+        if (tick_threshold && *tick_threshold <= 0) {
+            sender.sendErrorMessage("The tick threshold must be greater than 0ms.");
+            return;
+        }
+        options.only_ticks_over_ms = tick_threshold.value_or(-1);
         options.ignore_sleeping = !args.boolFlag("include-sleeping");
         options.threads = args.stringFlag("thread");
         auto comments = args.stringFlag("comment");

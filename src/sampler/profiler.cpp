@@ -1,6 +1,7 @@
 #include "sampler/profiler.h"
 
 #include <chrono>
+#include <limits>
 
 #include "proto/sampler_data.h"
 #include "spark_constants.h"
@@ -30,6 +31,12 @@ bool Profiler::start(const ProfilerOptions &options, std::uint64_t main_tid, std
         error = "sampling interval must not exceed 1000 milliseconds";
         return false;
     }
+    std::int64_t session_start_ms = nowMs();
+    if (options.timeout_seconds > 0 &&
+        options.timeout_seconds > (std::numeric_limits<std::int64_t>::max() - session_start_ms) / 1000) {
+        error = "profiling timeout is too large";
+        return false;
+    }
     interval_us_ = interval_ms * 1000;
 
     SamplerConfig config;
@@ -44,7 +51,7 @@ bool Profiler::start(const ProfilerOptions &options, std::uint64_t main_tid, std
     }
 
     running_.store(true);
-    start_time_ms_ = nowMs();
+    start_time_ms_ = session_start_ms;
     cpu_baseline_ = captureCpuSnapshot();  // CPU usage is measured over the profiling window
     auto_end_time_ms_ = options.timeout_seconds > 0
                             ? start_time_ms_ + static_cast<std::int64_t>(options.timeout_seconds) * 1000

@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
+#include <limits>
 #include <string>
 #include <thread>
 
@@ -19,6 +20,7 @@
 #include <unistd.h>
 #endif
 
+#include "command/arguments.h"
 #include "net/bytebin.h"
 #include "net/gzip.h"
 #include "sampler/capture.h"
@@ -190,6 +192,16 @@ bool verifyStopResponsiveness()
         profiler.cancel();
         return false;
     }
+
+    if constexpr (sizeof(long) > sizeof(std::int32_t)) {
+        options.interval_ms = 4;
+        options.timeout_seconds = (std::numeric_limits<long>::max)();
+        if (profiler.start(options, 0, error)) {
+            std::fprintf(stderr, "stop responsiveness: overflowing timeout was accepted\n");
+            profiler.cancel();
+            return false;
+        }
+    }
     options.interval_ms = 1;
     options.timeout_seconds = -1;
     if (!profiler.start(options, 0, error)) {
@@ -197,6 +209,36 @@ bool verifyStopResponsiveness()
         return false;
     }
     profiler.cancel();
+    return true;
+}
+
+bool verifyArgumentParsing()
+{
+    auto integer = [](const std::string &text) {
+        spark::Arguments args({"start", "--value", text});
+        return args.intFlag("value");
+    };
+    auto floating = [](const std::string &text) {
+        spark::Arguments args({"start", "--value", text});
+        return args.doubleFlag("value");
+    };
+
+    if (integer("100") != 100 || integer("-1") != -1 || integer("abc") || integer("100abc") ||
+        integer("999999999999999999999999999999999999")) {
+        std::fprintf(stderr, "argument parsing: integer validation failed\n");
+        return false;
+    }
+    if (floating("1.25") != 1.25 || floating("-1.25") != -1.25 || floating("abc") || floating("100abc") ||
+        floating("1e9999") || floating("NaN") || floating("inf")) {
+        std::fprintf(stderr, "argument parsing: floating-point validation failed\n");
+        return false;
+    }
+
+    spark::Arguments missing({"start", "--value"});
+    if (!missing.boolFlag("value") || missing.intFlag("value") || missing.doubleFlag("value")) {
+        std::fprintf(stderr, "argument parsing: missing value validation failed\n");
+        return false;
+    }
     return true;
 }
 
@@ -248,7 +290,8 @@ int main(int argc, char **argv)
         std::this_thread::sleep_for(1ms);
     }
 
-    if (!verifyCaptureLifecycle() || !verifyStopResponsiveness() || !verifySessionIsolation(g_worker_tid.load())) {
+    if (!verifyArgumentParsing() || !verifyCaptureLifecycle() || !verifyStopResponsiveness() ||
+        !verifySessionIsolation(g_worker_tid.load())) {
         g_run.store(false);
         w.join();
         return 1;
