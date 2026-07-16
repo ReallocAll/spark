@@ -257,6 +257,43 @@ bool verifyUploadFailure()
     return true;
 }
 
+bool verifyTickFiltering(std::uint64_t worker_tid)
+{
+    using namespace std::chrono_literals;
+
+    spark::SamplerConfig config;
+    config.interval_us = 1000;
+    config.ignore_sleeping = false;
+    config.only_ticks_over_ms = 10;
+
+    spark::Sampler sampler;
+    sampler.setTarget(worker_tid);
+    if (!sampler.start(config)) {
+        std::fprintf(stderr, "tick filtering: fast session start failed\n");
+        return false;
+    }
+    std::this_thread::sleep_for(50ms);
+    sampler.onTick(1.0);
+    sampler.stop();
+    if (sampler.sampleCount() != 0) {
+        std::fprintf(stderr, "tick filtering: fast tick samples were retained\n");
+        return false;
+    }
+
+    if (!sampler.start(config)) {
+        std::fprintf(stderr, "tick filtering: slow session start failed\n");
+        return false;
+    }
+    std::this_thread::sleep_for(50ms);
+    sampler.onTick(50.0);
+    sampler.stop();
+    if (sampler.sampleCount() == 0 || sampler.sampleCount() != sampler.tree().sampleCount()) {
+        std::fprintf(stderr, "tick filtering: slow tick samples were not retained\n");
+        return false;
+    }
+    return true;
+}
+
 }  // namespace
 
 int main(int argc, char **argv)
@@ -307,7 +344,7 @@ int main(int argc, char **argv)
 
     if (!verifyArgumentParsing() || !verifyUploadFailure() || !verifyCaptureLifecycle() ||
         !verifyStopResponsiveness() ||
-        !verifySessionIsolation(g_worker_tid.load())) {
+        !verifySessionIsolation(g_worker_tid.load()) || !verifyTickFiltering(g_worker_tid.load())) {
         g_run.store(false);
         w.join();
         return 1;

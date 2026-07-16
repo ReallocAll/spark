@@ -96,6 +96,7 @@ void Sampler::resetSession()
 
     tree_ = CallTree{};
     buckets_.clear();
+    tick_decisions_.clear();
     modules_ = ModuleTable{};
     window_ticks_.clear();
     current_tick_.store(0);
@@ -141,12 +142,13 @@ void Sampler::samplerLoop()
         if (config_.ignore_sleeping && !Capture::isThreadRunning(tid)) {
             continue;
         }
+        std::uint64_t tick_id = current_tick_.load();
         if (!Capture::captureThread(tid, buf)) {
             continue;
         }
 
         Sample sample;
-        sample.tick_id = current_tick_.load();
+        sample.tick_id = tick_id;
         sample.window = currentWindow();
         sample.frames.reserve(buf.count);
         for (std::size_t i = kLeadingDrop; i < buf.count; ++i) {
@@ -221,26 +223,29 @@ void Sampler::aggregatorLoop()
     auto drain = [&] {
         TickEvent ev;
         while (ticks_.try_dequeue(ev)) {
-            flushOrDrop(ev.tick_id, !ticked || ev.mspt_ms > threshold);
-            // Straggler cleanup: any bucket whose tick clearly ended (well before the
-            // one we just processed) will get no event, so resolve it now to bound memory.
-            for (auto it = buckets_.begin(); it != buckets_.end();) {
-                if (it->first + 8 < ev.tick_id) {
-                    if (!ticked) {
-                        for (const Sample &s : it->second) {
-                            acceptSample(s);
-                        }
-                    }
-                    it = buckets_.erase(it);
+            bool keep = !ticked || ev.mspt_ms > threshold;
+            if (ticked) {
+                if (tick_decisions_.size() <= ev.tick_id) {
+                    tick_decisions_.resize(static_cast<std::size_t>(ev.tick_id + 1), 0);
                 }
-                else {
-                    ++it;
-                }
+                tick_decisions_[static_cast<std::size_t>(ev.tick_id)] = keep ? 2 : 1;
             }
+            flushOrDrop(ev.tick_id, keep);
         }
         Sample s;
         while (samples_.try_dequeue(s)) {
-            buckets_[s.tick_id].push_back(std::move(s));
+            if (!ticked) {
+                acceptSample(s);
+            }
+            else if (s.tick_id < tick_decisions_.size() &&
+                     tick_decisions_[static_cast<std::size_t>(s.tick_id)] != 0) {
+                if (tick_decisions_[static_cast<std::size_t>(s.tick_id)] == 2) {
+                    acceptSample(s);
+                }
+            }
+            else {
+                buckets_[s.tick_id].push_back(std::move(s));
+            }
         }
     };
 

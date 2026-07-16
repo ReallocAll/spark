@@ -106,6 +106,7 @@ private:
     // aggregator-thread state
     CallTree tree_;
     std::unordered_map<std::uint64_t, std::vector<Sample>> buckets_;
+    std::vector<std::uint8_t> tick_decisions_;  // 0 pending, 1 drop, 2 keep
 
     // sampler-thread state
     ModuleTable modules_;
