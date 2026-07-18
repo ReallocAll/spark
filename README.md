@@ -58,7 +58,8 @@ The native backends reflect BDS constraints rather than a JVM:
   alias exports are detected so the same entry address is not hooked twice;
 * on Linux x86-64, Spark atomically redirects the BDS executable's glibc import
   slots for `malloc`, `calloc`, `realloc`, `reallocarray`, `aligned_alloc`, and
-  `posix_memalign` when present. No allocator instruction bytes are rewritten;
+  `posix_memalign` when present, plus `free` for sampled lifetimes. No allocator
+  instruction bytes are rewritten;
 * only allocations made by the BDS server thread are included, matching the
   current profiler target; direct `VirtualAlloc`, custom pool internals, and other
   threads remain outside the reported rate. Static/private CRT allocations that

@@ -414,13 +414,9 @@ bool runAllocationSession(spark::AllocationSampler &sampler,
         std::fprintf(stderr, "allocation lifecycle: stop failed: %s\n", error.c_str());
         return false;
     }
-    if (sampler.sampleCount() == 0 || sampler.observedBytes() == 0
-#if defined(_WIN32)
-        ||
+    if (sampler.sampleCount() == 0 || sampler.observedBytes() == 0 ||
         sampler.freedSamples() == 0 || sampler.freedBytes() == 0 ||
-        sampler.lifecycleDropped() != 0
-#endif
-    ) {
+        sampler.lifecycleDropped() != 0) {
         std::fprintf(stderr, "allocation lifecycle: session captured no allocations\n");
         return false;
     }
@@ -453,7 +449,7 @@ bool verifyAllocationLifecycle()
 #if defined(_WIN32)
     constexpr std::size_t expected_capabilities = 19;
 #else
-    constexpr std::size_t expected_capabilities = 6;
+    constexpr std::size_t expected_capabilities = 7;
 #endif
     if (capabilities.size() != expected_capabilities || active_hooks < 3) {
         std::fprintf(stderr,
