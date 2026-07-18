@@ -65,6 +65,26 @@ std::string jsonString(std::string_view value)
     return out;
 }
 
+std::string allocationHookSummary(
+    const std::vector<AllocationHookCapability> &capabilities)
+{
+    std::string summary;
+    for (const AllocationHookCapability &capability : capabilities) {
+        if (!summary.empty()) {
+            summary += ", ";
+        }
+        summary += capability.name;
+        summary += '=';
+        summary += allocationHookStatusName(capability.status);
+        if (!capability.detail.empty()) {
+            summary += '(';
+            summary += capability.detail;
+            summary += ')';
+        }
+    }
+    return summary;
+}
+
 }  // namespace
 
 std::uint64_t Profiler::sampleCount() const
@@ -94,6 +114,11 @@ bool Profiler::backendFailure(std::string &error) const
         return false;
     }
     return allocation_sampler_.failure(error);
+}
+
+const std::vector<AllocationHookCapability> &Profiler::allocationHookCapabilities() const
+{
+    return allocation_sampler_.hookCapabilities();
 }
 
 bool Profiler::start(const ProfilerOptions &options, std::uint64_t main_tid, std::string &error)
@@ -256,6 +281,24 @@ std::string Profiler::exportData(const ExportContext &ctx) const
             std::to_string(allocation_sampler_.observedBytes());
         meta.extra_platform_metadata["Allocation interval bytes"] = std::to_string(interval_);
         meta.extra_platform_metadata["Allocation live-only"] = "false";
+
+        const auto &capabilities = allocation_sampler_.hookCapabilities();
+        std::size_t active = 0;
+        std::size_t aliases = 0;
+        for (const AllocationHookCapability &capability : capabilities) {
+            active += capability.status == AllocationHookStatus::Active ? 1 : 0;
+            aliases += capability.status == AllocationHookStatus::Alias ? 1 : 0;
+        }
+        meta.extra_platform_metadata["Allocation hook exports total"] =
+            std::to_string(capabilities.size());
+        meta.extra_platform_metadata["Allocation hook exports covered"] =
+            std::to_string(active + aliases);
+        meta.extra_platform_metadata["Allocation hook targets installed"] =
+            std::to_string(active);
+        meta.extra_platform_metadata["Allocation hook aliases"] =
+            std::to_string(aliases);
+        meta.extra_platform_metadata["Allocation hook capabilities"] =
+            jsonString(allocationHookSummary(capabilities));
     }
 
     meta.platform_stats.present = true;

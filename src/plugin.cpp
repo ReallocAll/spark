@@ -495,6 +495,7 @@ private:
         if (allocation && profiler_.backendFailure(backend_error)) {
             sender.sendMessage("{}Allocation Profiler status: FAILED", ColorFormat::Red);
             sender.sendMessage("Backend service failure: {}", backend_error);
+            sendAllocationHookCoverage(sender);
             sender.sendMessage("The incomplete profile will not be exported.");
             sender.sendMessage("Run {}/spark profiler stop{} or {}/spark profiler cancel{} to discard it.",
                                ColorFormat::Gray, ColorFormat::Reset, ColorFormat::Gray,
@@ -503,6 +504,7 @@ private:
         }
         if (allocation) {
             sender.sendMessage("{}Allocation Profiler is already running!", ColorFormat::Gold);
+            sendAllocationHookCoverage(sender);
         }
         else {
             sender.sendMessage("{}Profiler is already running!", ColorFormat::Gold);
@@ -529,6 +531,35 @@ private:
             sender.sendMessage("It finishes automatically in {}.", formatDuration((auto_end - nowMs()) / 1000));
         }
         sender.sendMessage("To cancel without generating a profile, run: {}/spark profiler cancel", ColorFormat::Gray);
+    }
+
+    void sendAllocationHookCoverage(endstone::CommandSender &sender)
+    {
+        const auto &capabilities = profiler_.allocationHookCapabilities();
+        std::size_t active = 0;
+        std::size_t aliases = 0;
+        std::string unavailable;
+        for (const spark::AllocationHookCapability &capability : capabilities) {
+            if (capability.status == spark::AllocationHookStatus::Active) {
+                ++active;
+            }
+            else if (capability.status == spark::AllocationHookStatus::Alias) {
+                ++aliases;
+            }
+            else {
+                if (!unavailable.empty()) {
+                    unavailable += ", ";
+                }
+                unavailable += capability.name;
+                unavailable += '=';
+                unavailable += spark::allocationHookStatusName(capability.status);
+            }
+        }
+        sender.sendMessage("Native allocation hooks: {}/{} exports covered ({} patched targets, {} aliases).",
+                           active + aliases, capabilities.size(), active, aliases);
+        if (!unavailable.empty()) {
+            sender.sendMessage("Unavailable optional hooks: {}", unavailable);
+        }
     }
 
     void profilerCancel(endstone::CommandSender &sender)

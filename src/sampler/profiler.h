@@ -81,6 +81,7 @@ public:
     std::uint64_t observedAllocationBytes() const;
     std::uint64_t droppedSamples() const;
     bool backendFailure(std::string &error) const;
+    const std::vector<AllocationHookCapability> &allocationHookCapabilities() const;
 
     // Returns false and sets `error` if sampling can't start.
     bool start(const ProfilerOptions &options, std::uint64_t main_tid, std::string &error);

@@ -9,6 +9,7 @@ struct AllocationSampler::Impl {
     CallTree tree;
     ModuleTable modules;
     std::map<std::int32_t, WindowTickStats> windows;
+    std::vector<AllocationHookCapability> capabilities;
 };
 
 AllocationSampler::AllocationSampler() : impl_(std::make_unique<Impl>())
@@ -93,6 +94,11 @@ bool AllocationSampler::failure(std::string &error) const
 {
     error.clear();
     return false;
+}
+
+const std::vector<AllocationHookCapability> &AllocationSampler::hookCapabilities() const
+{
+    return impl_->capabilities;
 }
 
 }  // namespace spark

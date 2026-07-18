@@ -5,6 +5,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "sampler/call_tree.h"
 #include "sampler/sampler.h"
@@ -21,6 +22,34 @@ struct AllocationSamplerConfig {
     std::int64_t only_ticks_over_ms = 0;
     // Deterministic fault injection used only by the offline selftest.
     bool fail_aggregator_for_testing = false;
+};
+
+enum class AllocationHookStatus {
+    Active,
+    Alias,
+    Missing,
+    PrepareFailed,
+};
+
+inline const char *allocationHookStatusName(AllocationHookStatus status) noexcept
+{
+    switch (status) {
+    case AllocationHookStatus::Active:
+        return "active";
+    case AllocationHookStatus::Alias:
+        return "alias";
+    case AllocationHookStatus::Missing:
+        return "missing";
+    case AllocationHookStatus::PrepareFailed:
+        return "prepare-failed";
+    }
+    return "unknown";
+}
+
+struct AllocationHookCapability {
+    std::string name;
+    AllocationHookStatus status = AllocationHookStatus::Missing;
+    std::string detail;
 };
 
 // Windows native allocation sampler. The backend hooks public UCRT allocation
@@ -61,6 +90,7 @@ public:
     bool running() const;
     bool hooksInstalled() const;
     bool failure(std::string &error) const;
+    const std::vector<AllocationHookCapability> &hookCapabilities() const;
 
 private:
     struct Impl;

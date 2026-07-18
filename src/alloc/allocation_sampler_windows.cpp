@@ -58,6 +58,7 @@ struct CodeRange {
 struct PreparedTarget {
     void *address = nullptr;
     std::array<std::byte, kHookPatchSize> original{};
+    std::string export_name;
 };
 
 std::uint64_t monotonicMs() noexcept
@@ -470,6 +471,7 @@ struct AllocationSampler::Impl {
     std::mutex lifecycle_mutex;
     std::vector<PreparedTarget> prepared_targets;
     std::vector<CodeRange> protected_code_ranges;
+    std::vector<AllocationHookCapability> hook_capabilities;
     AllocationSamplerConfig config{};
     std::atomic<std::uint64_t> target_tid{0};
     std::atomic<std::uint64_t> current_tick{0};
@@ -958,36 +960,50 @@ struct AllocationSampler::Impl {
         void *target = reinterpret_cast<void *>(::GetProcAddress(module, name));
         if (target == nullptr) {
             function = nullptr;
+            hook_capabilities.push_back(
+                {name, AllocationHookStatus::Missing, "export not found"});
             if (required) {
                 error = std::string("required UCRT allocation export not found: ") + name;
                 return false;
             }
             return true;
         }
-        if (std::any_of(prepared_targets.begin(), prepared_targets.end(), [target](const PreparedTarget &entry) {
-                return entry.address == target;
-            })) {
+        auto alias = std::find_if(prepared_targets.begin(), prepared_targets.end(),
+                                  [target](const PreparedTarget &entry) {
+                                      return entry.address == target;
+                                  });
+        if (alias != prepared_targets.end()) {
             // Some CRT exports are aliases for the same entry address. The first
             // prepared hook already covers all aliases; preparing the same prologue
             // twice would create an invalid hook chain.
             function = nullptr;
+            hook_capabilities.push_back(
+                {name, AllocationHookStatus::Alias, alias->export_name});
             return true;
         }
 
         PreparedTarget prepared;
         prepared.address = target;
+        prepared.export_name = name;
         std::memcpy(prepared.original.data(), target, prepared.original.size());
         function = reinterpret_cast<Function>(target);
         const int code = funchook_prepare(hooks, reinterpret_cast<void **>(&function), hook);
         if (code != FUNCHOOK_ERROR_SUCCESS) {
+            const std::string failure = hookError(
+                (std::string("funchook_prepare(") + name + ")").c_str(), code);
             if (!required) {
                 function = nullptr;
+                hook_capabilities.push_back(
+                    {name, AllocationHookStatus::PrepareFailed, failure});
                 return true;
             }
-            error = hookError((std::string("funchook_prepare(") + name + ")").c_str(), code);
+            hook_capabilities.push_back(
+                {name, AllocationHookStatus::PrepareFailed, failure});
+            error = failure;
             return false;
         }
         prepared_targets.push_back(prepared);
+        hook_capabilities.push_back({name, AllocationHookStatus::Active, {}});
         return true;
     }
 
@@ -1335,6 +1351,7 @@ struct AllocationSampler::Impl {
         real_heap_realloc = nullptr;
         prepared_targets.clear();
         protected_code_ranges.clear();
+        hook_capabilities.clear();
     }
 
     FrameKey frameKeyForAddress(std::uint64_t raw_address, std::string &module_path)
@@ -1752,6 +1769,11 @@ bool AllocationSampler::failure(std::string &error) const
     }
     error = impl_->aggregator_failure.data();
     return true;
+}
+
+const std::vector<AllocationHookCapability> &AllocationSampler::hookCapabilities() const
+{
+    return impl_->hook_capabilities;
 }
 
 }  // namespace spark

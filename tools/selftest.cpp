@@ -407,6 +407,17 @@ bool verifyAllocationLifecycle()
         !runAllocationSession(sampler, config, error) || !sampler.hooksInstalled()) {
         return false;
     }
+    const auto &capabilities = sampler.hookCapabilities();
+    std::size_t active_hooks = 0;
+    for (const spark::AllocationHookCapability &capability : capabilities) {
+        active_hooks += capability.status == spark::AllocationHookStatus::Active ? 1 : 0;
+    }
+    if (capabilities.size() != 15 || active_hooks < 3) {
+        std::fprintf(stderr,
+                     "allocation lifecycle: invalid hook capability report (%zu total, %zu active)\n",
+                     capabilities.size(), active_hooks);
+        return false;
+    }
 
     config.fail_aggregator_for_testing = true;
     if (!sampler.start(config, error)) {
@@ -478,9 +489,17 @@ bool verifyAllocationLifecycle()
     }
     options.fail_allocation_aggregator_for_testing = false;
     if (!failed_profiler.start(options, config.target_tid, error) ||
-        !exerciseNativeAllocations() || !failed_profiler.stopSampling(error) ||
-        !failed_profiler.shutdown(error)) {
+        !exerciseNativeAllocations() || !failed_profiler.stopSampling(error)) {
         std::fprintf(stderr, "profiler failure state: healthy restart failed: %s\n",
+                     error.c_str());
+        return false;
+    }
+    spark::ExportContext allocation_context;
+    const std::string allocation_profile = failed_profiler.exportData(allocation_context);
+    if (allocation_profile.find("Allocation hook capabilities") == std::string::npos ||
+        allocation_profile.find("Allocation hook targets installed") == std::string::npos ||
+        !failed_profiler.shutdown(error)) {
+        std::fprintf(stderr, "allocation capability metadata: export validation failed: %s\n",
                      error.c_str());
         return false;
     }

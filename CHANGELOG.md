@@ -25,6 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Export allocation sample count, dropped sample count, estimated sampled byte
   weight, observed request bytes, interval, backend, and coverage through spark
   `extra_platform_metadata`.
+- Report every candidate allocation entry point as active, aliased, missing, or
+  unhookable in profiler status and exported platform metadata.
 - Harden native hook lifecycle handling: prepare and retain trampolines separately
   from entry-hook installation, retain disabled entry hooks between sessions,
   stabilize and verify thread suspension, retry thread restoration, and require
