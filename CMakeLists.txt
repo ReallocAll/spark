@@ -58,11 +58,15 @@ if (WIN32)
     target_sources(spark_core PRIVATE
             src/sampler/capture_windows.cpp
             src/alloc/allocation_sampler_windows.cpp)
+elseif (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+    target_sources(spark_core PRIVATE
+            src/sampler/capture_linux.cpp
+            src/alloc/allocation_sampler_linux.cpp
+            src/alloc/elf_import_hooks.cpp)
 else ()
     target_sources(spark_core PRIVATE
             src/sampler/capture_linux.cpp
-            src/alloc/allocation_sampler_stub.cpp
-            src/alloc/elf_import_hooks.cpp)
+            src/alloc/allocation_sampler_stub.cpp)
 endif ()
 target_include_directories(spark_core PUBLIC src)
 target_link_libraries(spark_core PUBLIC cpptrace::cpptrace concurrentqueue::concurrentqueue ZLIB::ZLIB CURL::libcurl

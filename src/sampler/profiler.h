@@ -86,6 +86,7 @@ public:
     std::uint64_t liveAllocationBytes() const;
     bool backendFailure(std::string &error) const;
     const std::vector<AllocationHookCapability> &allocationHookCapabilities() const;
+    std::size_t allocationHookTargetCount() const;
 
     // Returns false and sets `error` if sampling can't start.
     bool start(const ProfilerOptions &options, std::uint64_t main_tid, std::string &error);

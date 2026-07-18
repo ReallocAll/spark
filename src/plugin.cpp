@@ -337,9 +337,9 @@ private:
         spark::ProfilerOptions options;
         options.alloc_live_only = args.boolFlag("alloc-live-only");
         options.alloc = args.boolFlag("alloc") || options.alloc_live_only;
-#if !defined(_WIN32)
+#if !defined(_WIN32) && !defined(__linux__)
         if (options.alloc) {
-            sender.sendErrorMessage("The native allocation profiler is currently available only on Windows.");
+            sender.sendErrorMessage("The native allocation profiler is currently available only on Windows and Linux x86-64.");
             return;
         }
 #endif
@@ -437,7 +437,7 @@ private:
                 sender.sendMessage("{}Allocation Profiler is now running!{} (async)",
                                    ColorFormat::Gold, ColorFormat::Gray);
             }
-            sender.sendMessage("Sampling approximately every {} of UCRT allocations on the server thread.",
+            sender.sendMessage("Sampling approximately every {} of native allocations on the server thread.",
                                formatBytes(static_cast<std::uint64_t>(options.allocation_interval_bytes)));
             if (options.alloc_live_only) {
                 sender.sendMessage("The result will contain only sampled allocations still live when profiling stops.");
@@ -585,7 +585,8 @@ private:
             }
         }
         sender.sendMessage("Native allocation hooks: {}/{} exports covered ({} patched targets, {} aliases).",
-                           active + aliases, capabilities.size(), active, aliases);
+                           active + aliases, capabilities.size(),
+                           profiler_.allocationHookTargetCount(), aliases);
         if (!unavailable.empty()) {
             sender.sendMessage("Unavailable optional hooks: {}", unavailable);
         }

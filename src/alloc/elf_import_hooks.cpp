@@ -114,6 +114,9 @@ bool ElfImportHooks::prepare(std::span<const ElfImportHookSpec> specs, std::stri
         error = "no ELF import hooks were requested";
         return false;
     }
+    targets_.clear();
+    pages_.clear();
+    capabilities_.clear();
 
     MainImage image;
     if (::dl_iterate_phdr(findMainImage, &image) == 0 || image.headers == nullptr) {
@@ -336,10 +339,9 @@ bool ElfImportHooks::uninstall(std::string &error)
         return true;
     }
     if (!patch(false, error)) {
-        // All slots have already been restored atomically; only page-protection
-        // restoration can fail after that point. The caller must treat this as
-        // strict-cleanup failure, but no import slot still references plugin code.
-        installed_ = false;
+        // The failure can occur either before slot restoration (mprotect) or
+        // after it (permission restoration). Keep the installed state so strict
+        // cleanup can retry without assuming that plugin references are gone.
         return false;
     }
     installed_ = false;

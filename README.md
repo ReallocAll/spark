@@ -21,7 +21,7 @@ spark's bytebin and opened as an interactive flame graph at
 | Command                         | Description                                             |
 | ------------------------------- | ------------------------------------------------------- |
 | `/spark profiler start [flags]` | Start profiling the server thread (background).         |
-| `/spark profiler start --alloc` | Profile native allocation call stacks on Windows.       |
+| `/spark profiler start --alloc` | Profile native allocation call stacks on Windows/Linux. |
 | `/spark profiler stop`          | Stop profiling and finalize the profile.                |
 | `/spark profiler info`          | Show status of the running profiler.                    |
 | `/spark profiler cancel`        | Stop profiling without generating a profile.            |
@@ -35,7 +35,7 @@ preserves the compressed profile in its data folder and reports the local path.
 
 Permission: `endstone.command.spark` (operators by default).
 
-### Native allocation profiler (Windows)
+### Native allocation profiler (Windows and Linux x86-64)
 
 `/spark profiler start --alloc` starts an allocation profile and uses the same
 stop, save, compression, upload, and spark viewer path as an execution profile.
@@ -44,18 +44,21 @@ The call tree is weighted in allocated bytes, and the protobuf is marked with
 execution time. The default sampling interval matches upstream spark: 524287
 bytes (approximately 512 KiB).
 
-`/spark profiler start --alloc-live-only` runs the retained variant. Its call
+`/spark profiler start --alloc-live-only` runs the retained variant on Windows. Its call
 tree contains only sampled allocations that are still live when the profile
 stops, weighted by estimated retained bytes. This is intended for leak analysis:
 the oldest/largest retained stacks are candidates, while repeated profiles are
 still required to distinguish a leak from legitimate long-lived state.
 
-The current native backend reflects BDS constraints rather than a JVM:
+The native backends reflect BDS constraints rather than a JVM:
 
 * funchook intercepts the public UCRT `malloc`, `calloc`, `realloc`, `recalloc`,
   aligned allocation families, and the corresponding internal base exports when
   they are available. Direct `HeapAlloc` and `HeapReAlloc` calls are also sampled;
   alias exports are detected so the same entry address is not hooked twice;
+* on Linux x86-64, Spark atomically redirects the BDS executable's glibc import
+  slots for `malloc`, `calloc`, `realloc`, `reallocarray`, `aligned_alloc`, and
+  `posix_memalign` when present. No allocator instruction bytes are rewritten;
 * only allocations made by the BDS server thread are included, matching the
   current profiler target; direct `VirtualAlloc`, custom pool internals, and other
   threads remain outside the reported rate. Static/private CRT allocations that
@@ -107,9 +110,9 @@ frames fall back to `ucrtbase.dll.0x<RVA>`.
 * `--interval <value>` — execution interval in milliseconds (default `4`),
   or allocation interval in bytes with `--alloc` (default `524287`).
 * `--alloc` — record sampled native allocation call stacks instead of execution time
-  (Windows only in the current backend).
+  (Windows and Linux x86-64).
 * `--alloc-live-only` — record only sampled allocations retained at stop for leak
-  analysis; this implies `--alloc` (Windows only).
+  analysis; this implies `--alloc` (currently Windows only).
 * `--timeout <seconds>` — auto-stop and finalize after N seconds.
 * `--only-ticks-over <ms>` — only record ticks longer than this.
 * `--save-to-file` — write a `.sparkprofile` file instead of uploading
@@ -135,7 +138,7 @@ frames fall back to `ucrtbase.dll.0x<RVA>`.
 
 ## Building
 
-> Windows allocation profiler: CMake fetches and statically builds upstream funchook `v1.1.3`; it is not a Conan requirement.
+> Windows allocation profiler: CMake fetches and statically builds upstream funchook `v1.1.3`; it is not a Conan requirement. Linux uses atomic ELF import-slot redirection and does not link funchook.
 
 
 The platform requirements are:

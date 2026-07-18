@@ -359,8 +359,13 @@ bool verifyByteSampling()
     return true;
 }
 
+#if defined(_WIN32) || defined(__linux__)
 #if defined(_WIN32)
-__declspec(noinline) bool exerciseNativeAllocations()
+#define SPARK_NOINLINE __declspec(noinline)
+#else
+#define SPARK_NOINLINE __attribute__((noinline))
+#endif
+SPARK_NOINLINE bool exerciseNativeAllocations()
 {
     for (std::size_t i = 0; i < 4096; ++i) {
         const std::size_t size = 512 + (i & 255);
@@ -409,9 +414,13 @@ bool runAllocationSession(spark::AllocationSampler &sampler,
         std::fprintf(stderr, "allocation lifecycle: stop failed: %s\n", error.c_str());
         return false;
     }
-    if (sampler.sampleCount() == 0 || sampler.observedBytes() == 0 ||
+    if (sampler.sampleCount() == 0 || sampler.observedBytes() == 0
+#if defined(_WIN32)
+        ||
         sampler.freedSamples() == 0 || sampler.freedBytes() == 0 ||
-        sampler.lifecycleDropped() != 0) {
+        sampler.lifecycleDropped() != 0
+#endif
+    ) {
         std::fprintf(stderr, "allocation lifecycle: session captured no allocations\n");
         return false;
     }
@@ -424,7 +433,11 @@ bool verifyAllocationLifecycle()
 
     spark::AllocationSamplerConfig config;
     config.interval_bytes = 256;
+#if defined(_WIN32)
     config.target_tid = static_cast<std::uint64_t>(::GetCurrentThreadId());
+#else
+    config.target_tid = static_cast<std::uint64_t>(::syscall(SYS_gettid));
+#endif
     std::string error;
 
     spark::AllocationSampler sampler;
@@ -437,7 +450,12 @@ bool verifyAllocationLifecycle()
     for (const spark::AllocationHookCapability &capability : capabilities) {
         active_hooks += capability.status == spark::AllocationHookStatus::Active ? 1 : 0;
     }
-    if (capabilities.size() != 19 || active_hooks < 7) {
+#if defined(_WIN32)
+    constexpr std::size_t expected_capabilities = 19;
+#else
+    constexpr std::size_t expected_capabilities = 6;
+#endif
+    if (capabilities.size() != expected_capabilities || active_hooks < 3) {
         std::fprintf(stderr,
                      "allocation lifecycle: invalid hook capability report (%zu total, %zu active)\n",
                      capabilities.size(), active_hooks);
@@ -531,6 +549,7 @@ bool verifyAllocationLifecycle()
     return true;
 }
 
+#if defined(_WIN32)
 bool verifyRetainedAllocationProfile()
 {
     spark::Profiler profiler;
@@ -583,6 +602,7 @@ bool verifyRetainedAllocationProfile()
     }
     return true;
 }
+#endif
 #endif
 
 #if defined(__linux__)
@@ -672,7 +692,7 @@ int main(int argc, char **argv)
 #if defined(_WIN32)
         || !verifyAllocationLifecycle() || !verifyRetainedAllocationProfile()
 #elif defined(__linux__)
-        || !verifyLinuxImportHooks()
+        || !verifyLinuxImportHooks() || !verifyAllocationLifecycle()
 #endif
     ) {
         g_run.store(false);

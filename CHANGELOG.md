@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `/spark profiler start --alloc` on Windows, producing an uploaded spark
   `ALLOCATION` profile weighted by sampled UCRT allocation bytes.
+- `/spark profiler start --alloc` on Linux x86-64 using atomic BDS ELF import-slot
+  hooks for glibc allocation entry points.
 - `/spark profiler start --alloc-live-only` for retained-allocation call trees and
   leak-candidate analysis by allocation stack and age.
 - Byte-based allocation stack sampling with spark's default 524287-byte interval,
@@ -60,8 +62,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Limitations
 
-- The first native allocation backend is Windows-only and covers the selected
-  server thread through UCRT allocation entry points.
+- Native allocation profiling covers the selected server thread on Windows and
+  Linux x86-64; retained/live analysis is temporarily Windows-only.
 - Custom thread selection, direct virtual-memory calls, and custom allocator
   activity below its backing Windows heap allocation are not yet supported.
 

@@ -111,4 +111,9 @@ const std::vector<AllocationHookCapability> &AllocationSampler::hookCapabilities
     return impl_->capabilities;
 }
 
+std::size_t AllocationSampler::hookTargetCount() const
+{
+    return 0;
+}
+
 }  // namespace spark

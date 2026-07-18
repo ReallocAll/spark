@@ -101,6 +101,7 @@ public:
     bool hooksInstalled() const;
     bool failure(std::string &error) const;
     const std::vector<AllocationHookCapability> &hookCapabilities() const;
+    std::size_t hookTargetCount() const;
 
 private:
     struct Impl;

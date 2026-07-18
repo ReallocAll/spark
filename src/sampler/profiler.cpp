@@ -136,6 +136,11 @@ const std::vector<AllocationHookCapability> &Profiler::allocationHookCapabilitie
     return allocation_sampler_.hookCapabilities();
 }
 
+std::size_t Profiler::allocationHookTargetCount() const
+{
+    return allocation_sampler_.hookTargetCount();
+}
+
 bool Profiler::start(const ProfilerOptions &options, std::uint64_t main_tid, std::string &error)
 {
     if (running_.load()) {
@@ -270,9 +275,18 @@ std::string Profiler::exportData(const ExportContext &ctx) const
     meta.number_of_ticks = static_cast<std::int32_t>(activeNumberOfTicks());
     meta.endstone_version = ctx.endstone_version;
     meta.minecraft_version = ctx.minecraft_version;
-    meta.engine_version = mode_ == ProfileMode::Allocation
-                              ? std::string("endstone-spark ") + kVersion + " native-ucrt/funchook"
-                              : std::string("endstone-spark ") + kVersion;
+    if (mode_ == ProfileMode::Allocation) {
+#if defined(_WIN32)
+        meta.engine_version = std::string("endstone-spark ") + kVersion + " native-ucrt/funchook";
+#elif defined(__linux__)
+        meta.engine_version = std::string("endstone-spark ") + kVersion + " native-glibc/elf-import";
+#else
+        meta.engine_version = std::string("endstone-spark ") + kVersion + " native-allocation";
+#endif
+    }
+    else {
+        meta.engine_version = std::string("endstone-spark ") + kVersion;
+    }
     meta.comment = !ctx.comment.empty() ? ctx.comment : options_.comment;
     meta.creator_name = options_.creator_name;
     meta.creator_is_player = options_.creator_is_player;
@@ -283,10 +297,17 @@ std::string Profiler::exportData(const ExportContext &ctx) const
         // Upstream SamplerMetadata has no dedicated native allocation diagnostics.
         // The viewer JSON-parses every map value, so textual values must be encoded
         // as JSON string literals; numbers and booleans are already valid JSON.
+#if defined(_WIN32)
         meta.extra_platform_metadata["Allocation backend"] = jsonString("Windows UCRT/funchook");
         meta.extra_platform_metadata["Allocation coverage"] = jsonString(
             "server thread; UCRT malloc/calloc/realloc plus recalloc/aligned/base and "
             "direct HeapAlloc/HeapReAlloc when available and hookable");
+#elif defined(__linux__)
+        meta.extra_platform_metadata["Allocation backend"] = jsonString("Linux glibc/ELF import slots");
+        meta.extra_platform_metadata["Allocation coverage"] = jsonString(
+            "server thread; glibc malloc/calloc/realloc/reallocarray/aligned_alloc/posix_memalign "
+            "imports in the BDS main executable when present");
+#endif
         meta.extra_platform_metadata["Allocation samples captured"] =
             std::to_string(allocation_sampler_.sampleCount());
         meta.extra_platform_metadata["Allocation samples dropped"] =
@@ -333,7 +354,7 @@ std::string Profiler::exportData(const ExportContext &ctx) const
         meta.extra_platform_metadata["Allocation hook exports covered"] =
             std::to_string(active + aliases);
         meta.extra_platform_metadata["Allocation hook targets installed"] =
-            std::to_string(active);
+            std::to_string(allocation_sampler_.hookTargetCount());
         meta.extra_platform_metadata["Allocation hook aliases"] =
             std::to_string(aliases);
         meta.extra_platform_metadata["Allocation hook capabilities"] =
