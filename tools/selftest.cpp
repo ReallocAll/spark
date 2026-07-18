@@ -27,6 +27,9 @@
 #include "command/arguments.h"
 #include "alloc/byte_sampler.h"
 #include "alloc/allocation_sampler.h"
+#if defined(__linux__)
+#include "alloc/elf_import_hooks.h"
+#endif
 #include "net/bytebin.h"
 #include "net/gzip.h"
 #include "net/profile_file.h"
@@ -582,6 +585,38 @@ bool verifyRetainedAllocationProfile()
 }
 #endif
 
+#if defined(__linux__)
+pid_t linuxHookProbe() noexcept
+{
+    return static_cast<pid_t>(-12345);
+}
+
+pid_t (*volatile linux_getpid_call)() = &::getpid;
+
+bool verifyLinuxImportHooks()
+{
+    const pid_t expected = ::getpid();
+    spark::ElfImportHooks hooks;
+    const spark::ElfImportHookSpec spec{
+        "getpid", reinterpret_cast<void *>(&linuxHookProbe), true};
+    std::string error;
+    if (!hooks.prepare(std::span<const spark::ElfImportHookSpec>(&spec, 1), error) ||
+        hooks.targetCount() == 0 || !hooks.install(error)) {
+        std::fprintf(stderr, "linux import hooks: setup failed: %s\n", error.c_str());
+        return false;
+    }
+    if (linux_getpid_call() != static_cast<pid_t>(-12345)) {
+        std::fprintf(stderr, "linux import hooks: replacement was not observed\n");
+        return false;
+    }
+    if (!hooks.uninstall(error) || linux_getpid_call() != expected) {
+        std::fprintf(stderr, "linux import hooks: restoration failed: %s\n", error.c_str());
+        return false;
+    }
+    return true;
+}
+#endif
+
 }  // namespace
 
 int main(int argc, char **argv)
@@ -636,6 +671,8 @@ int main(int argc, char **argv)
         !verifySessionIsolation(g_worker_tid.load()) || !verifyTickFiltering(g_worker_tid.load())
 #if defined(_WIN32)
         || !verifyAllocationLifecycle() || !verifyRetainedAllocationProfile()
+#elif defined(__linux__)
+        || !verifyLinuxImportHooks()
 #endif
     ) {
         g_run.store(false);

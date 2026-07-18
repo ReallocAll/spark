@@ -61,7 +61,8 @@ if (WIN32)
 else ()
     target_sources(spark_core PRIVATE
             src/sampler/capture_linux.cpp
-            src/alloc/allocation_sampler_stub.cpp)
+            src/alloc/allocation_sampler_stub.cpp
+            src/alloc/elf_import_hooks.cpp)
 endif ()
 target_include_directories(spark_core PUBLIC src)
 target_link_libraries(spark_core PUBLIC cpptrace::cpptrace concurrentqueue::concurrentqueue ZLIB::ZLIB CURL::libcurl
