@@ -302,14 +302,16 @@ struct AllocationSampler::Impl {
     std::atomic<std::uint64_t> retained_age_ms_total{0};
     std::atomic<std::uint64_t> retained_age_ms_max{0};
 
-    pthread_mutex_t live_mutex = PTHREAD_MUTEX_INITIALIZER;
+    pthread_rwlock_t live_index_lock = PTHREAD_RWLOCK_INITIALIZER;
+    pthread_mutex_t live_pool_mutex = PTHREAD_MUTEX_INITIALIZER;
     LiveAllocation *live_storage = nullptr;
     LiveAllocation *free_live = nullptr;
     LiveIndexEntry *live_index = nullptr;
 
     ~Impl()
     {
-        ::pthread_mutex_destroy(&live_mutex);
+        ::pthread_rwlock_destroy(&live_index_lock);
+        ::pthread_mutex_destroy(&live_pool_mutex);
     }
 
     EventRing events;
@@ -400,7 +402,7 @@ struct AllocationSampler::Impl {
     std::uint64_t lookupAllocationId(void *pointer) noexcept
     {
         if (pointer == nullptr || live_index == nullptr ||
-            ::pthread_mutex_lock(&live_mutex) != 0) {
+            ::pthread_rwlock_rdlock(&live_index_lock) != 0) {
             if (pointer != nullptr && live_index != nullptr) {
                 lifecycle_dropped.fetch_add(1, std::memory_order_relaxed);
             }
@@ -419,7 +421,7 @@ struct AllocationSampler::Impl {
                 break;
             }
         }
-        ::pthread_mutex_unlock(&live_mutex);
+        ::pthread_rwlock_unlock(&live_index_lock);
         return result;
     }
 
@@ -438,10 +440,10 @@ struct AllocationSampler::Impl {
                !lifetime_ms_max.compare_exchange_weak(previous, lifetime,
                                                       std::memory_order_relaxed)) {
         }
-        if (::pthread_mutex_lock(&live_mutex) == 0) {
+        if (::pthread_mutex_lock(&live_pool_mutex) == 0) {
             allocation->next = free_live;
             free_live = allocation;
-            ::pthread_mutex_unlock(&live_mutex);
+            ::pthread_mutex_unlock(&live_pool_mutex);
         }
         else {
             lifecycle_dropped.fetch_add(1, std::memory_order_relaxed);
@@ -451,7 +453,7 @@ struct AllocationSampler::Impl {
     bool releaseAllocation(void *pointer, std::uint64_t expected_id) noexcept
     {
         if (pointer == nullptr || expected_id == 0 || live_index == nullptr ||
-            ::pthread_mutex_lock(&live_mutex) != 0) {
+            ::pthread_rwlock_wrlock(&live_index_lock) != 0) {
             if (pointer != nullptr && expected_id != 0 && live_index != nullptr) {
                 lifecycle_dropped.fetch_add(1, std::memory_order_relaxed);
             }
@@ -473,7 +475,7 @@ struct AllocationSampler::Impl {
                 break;
             }
         }
-        ::pthread_mutex_unlock(&live_mutex);
+        ::pthread_rwlock_unlock(&live_index_lock);
         if (released != nullptr) {
             retireAllocation(released, monotonicMs());
             return true;
@@ -629,7 +631,7 @@ struct AllocationSampler::Impl {
 
     LiveAllocation *acquireLiveRecord() noexcept
     {
-        if (::pthread_mutex_lock(&live_mutex) != 0) {
+        if (::pthread_mutex_lock(&live_pool_mutex) != 0) {
             return nullptr;
         }
         LiveAllocation *record = free_live;
@@ -637,13 +639,13 @@ struct AllocationSampler::Impl {
             free_live = record->next;
             record->next = nullptr;
         }
-        ::pthread_mutex_unlock(&live_mutex);
+        ::pthread_mutex_unlock(&live_pool_mutex);
         return record;
     }
 
     bool insertLiveAllocation(LiveAllocation *allocation) noexcept
     {
-        if (::pthread_mutex_lock(&live_mutex) != 0) {
+        if (::pthread_rwlock_wrlock(&live_index_lock) != 0) {
             return false;
         }
         LiveAllocation *replaced = nullptr;
@@ -678,29 +680,26 @@ struct AllocationSampler::Impl {
                 {allocation->pointer, allocation->allocation_id, allocation};
             inserted = true;
         }
-        if (replaced != nullptr) {
-            replaced->next = free_live;
-            free_live = replaced;
-        }
-        ::pthread_mutex_unlock(&live_mutex);
+        ::pthread_rwlock_unlock(&live_index_lock);
 
         if (replaced != nullptr) {
             lifecycle_dropped.fetch_add(1, std::memory_order_relaxed);
             live_samples.fetch_sub(1, std::memory_order_relaxed);
             live_bytes.fetch_sub(replaced->weight_bytes, std::memory_order_relaxed);
+            recycleLiveRecord(replaced);
         }
         return inserted;
     }
 
     void recycleLiveRecord(LiveAllocation *allocation) noexcept
     {
-        if (::pthread_mutex_lock(&live_mutex) != 0) {
+        if (::pthread_mutex_lock(&live_pool_mutex) != 0) {
             lifecycle_dropped.fetch_add(1, std::memory_order_relaxed);
             return;
         }
         allocation->next = free_live;
         free_live = allocation;
-        ::pthread_mutex_unlock(&live_mutex);
+        ::pthread_mutex_unlock(&live_pool_mutex);
     }
 
     void recordAllocation(void *pointer, std::uint64_t requested_bytes) noexcept
