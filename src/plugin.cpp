@@ -9,7 +9,6 @@
 #include <map>
 #include <memory>
 #include <string>
-#include <system_error>
 #include <thread>
 #include <type_traits>
 #include <utility>
@@ -27,12 +26,19 @@
 #include "command/arguments.h"
 #include "net/bytebin.h"
 #include "net/gzip.h"
+#include "net/profile_file.h"
 #include "sampler/profiler.h"
 #include "spark_constants.h"
 
 namespace {
 
 using endstone::ColorFormat;
+
+enum class ExportOutcome {
+    Failed,
+    Uploaded,
+    Saved,
+};
 
 std::uint64_t currentThreadId()
 {
@@ -720,36 +726,45 @@ private:
     // Background thread: no Endstone API except the scheduler hop-back at the end.
     void runExport()
     {
-        bool ok = false;
+        ExportOutcome outcome = ExportOutcome::Failed;
         std::string message;
         try {
             std::string body = profiler_.exportData(pending_ctx_);
+            std::string compressed = spark::gzipCompress(body);
             if (pending_save_) {
-                std::error_code ec;
-                std::filesystem::create_directories(pending_folder_, ec);
-                std::filesystem::path path =
-                    pending_folder_ / ("profile-" + std::to_string(nowMs()) + ".sparkprofile");
-                std::ofstream out(path, std::ios::binary);
-                out.write(body.data(), static_cast<std::streamsize>(body.size()));
-                if (out) {
-                    ok = true;
-                    message = "Saved to " + path.string() + " — open it at " + spark::kViewerUrl;
+                spark::ProfileFileResult saved =
+                    spark::saveProfileToDirectory(pending_folder_, compressed, nowMs());
+                if (saved.ok) {
+                    outcome = ExportOutcome::Saved;
+                    message = "Saved to " + saved.path.string() + " — open it at " +
+                              spark::kViewerUrl;
                 }
                 else {
-                    message = "Failed to write the profile to disk.";
+                    message = "Failed to save the profile: " + saved.error;
                 }
             }
             else {
-                std::string gz = spark::gzipCompress(body);
                 spark::UploadResult result =
-                    spark::uploadToBytebin(gz, spark::kBytebinUrl, spark::kSamplerContentType,
-                                                    std::string("endstone-spark/") + spark::kVersion);
+                    spark::uploadToBytebin(compressed, spark::kBytebinUrl,
+                                           spark::kSamplerContentType,
+                                           std::string("endstone-spark/") + spark::kVersion);
                 if (result.ok) {
-                    ok = true;
+                    outcome = ExportOutcome::Uploaded;
                     message = std::string(spark::kViewerUrl) + result.key;
                 }
                 else {
-                    message = "Upload failed (" + result.error + "). Retry with --save-to-file.";
+                    spark::ProfileFileResult saved =
+                        spark::saveProfileToDirectory(pending_folder_, compressed, nowMs());
+                    if (saved.ok) {
+                        outcome = ExportOutcome::Saved;
+                        message = "Upload failed (" + result.error +
+                                  "), so the profile was saved to " + saved.path.string() +
+                                  " — open it at " + spark::kViewerUrl;
+                    }
+                    else {
+                        message = "Upload failed (" + result.error +
+                                  ") and automatic local save failed (" + saved.error + ").";
+                    }
                 }
             }
         }
@@ -759,7 +774,7 @@ private:
         catch (...) {
             message = "Export failed with an unknown error.";
         }
-        pending_ok_ = ok;
+        pending_outcome_ = outcome;
         pending_result_ = std::move(message);
         try {
             getServer().getScheduler().runTask(*this, [this]() { announceResult(); });
@@ -773,9 +788,11 @@ private:
     // Back on the main thread.
     void announceResult()
     {
-        const char *headline = !pending_ok_ ? "Profiler stopped."
-                               : pending_save_ ? "Profiler stopped & saved!"
-                                               : "Profiler stopped & upload complete!";
+        const char *headline = pending_outcome_ == ExportOutcome::Uploaded
+                                   ? "Profiler stopped & upload complete!"
+                               : pending_outcome_ == ExportOutcome::Saved
+                                   ? "Profiler stopped & saved locally!"
+                                   : "Profiler stopped.";
         announce(pending_sender_, headline);
         announce(pending_sender_, pending_result_);
         exporting_.store(false);
@@ -834,7 +851,7 @@ private:
     std::string pending_sender_ = "CONSOLE";
     std::string pending_result_;
     bool pending_save_ = false;
-    bool pending_ok_ = false;
+    ExportOutcome pending_outcome_ = ExportOutcome::Failed;
 };
 
 ENDSTONE_PLUGIN("spark", "0.1.1", SparkPlugin)

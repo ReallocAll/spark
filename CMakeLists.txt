@@ -48,6 +48,7 @@ add_library(spark_core STATIC
         src/proto/sampler_data.cpp
         src/net/gzip.cpp
         src/net/bytebin.cpp
+        src/net/profile_file.cpp
         src/sampler/call_tree.cpp
         src/sampler/symbolicate.cpp
         src/sampler/sampler.cpp

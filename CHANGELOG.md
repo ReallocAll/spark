@@ -38,6 +38,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a clean subsequent session after stop/cancel.
 - Report failed allocation sessions explicitly, discard their incomplete data on
   stop/cancel/timeout, and confirm when the backend is ready to start again.
+- Write valid gzip-compressed local profiles atomically and automatically save a
+  local copy when upload fails, so completed captures are not lost to the network.
 - Replace the finite repeated threshold table with constant-time systematic byte
   sampling using a fresh uniformly random phase per session. Allocation weights
   use successful requested sizes and every sampling point is attributed to the

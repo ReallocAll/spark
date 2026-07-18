@@ -30,7 +30,8 @@ spark's bytebin and opened as an interactive flame graph at
 
 By default, stopping a profiler uploads the generated profile to spark's bytebin
 and prints the viewer link. With `--save-to-file`, the profile is written locally
-as a `.sparkprofile` file instead.
+as a `.sparkprofile` file instead. If an upload fails, Spark automatically
+preserves the compressed profile in its data folder and reports the local path.
 
 Permission: `endstone.command.spark` (operators by default).
 

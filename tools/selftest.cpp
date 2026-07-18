@@ -10,7 +10,9 @@
 #include <cstdlib>
 #include <cstdint>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <limits>
 #include <string>
 #include <thread>
@@ -27,6 +29,7 @@
 #include "alloc/allocation_sampler.h"
 #include "net/bytebin.h"
 #include "net/gzip.h"
+#include "net/profile_file.h"
 #include "sampler/capture.h"
 #include "sampler/profiler.h"
 #include "sampler/symbolicate.h"
@@ -598,6 +601,22 @@ int main(int argc, char **argv)
     std::ofstream("profile.pb", std::ios::binary).write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
     std::string gz = spark::gzipCompress(bytes);
     std::ofstream("profile.sparkprofile", std::ios::binary).write(gz.data(), static_cast<std::streamsize>(gz.size()));
+
+    spark::ProfileFileResult saved = spark::saveProfileToDirectory(".", gz, 42);
+    if (!saved.ok) {
+        std::fprintf(stderr, "profile file: atomic save failed: %s\n", saved.error.c_str());
+        return 1;
+    }
+    std::ifstream saved_stream(saved.path, std::ios::binary);
+    std::string round_trip((std::istreambuf_iterator<char>(saved_stream)),
+                           std::istreambuf_iterator<char>());
+    saved_stream.close();
+    std::error_code cleanup_error;
+    std::filesystem::remove(saved.path, cleanup_error);
+    if (round_trip != gz || cleanup_error) {
+        std::fprintf(stderr, "profile file: saved gzip payload did not round-trip cleanly\n");
+        return 1;
+    }
 
     std::printf("samples=%llu proto=%zuB gzip=%zuB\n", static_cast<unsigned long long>(profiler.sampleCount()),
                 bytes.size(), gz.size());
