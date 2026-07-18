@@ -545,7 +545,6 @@ bool verifyAllocationLifecycle()
     return true;
 }
 
-#if defined(_WIN32)
 bool verifyRetainedAllocationProfile()
 {
     spark::Profiler profiler;
@@ -554,7 +553,12 @@ bool verifyRetainedAllocationProfile()
     options.alloc_live_only = true;
     options.allocation_interval_bytes = 1;
     std::string error;
-    if (!profiler.start(options, static_cast<std::uint64_t>(::GetCurrentThreadId()), error)) {
+#if defined(_WIN32)
+    const std::uint64_t target_tid = static_cast<std::uint64_t>(::GetCurrentThreadId());
+#else
+    const std::uint64_t target_tid = static_cast<std::uint64_t>(::syscall(SYS_gettid));
+#endif
+    if (!profiler.start(options, target_tid, error)) {
         std::fprintf(stderr, "retained allocation: start failed: %s\n", error.c_str());
         return false;
     }
@@ -598,7 +602,6 @@ bool verifyRetainedAllocationProfile()
     }
     return true;
 }
-#endif
 #endif
 
 #if defined(__linux__)
@@ -688,7 +691,8 @@ int main(int argc, char **argv)
 #if defined(_WIN32)
         || !verifyAllocationLifecycle() || !verifyRetainedAllocationProfile()
 #elif defined(__linux__)
-        || !verifyLinuxImportHooks() || !verifyAllocationLifecycle()
+        || !verifyLinuxImportHooks() || !verifyAllocationLifecycle() ||
+        !verifyRetainedAllocationProfile()
 #endif
     ) {
         g_run.store(false);

@@ -63,8 +63,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Limitations
 
-- Native allocation profiling covers the selected server thread on Windows and
-  Linux x86-64; retained/live analysis is temporarily Windows-only.
+- Native allocation profiling, sampled lifetimes, and retained/live analysis cover
+  the selected server thread on Windows and Linux x86-64.
 - Custom thread selection, direct virtual-memory calls, and custom allocator
   activity below its backing Windows heap allocation are not yet supported.
 
