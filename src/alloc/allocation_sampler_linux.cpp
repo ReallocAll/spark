@@ -307,6 +307,11 @@ struct AllocationSampler::Impl {
     LiveAllocation *free_live = nullptr;
     LiveIndexEntry *live_index = nullptr;
 
+    ~Impl()
+    {
+        ::pthread_mutex_destroy(&live_mutex);
+    }
+
     EventRing events;
     std::thread aggregator_thread;
     moodycamel::ConcurrentQueue<TickEvent> ticks;
@@ -396,6 +401,9 @@ struct AllocationSampler::Impl {
     {
         if (pointer == nullptr || live_index == nullptr ||
             ::pthread_mutex_lock(&live_mutex) != 0) {
+            if (pointer != nullptr && live_index != nullptr) {
+                lifecycle_dropped.fetch_add(1, std::memory_order_relaxed);
+            }
             return 0;
         }
         const std::size_t start = liveIndexSlot(pointer);
@@ -444,6 +452,9 @@ struct AllocationSampler::Impl {
     {
         if (pointer == nullptr || expected_id == 0 || live_index == nullptr ||
             ::pthread_mutex_lock(&live_mutex) != 0) {
+            if (pointer != nullptr && expected_id != 0 && live_index != nullptr) {
+                lifecycle_dropped.fetch_add(1, std::memory_order_relaxed);
+            }
             return false;
         }
         LiveAllocation *released = nullptr;
@@ -1130,6 +1141,8 @@ struct AllocationSampler::Impl {
         }
 
         aggregator_running.store(true, std::memory_order_release);
+        running.store(true, std::memory_order_release);
+        tracking.store(true, std::memory_order_release);
         try {
             aggregator_thread = std::thread([this] {
                 try {
@@ -1144,14 +1157,20 @@ struct AllocationSampler::Impl {
             });
         }
         catch (...) {
+            tracking.store(false, std::memory_order_release);
+            running.store(false, std::memory_order_release);
             aggregator_running.store(false, std::memory_order_release);
+            std::string quiescence_error;
+            if (!waitFor(tracking_calls, "tracked Linux allocation hooks",
+                         quiescence_error)) {
+                error = std::move(quiescence_error);
+                return false;
+            }
             events.release();
             releaseLifecycleStorage();
             error = "could not create the allocation aggregator thread";
             return false;
         }
-        running.store(true, std::memory_order_release);
-        tracking.store(true, std::memory_order_release);
         return true;
     }
 

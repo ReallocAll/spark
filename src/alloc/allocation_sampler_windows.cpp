@@ -2082,6 +2082,8 @@ struct AllocationSampler::Impl {
         }
 
         aggregator_running.store(true, std::memory_order_release);
+        running.store(true, std::memory_order_release);
+        tracking.store(true, std::memory_order_release);
         try {
             aggregator_thread = std::thread([this]() {
                 try {
@@ -2096,13 +2098,18 @@ struct AllocationSampler::Impl {
             });
         }
         catch (...) {
+            tracking.store(false, std::memory_order_release);
+            running.store(false, std::memory_order_release);
             aggregator_running.store(false, std::memory_order_release);
+            std::string quiescence_error;
+            if (!waitForTrackingQuiescence(quiescence_error)) {
+                error = std::move(quiescence_error);
+                return false;
+            }
             freeEventPool();
             error = "could not create the allocation aggregator thread";
             return false;
         }
-        running.store(true, std::memory_order_release);
-        tracking.store(true, std::memory_order_release);
         return true;
     }
 
