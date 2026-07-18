@@ -2,13 +2,16 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <map>
 #include <memory>
 #include <string>
 #include <system_error>
 #include <thread>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -66,6 +69,65 @@ std::string formatDuration(std::int64_t seconds)
     long h = m / 60;
     m %= 60;
     return std::to_string(h) + "h " + std::to_string(m) + "m";
+}
+
+std::string formatBytes(std::uint64_t bytes)
+{
+    constexpr const char *units[] = {"B", "KiB", "MiB", "GiB", "TiB"};
+    double value = static_cast<double>(bytes);
+    std::size_t unit = 0;
+    while (value >= 1024.0 && unit + 1 < (sizeof(units) / sizeof(units[0]))) {
+        value /= 1024.0;
+        ++unit;
+    }
+    char buffer[64];
+    std::snprintf(buffer, sizeof(buffer), unit == 0 ? "%.0f %s" : "%.2f %s", value, units[unit]);
+    return buffer;
+}
+
+template <typename Sender>
+bool commandSenderIsPlayer(Sender &sender)
+{
+    if constexpr (requires(Sender &value) { value.asPlayer(); }) {
+        return sender.asPlayer() != nullptr;
+    }
+    else {
+        return dynamic_cast<endstone::Player *>(&sender) != nullptr;
+    }
+}
+
+template <typename Value>
+auto pointerFromApi(Value &&value)
+{
+    using Type = std::remove_reference_t<Value>;
+    if constexpr (std::is_pointer_v<Type>) {
+        return value;
+    }
+    else {
+        return std::addressof(value);
+    }
+}
+
+template <typename ActorType>
+std::string actorTypeName(const ActorType &type)
+{
+    if constexpr (requires(const ActorType &value) { value.getId(); }) {
+        return static_cast<std::string>(type.getId());
+    }
+    else {
+        return type;
+    }
+}
+
+template <typename Dimension>
+std::string dimensionName(const Dimension &dimension)
+{
+    if constexpr (requires(const Dimension &value) { value.getName(); }) {
+        return dimension.getName();
+    }
+    else {
+        return static_cast<std::string>(dimension.getId());
+    }
 }
 
 const std::string &tpsColor(float tps)
@@ -139,13 +201,24 @@ public:
 
     void onDisable() override
     {
-        if (profiler_.running()) {
-            profiler_.cancel();
-        }
         if (export_thread_.joinable()) {
             export_thread_.join();
         }
+        // The export thread may have queued announceResult() just before it
+        // exited. Remove every scheduler-owned callback before proving backend
+        // quiescence so no task can re-enter old plugin code during/after reload.
         getServer().getScheduler().cancelTasks(*this);
+        tick_task_.reset();
+
+        std::string shutdown_error;
+        if (!profiler_.shutdown(shutdown_error)) {
+            std::fprintf(stderr, "[spark] profiler shutdown failed before plugin unload: %s\n",
+                         shutdown_error.c_str());
+            // Endstone cannot veto unload from onDisable(). Continuing would let
+            // allocator entries or in-flight thunks reference an unloaded DLL.
+            // Fail closed instead of pinning/leaking old plugin code across reload.
+            std::abort();
+        }
     }
 
     bool onCommand(endstone::CommandSender &sender, const endstone::Command &command,
@@ -214,8 +287,9 @@ private:
         sender.sendMessage("{}/spark tps {}- ticks per second & tick duration", ColorFormat::Yellow,
                            ColorFormat::Gray);
         sender.sendMessage("{}/spark health {}- server health report", ColorFormat::Yellow, ColorFormat::Gray);
-        sender.sendMessage("{}Flags: --interval <ms>, --timeout <seconds>, --only-ticks-over <ms>", ColorFormat::Gray);
-        sender.sendMessage("{}       --save-to-file, --comment <text>, --include-sleeping", ColorFormat::Gray);
+        sender.sendMessage("{}Flags: --alloc, --interval <ms|bytes>, --timeout <seconds>", ColorFormat::Gray);
+        sender.sendMessage("{}       --only-ticks-over <ms>, --save-to-file, --comment <text>", ColorFormat::Gray);
+        sender.sendMessage("{}       --include-sleeping", ColorFormat::Gray);
     }
 
     void cmdProfiler(endstone::CommandSender &sender, const spark::Arguments &args)
@@ -248,29 +322,58 @@ private:
             sender.sendMessage("The profiler has stopped; results are still being finalized.");
             return;
         }
-        if (args.boolFlag("alloc")) {
-            sender.sendErrorMessage(
-                "Allocation profiling isn't supported by endstone-spark (native execution profiler only).");
+
+        spark::ProfilerOptions options;
+        options.alloc = args.boolFlag("alloc");
+        if (args.boolFlag("alloc-live-only")) {
+            sender.sendErrorMessage("--alloc-live-only is not supported by the native BDS allocation engine yet.");
+            return;
+        }
+#if !defined(_WIN32)
+        if (options.alloc) {
+            sender.sendErrorMessage("The native allocation profiler is currently available only on Windows.");
+            return;
+        }
+#endif
+        options.threads = args.stringFlag("thread");
+        if (options.alloc && !options.threads.empty()) {
+            sender.sendErrorMessage("Custom thread selection is not supported by the native allocation engine yet.");
             return;
         }
 
-        spark::ProfilerOptions options;
         auto interval = args.doubleFlag("interval");
         if (args.boolFlag("interval") && !interval) {
             sender.sendErrorMessage("The sampling interval must be a finite number.");
             return;
         }
         if (interval && *interval <= 0.0) {
-            sender.sendErrorMessage("The sampling interval must be greater than 0ms.");
+            sender.sendErrorMessage("The sampling interval must be greater than zero.");
             return;
         }
-        if (interval && *interval > spark::kMaxSamplingIntervalMs) {
-            sender.sendErrorMessage("The sampling interval must not exceed {}ms.", spark::kMaxSamplingIntervalMs);
-            return;
+
+        if (options.alloc) {
+            if (interval && *interval > static_cast<double>(spark::kMaxAllocationIntervalBytes)) {
+                sender.sendErrorMessage("The allocation interval must not exceed {} bytes.",
+                                        spark::kMaxAllocationIntervalBytes);
+                return;
+            }
+            options.allocation_interval_bytes = interval
+                                                    ? static_cast<std::int32_t>(*interval + 0.5)
+                                                    : spark::kDefaultAllocationIntervalBytes;
+            if (options.allocation_interval_bytes < 1) {
+                options.allocation_interval_bytes = 1;
+            }
         }
-        options.interval_ms = interval ? static_cast<int>(*interval + 0.5) : 4;
-        if (options.interval_ms < 1) {
-            options.interval_ms = 1;
+        else {
+            if (interval && *interval > spark::kMaxSamplingIntervalMs) {
+                sender.sendErrorMessage("The sampling interval must not exceed {}ms.",
+                                        spark::kMaxSamplingIntervalMs);
+                return;
+            }
+            options.interval_ms = interval ? static_cast<int>(*interval + 0.5) : 4;
+            if (options.interval_ms < 1) {
+                options.interval_ms = 1;
+            }
         }
 
         auto timeout_flag = args.intFlag("timeout");
@@ -296,14 +399,13 @@ private:
         }
         options.only_ticks_over_ms = tick_threshold.value_or(-1);
         options.ignore_sleeping = !args.boolFlag("include-sleeping");
-        options.threads = args.stringFlag("thread");
         auto comments = args.stringFlag("comment");
         if (!comments.empty()) {
             options.comment = comments.front();
         }
         options.save_to_file = args.boolFlag("save-to-file");
         options.creator_name = sender.getName();
-        options.creator_is_player = sender.asPlayer() != nullptr;
+        options.creator_is_player = commandSenderIsPlayer(sender);
 
         std::uint64_t tid = main_tid_.load();
         if (tid == 0) {
@@ -318,8 +420,16 @@ private:
         }
         start_sender_name_ = sender.getName();
 
-        sender.sendMessage("{}Profiler is now running!{} (async, {}ms interval)", ColorFormat::Gold,
-                           ColorFormat::Gray, options.interval_ms);
+        if (options.alloc) {
+            sender.sendMessage("{}Allocation Profiler is now running!{} (async)", ColorFormat::Gold,
+                               ColorFormat::Gray);
+            sender.sendMessage("Sampling approximately every {} of UCRT allocations on the server thread.",
+                               formatBytes(static_cast<std::uint64_t>(options.allocation_interval_bytes)));
+        }
+        else {
+            sender.sendMessage("{}Profiler is now running!{} (async, {}ms interval)", ColorFormat::Gold,
+                               ColorFormat::Gray, options.interval_ms);
+        }
         if (options.only_ticks_over_ms > 0) {
             sender.sendMessage("Only recording ticks longer than {}ms.", options.only_ticks_over_ms);
         }
@@ -363,10 +473,35 @@ private:
             sender.sendMessage("To start a new one, run: {}/spark profiler start", ColorFormat::Gray);
             return;
         }
-        sender.sendMessage("{}Profiler is already running!", ColorFormat::Gold);
+        const bool allocation = profiler_.mode() == spark::ProfileMode::Allocation;
+        std::string backend_error;
+        if (allocation && profiler_.backendFailure(backend_error)) {
+            sender.sendMessage("{}Allocation profiler backend failed: {}", ColorFormat::Red,
+                               backend_error);
+            sender.sendMessage("Run {}/spark profiler cancel{} to clean up this session.",
+                               ColorFormat::Gray, ColorFormat::Reset);
+            return;
+        }
+        if (allocation) {
+            sender.sendMessage("{}Allocation Profiler is already running!", ColorFormat::Gold);
+        }
+        else {
+            sender.sendMessage("{}Profiler is already running!", ColorFormat::Gold);
+        }
         std::int64_t ran = (nowMs() - profiler_.startTimeMs()) / 1000;
-        sender.sendMessage("So far it has profiled for {} ({} samples).", formatDuration(ran),
-                           profiler_.sampleCount());
+        if (allocation) {
+            sender.sendMessage("So far it has profiled for {} ({} allocation samples, {} estimated from {} observed).",
+                               formatDuration(ran), profiler_.sampleCount(),
+                               formatBytes(profiler_.sampledAllocationBytes()),
+                               formatBytes(profiler_.observedAllocationBytes()));
+            if (profiler_.droppedSamples() != 0) {
+                sender.sendMessage("Dropped allocation samples: {}", profiler_.droppedSamples());
+            }
+        }
+        else {
+            sender.sendMessage("So far it has profiled for {} ({} samples).", formatDuration(ran),
+                               profiler_.sampleCount());
+        }
         std::int64_t auto_end = profiler_.autoEndTimeMs();
         if (auto_end <= 0) {
             sender.sendMessage("To stop and finalize the profile, run: {}/spark profiler stop", ColorFormat::Gray);
@@ -383,7 +518,11 @@ private:
             sender.sendMessage("There isn't an active profiler running.");
             return;
         }
-        profiler_.cancel();
+        std::string error;
+        if (!profiler_.cancel(error)) {
+            sender.sendMessage("{}Unable to cancel the profiler safely: {}", ColorFormat::Red, error);
+            return;
+        }
         sender.sendMessage("{}Profiler has been cancelled.", ColorFormat::Gold);
     }
 
@@ -394,6 +533,16 @@ private:
     // which matters when the plugin and the runtime are built with different libc++.
     void finishProfiler(const std::string &sender_name, bool save, const std::string &comment)
     {
+        // Stop before gathering metadata so spark's own world/plugin snapshot
+        // allocations do not pollute an allocation profile. Entry hooks remain
+        // disabled pass-throughs between sessions; a backend service failure
+        // blocks export of the partial data.
+        std::string stop_error;
+        if (!profiler_.stopSampling(stop_error)) {
+            announce(sender_name, "Profiler stop failed: " + stop_error);
+            return;
+        }
+
         pending_ctx_.endstone_version = getServer().getVersion();
         pending_ctx_.minecraft_version = getServer().getMinecraftVersion();
         pending_ctx_.comment = comment;
@@ -420,7 +569,8 @@ private:
         }
 
         pending_ctx_.world = spark::WorldInfo{};
-        if (endstone::Level *level = getServer().getLevel()) {
+        auto &&level_result = getServer().getLevel();
+        if (endstone::Level *level = pointerFromApi(level_result)) {
             for (endstone::Dimension *dimension : level->getDimensions()) {
                 std::map<std::pair<int, int>, spark::WorldChunk> chunks;
                 for (const auto &chunk : dimension->getLoadedChunks()) {
@@ -446,11 +596,11 @@ private:
                         continue;
                     }
                     it->second.total_entities++;
-                    it->second.entity_counts[actor->getType()]++;
+                    it->second.entity_counts[actorTypeName(actor->getType())]++;
                 }
 
                 spark::WorldEntry world;
-                world.name = dimension->getName();
+                world.name = dimensionName(*dimension);
                 std::map<std::pair<int, int>, spark::WorldRegion> regions;
                 for (auto &[coordinate, chunk] : chunks) {
                     auto region_coordinate = std::pair{floorDiv(coordinate.first, 32),
@@ -476,7 +626,6 @@ private:
         pending_sender_ = sender_name;
         pending_folder_ = getDataFolder();
 
-        profiler_.stopSampling();
         exporting_.store(true);
         // NOTE: Endstone's runTaskAsync has a use-after-free — scheduler.cpp submits
         // `[&task]{ task->run(); }`, capturing the loop variable by reference into a
@@ -567,7 +716,8 @@ private:
     void announce(const std::string &sender_name, const std::string &text)
     {
         getLogger().info("{}", text);
-        if (endstone::Player *player = getServer().getPlayer(sender_name)) {
+        auto player = getServer().getPlayer(sender_name);
+        if (player) {
             player->sendMessage("{}[spark] {}{}", ColorFormat::Gold, ColorFormat::Reset, text);
         }
     }

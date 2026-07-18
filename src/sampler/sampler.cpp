@@ -197,7 +197,7 @@ void Sampler::samplerLoop()
 
 void Sampler::acceptSample(const Sample &sample)
 {
-    tree_.log(sample.frames, sample.window);
+    tree_.log(sample.frames, sample.window, sample.weight);
     sample_count_.fetch_add(1, std::memory_order_relaxed);
 }
 

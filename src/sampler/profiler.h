@@ -3,9 +3,12 @@
 
 #include <atomic>
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
+#include "alloc/allocation_sampler.h"
+#include "sampler/profile_mode.h"
 #include "sampler/sampler.h"
 #include "stats/system_stats.h"
 
@@ -16,6 +19,7 @@ inline constexpr int kMaxSamplingIntervalMs = 1000;
 // Parsed `/spark profiler start` options (spark's flag set).
 struct ProfilerOptions {
     int interval_ms = 4;
+    std::int32_t allocation_interval_bytes = kDefaultAllocationIntervalBytes;
     long timeout_seconds = -1;
     long only_ticks_over_ms = -1;  // -1 = disabled
     bool ignore_sleeping = true;
@@ -23,8 +27,8 @@ struct ProfilerOptions {
     std::vector<std::string> threads;
     bool combine_all = false;
     bool not_combined = false;
-    bool alloc = false;             // accepted, unsupported (no allocation engine)
-    bool force_java_sampler = false;  // accepted, unsupported (no java engine)
+    bool alloc = false;
+    bool force_java_sampler = false;  // accepted, unsupported (no Java engine)
     std::string comment;
     bool save_to_file = false;
     std::string creator_name = "Console";
@@ -46,8 +50,8 @@ struct ExportContext {
     WorldInfo world;
 };
 
-// Owns a Sampler and turns it into a spark SamplerData payload. This is the object
-// the plugin drives; it has no Endstone dependency.
+// Owns either the execution sampler or the Windows native allocation sampler and
+// turns its call tree into a spark SamplerData payload.
 class Profiler {
 public:
     bool running() const
@@ -66,10 +70,15 @@ public:
     {
         return options_;
     }
-    std::uint64_t sampleCount() const
+    ProfileMode mode() const
     {
-        return sampler_.sampleCount();
+        return mode_;
     }
+    std::uint64_t sampleCount() const;
+    std::uint64_t sampledAllocationBytes() const;
+    std::uint64_t observedAllocationBytes() const;
+    std::uint64_t droppedSamples() const;
+    bool backendFailure(std::string &error) const;
 
     // Returns false and sets `error` if sampling can't start.
     bool start(const ProfilerOptions &options, std::uint64_t main_tid, std::string &error);
@@ -78,20 +87,33 @@ public:
     // Two-phase stop: stopSampling() is fast (joins threads) and runs on the main
     // thread; exportData() does the slow symbolication + serialization and is safe
     // to run on a background thread once sampling has stopped.
-    void stopSampling();
+    bool stopSampling(std::string &error);
+    void stopSampling();  // compatibility helper for execution-only self-tests
     std::string exportData(const ExportContext &ctx) const;
 
     // Convenience (used by the self-test): stopSampling() + exportData().
     std::string stop(const ExportContext &ctx);
-    void cancel();
+    bool cancel(std::string &error);
+    void cancel();  // compatibility helper
+
+    // Unconditionally closes the active backend and destroys native hook
+    // trampolines. Must run before the plugin module is unloaded.
+    bool shutdown(std::string &error);
 
 private:
+    const CallTree &activeTree() const;
+    const ModuleTable &activeModules() const;
+    const std::map<std::int32_t, WindowTickStats> &activeWindowTicks() const;
+    std::uint64_t activeNumberOfTicks() const;
+
     Sampler sampler_;
+    AllocationSampler allocation_sampler_;
     ProfilerOptions options_;
+    ProfileMode mode_ = ProfileMode::Execution;
     std::atomic<bool> running_{false};
     std::int64_t start_time_ms_ = 0;
     std::int64_t auto_end_time_ms_ = -1;
-    int interval_us_ = 4000;
+    std::int32_t interval_ = 4000;  // execution: microseconds; allocation: bytes
     CpuSnapshot cpu_baseline_{};
 };
 

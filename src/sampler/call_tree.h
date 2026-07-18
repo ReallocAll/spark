@@ -11,13 +11,13 @@
 
 namespace spark {
 
-// Aggregated sampling stack for a single thread. Mirrors spark's ThreadNode/
-// StackTraceNode tree: each node accumulates a sample count per time window.
+// Aggregated profiling stack for a single thread. Each node accumulates a mode-
+// dependent weight per time window: execution sample counts or allocation bytes.
 class CallTree {
 public:
     struct Node {
         FrameKey key{};
-        std::map<std::int32_t, std::uint64_t> times;  // window -> sample count
+        std::map<std::int32_t, std::uint64_t> times;  // window -> profile weight
         std::unordered_map<FrameKey, std::unique_ptr<Node>, FrameKeyHash> children;
     };
 
@@ -34,7 +34,7 @@ public:
         return root_.times.empty();
     }
 
-    // Total samples logged (== root's summed counts across windows).
+    // Total profile weight logged (execution sample count or allocation bytes).
     std::uint64_t sampleCount() const;
 
 private:

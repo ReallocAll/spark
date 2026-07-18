@@ -20,14 +20,20 @@ std::uint64_t nodeTotal(const CallTree::Node &n)
     return total;
 }
 
-std::vector<double> alignTimes(const std::map<std::int32_t, std::uint64_t> &times,
-                               const std::vector<std::int32_t> &windows, std::int32_t interval_us)
+std::vector<double> alignValues(const std::map<std::int32_t, std::uint64_t> &times,
+                                const std::vector<std::int32_t> &windows, const ProfileMetadata &meta)
 {
     std::vector<double> out(windows.size(), 0.0);
     for (std::size_t i = 0; i < windows.size(); ++i) {
         auto it = times.find(windows[i]);
-        if (it != times.end()) {
-            out[i] = static_cast<double>(it->second) * static_cast<double>(interval_us) / 1000.0;
+        if (it == times.end()) {
+            continue;
+        }
+        if (meta.mode == ProfileMode::Allocation) {
+            out[i] = static_cast<double>(it->second);
+        }
+        else {
+            out[i] = static_cast<double>(it->second) * static_cast<double>(meta.interval) / 1000.0;
         }
     }
     return out;
@@ -49,12 +55,12 @@ std::vector<const CallTree::Node *> sortedChildren(const CallTree::Node &node)
 }
 
 // Post-order flatten: append children first, then this node; return this node's index.
-int emitNode(const CallTree::Node *node, const std::vector<std::int32_t> &windows, std::int32_t interval_us,
+int emitNode(const CallTree::Node *node, const std::vector<std::int32_t> &windows, const ProfileMetadata &meta,
              const std::unordered_map<FrameKey, ResolvedFrame, FrameKeyHash> &resolved, std::vector<std::string> &flat)
 {
     std::vector<std::int32_t> child_refs;
     for (const CallTree::Node *kid : sortedChildren(*node)) {
-        child_refs.push_back(emitNode(kid, windows, interval_us, resolved, flat));
+        child_refs.push_back(emitNode(kid, windows, meta, resolved, flat));
     }
 
     std::string bytes;
@@ -70,7 +76,7 @@ int emitNode(const CallTree::Node *node, const std::vector<std::int32_t> &window
             w.string(7, it->second.method_desc);
         }
     }
-    w.packedDouble(8, alignTimes(node->times, windows, interval_us));
+    w.packedDouble(8, alignValues(node->times, windows, meta));
     w.packedInt32(9, child_refs);
 
     flat.push_back(std::move(bytes));
@@ -91,7 +97,7 @@ std::string buildMetadata(const ProfileMetadata &m)
         w.message(1, c);
     }
     w.int64(2, m.start_time_ms);
-    w.int32(3, m.interval_us);
+    w.int32(3, m.interval);
     // thread_dumper (4): { type = SPECIFIC }
     {
         std::string t;
@@ -129,7 +135,7 @@ std::string buildMetadata(const ProfileMetadata &m)
     }
     w.int64(11, m.end_time_ms);
     w.int32(12, m.number_of_ticks);
-    w.varint(15, 0);  // sampler_mode = EXECUTION
+    w.varint(15, m.mode == ProfileMode::Allocation ? 1 : 0);
     w.varint(16, 1);  // sampler_engine = ASYNC
     if (!m.engine_version.empty()) {
         w.string(17, m.engine_version);
@@ -311,6 +317,17 @@ std::string buildMetadata(const ProfileMetadata &m)
         ew.message(2, pm);
         w.message(13, entry);
     }
+
+    // extra_platform_metadata (14): map<string, string>. This is the only
+    // extensible metadata surface in the upstream spark schema, so native-only
+    // diagnostics such as captured/dropped allocation samples are placed here.
+    for (const auto &[key, value] : m.extra_platform_metadata) {
+        std::string entry;
+        ProtoWriter ew(entry);
+        ew.string(1, key);
+        ew.string(2, value);
+        w.message(14, entry);
+    }
     return out;
 }
 
@@ -357,7 +374,7 @@ std::string buildSamplerData(const ProfileMetadata &meta, const CallTree &tree,
     std::vector<std::string> flat;
     std::vector<std::int32_t> top_refs;
     for (const CallTree::Node *kid : sortedChildren(tree.root())) {
-        top_refs.push_back(emitNode(kid, windows, meta.interval_us, resolved, flat));
+        top_refs.push_back(emitNode(kid, windows, meta, resolved, flat));
     }
 
     std::string thread;
@@ -366,7 +383,7 @@ std::string buildSamplerData(const ProfileMetadata &meta, const CallTree &tree,
     for (const std::string &node_bytes : flat) {
         tw.message(3, node_bytes);
     }
-    tw.packedDouble(4, alignTimes(tree.root().times, windows, meta.interval_us));
+    tw.packedDouble(4, alignValues(tree.root().times, windows, meta));
     tw.packedInt32(5, top_refs);
 
     std::string out;

@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `/spark profiler start --alloc` on Windows, producing an uploaded spark
+  `ALLOCATION` profile weighted by sampled UCRT allocation bytes.
+- Byte-based allocation stack sampling with spark's default 524287-byte interval,
+  a randomized systematic sampling phase, a preallocated hook event pool,
+  deferred module/symbol resolution, per-second windows, and
+  `--only-ticks-over` support.
+- CMake FetchContent integration for funchook v1.1.3, avoiding an unavailable
+  Conan Center package.
+
+### Changed
+
+- Reject ambiguous export-only UCRT symbol names during Windows symbolization and
+  fall back to `module+0xRVA` instead of displaying unrelated nearest exports.
+- Export allocation sample count, dropped sample count, estimated sampled byte
+  weight, observed request bytes, interval, backend, and coverage through spark
+  `extra_platform_metadata`.
+- Harden native hook lifecycle handling: prepare and retain trampolines separately
+  from entry-hook installation, retain disabled entry hooks between sessions,
+  stabilize and verify thread suspension, retry thread restoration, and require
+  complete entry-hook removal plus hook/trampoline quiescence before plugin unload.
+  An unrecoverable cleanup failure terminates the process instead of pinning old
+  plugin code or permitting an unsafe reload.
+- Treat the allocation aggregator as a fallible service: failures disable capture,
+  block partial-profile export, remain visible through profiler status, and allow
+  a clean subsequent session after stop/cancel.
+- Replace the finite repeated threshold table with constant-time systematic byte
+  sampling using a fresh uniformly random phase per session. Allocation weights
+  use successful requested sizes and every sampling point is attributed to the
+  allocation that contains it.
+- Expand native coverage to recalloc, aligned allocation families, internal UCRT
+  base exports, and direct `HeapAlloc`/`HeapReAlloc`, while avoiding duplicate hooks
+  for alias exports.
+- Encapsulate Windows allocation backend state in the `AllocationSampler` instance
+  instead of file-level mutable globals.
+- Removed the temporary `/spark alloc start|info|stop|reset|test` validation
+  commands and their allocation/free counter implementation.
+- Stop sampling before collecting plugin/world export metadata so the profiler's
+  own metadata allocations are not included in allocation profiles.
+
+### Limitations
+
+- The first native allocation backend is Windows-only and covers the selected
+  server thread through UCRT allocation entry points.
+- `--alloc-live-only`, custom thread selection, direct virtual-memory calls, and
+  custom allocator activity below its backing Windows heap allocation are not yet
+  supported.
+
 ## [0.1.1] - 2026-07-16
 
 ### Fixed

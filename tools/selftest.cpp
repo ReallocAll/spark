@@ -3,9 +3,11 @@
 // phase, profiles it, and writes profile.pb (raw SamplerData) + profile.sparkprofile
 // (gzipped, loadable in the spark viewer). Pass --upload to POST to bytebin.
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
@@ -21,6 +23,8 @@
 #endif
 
 #include "command/arguments.h"
+#include "alloc/byte_sampler.h"
+#include "alloc/allocation_sampler.h"
 #include "net/bytebin.h"
 #include "net/gzip.h"
 #include "sampler/capture.h"
@@ -294,6 +298,164 @@ bool verifyTickFiltering(std::uint64_t worker_tid)
     return true;
 }
 
+bool verifyByteSampling()
+{
+    constexpr std::uint64_t seed = 0x7f4a7c159e3779b9ULL;
+    spark::ByteSamplingState first;
+    spark::ByteSamplingState replay;
+
+    spark::resetByteSamplingState(first, 1, seed, 1);
+    if (spark::consumeSampledBytes(first, 100000, 1) != 100000) {
+        std::fprintf(stderr, "byte sampling: interval=1 was not exact\n");
+        return false;
+    }
+
+    spark::resetByteSamplingState(first, 1, seed, 64);
+    first.bytes_until_sample = 7;
+    constexpr std::uint64_t large_request = 1'000'000'000'033ULL;
+    constexpr std::uint64_t expected_points = 1 + (large_request - 7) / 64;
+    if (spark::consumeSampledBytes(first, large_request, 64) != expected_points ||
+        first.bytes_until_sample != 64 - ((large_request - 7) % 64)) {
+        std::fprintf(stderr, "byte sampling: large allocation crossing count was incorrect\n");
+        return false;
+    }
+
+    spark::resetByteSamplingState(first, 2, seed, 64);
+    spark::resetByteSamplingState(replay, 2, seed, 64);
+    for (int i = 0; i < 1000; ++i) {
+        const std::uint64_t bytes = static_cast<std::uint64_t>((i * 7919) % 4096 + 1);
+        if (spark::consumeSampledBytes(first, bytes, 64) !=
+            spark::consumeSampledBytes(replay, bytes, 64)) {
+            std::fprintf(stderr, "byte sampling: identical session seed did not replay\n");
+            return false;
+        }
+    }
+
+    for (const std::uint64_t interval : {4ULL, 64ULL, 1024ULL}) {
+        spark::ByteSamplingState state;
+        spark::resetByteSamplingState(state, interval, seed ^ interval, interval);
+        constexpr std::uint64_t observed = 4'000'000;
+        std::uint64_t points = 0;
+        for (std::uint64_t consumed = 0; consumed < observed; consumed += 4096) {
+            const std::uint64_t chunk =
+                (std::min)(std::uint64_t{4096}, observed - consumed);
+            points += spark::consumeSampledBytes(state, chunk, interval);
+        }
+        const double ratio = static_cast<double>(points) * static_cast<double>(interval) /
+                             static_cast<double>(observed);
+        if (ratio < 0.94 || ratio > 1.06 || state.bytes_until_sample == 0) {
+            std::fprintf(stderr,
+                         "byte sampling: interval=%llu produced implausible ratio %.6f\n",
+                         static_cast<unsigned long long>(interval), ratio);
+            return false;
+        }
+    }
+    return true;
+}
+
+#if defined(_WIN32)
+__declspec(noinline) bool exerciseNativeAllocations()
+{
+    for (std::size_t i = 0; i < 4096; ++i) {
+        const std::size_t size = 512 + (i & 255);
+        void *allocation = std::malloc(size);
+        if (allocation == nullptr) {
+            return false;
+        }
+        static_cast<volatile unsigned char *>(allocation)[0] =
+            static_cast<unsigned char>(i);
+        std::free(allocation);
+    }
+    return true;
+}
+
+bool runAllocationSession(spark::AllocationSampler &sampler,
+                          const spark::AllocationSamplerConfig &config,
+                          std::string &error)
+{
+    if (!sampler.start(config, error)) {
+        std::fprintf(stderr, "allocation lifecycle: start failed: %s\n", error.c_str());
+        return false;
+    }
+    if (!exerciseNativeAllocations()) {
+        std::fprintf(stderr, "allocation lifecycle: test allocation failed\n");
+        return false;
+    }
+    sampler.onTick(50.0);
+    if (!sampler.stop(error)) {
+        std::fprintf(stderr, "allocation lifecycle: stop failed: %s\n", error.c_str());
+        return false;
+    }
+    if (sampler.sampleCount() == 0 || sampler.observedBytes() == 0) {
+        std::fprintf(stderr, "allocation lifecycle: session captured no allocations\n");
+        return false;
+    }
+    return true;
+}
+
+bool verifyAllocationLifecycle()
+{
+    using namespace std::chrono_literals;
+
+    spark::AllocationSamplerConfig config;
+    config.interval_bytes = 256;
+    config.target_tid = static_cast<std::uint64_t>(::GetCurrentThreadId());
+    std::string error;
+
+    spark::AllocationSampler sampler;
+    if (!runAllocationSession(sampler, config, error) || !sampler.hooksInstalled() ||
+        !runAllocationSession(sampler, config, error) || !sampler.hooksInstalled()) {
+        return false;
+    }
+
+    config.fail_aggregator_for_testing = true;
+    if (!sampler.start(config, error)) {
+        std::fprintf(stderr, "allocation lifecycle: injected-failure start failed: %s\n",
+                     error.c_str());
+        return false;
+    }
+    bool failed = false;
+    for (int i = 0; i < 1000; ++i) {
+        if (sampler.failure(error)) {
+            failed = true;
+            break;
+        }
+        std::this_thread::sleep_for(1ms);
+    }
+    std::string stop_error;
+    const bool stopped_cleanly = sampler.stop(stop_error);
+    if (!failed || stopped_cleanly || sampler.running() ||
+        stop_error.find("injected allocation aggregator failure") == std::string::npos) {
+        std::fprintf(stderr,
+                     "allocation lifecycle: aggregator failure was not surfaced safely: %s\n",
+                     stop_error.c_str());
+        return false;
+    }
+
+    config.fail_aggregator_for_testing = false;
+    if (!runAllocationSession(sampler, config, error)) {
+        std::fprintf(stderr, "allocation lifecycle: backend did not recover after failure\n");
+        return false;
+    }
+    if (!sampler.shutdown(error) || sampler.hooksInstalled()) {
+        std::fprintf(stderr, "allocation lifecycle: final hook cleanup failed: %s\n",
+                     error.c_str());
+        return false;
+    }
+
+    // A second instance in the same process models plugin reload: the old
+    // active-instance pointer and trampolines must not obstruct new setup.
+    spark::AllocationSampler reloaded;
+    if (!runAllocationSession(reloaded, config, error) || !reloaded.shutdown(error) ||
+        reloaded.hooksInstalled()) {
+        std::fprintf(stderr, "allocation lifecycle: reload simulation failed: %s\n",
+                     error.c_str());
+        return false;
+    }
+    return true;
+}
+#endif
+
 }  // namespace
 
 int main(int argc, char **argv)
@@ -343,8 +505,13 @@ int main(int argc, char **argv)
     }
 
     if (!verifyArgumentParsing() || !verifyUploadFailure() || !verifyCaptureLifecycle() ||
+        !verifyByteSampling() ||
         !verifyStopResponsiveness() ||
-        !verifySessionIsolation(g_worker_tid.load()) || !verifyTickFiltering(g_worker_tid.load())) {
+        !verifySessionIsolation(g_worker_tid.load()) || !verifyTickFiltering(g_worker_tid.load())
+#if defined(_WIN32)
+        || !verifyAllocationLifecycle()
+#endif
+    ) {
         g_run.store(false);
         w.join();
         return 1;

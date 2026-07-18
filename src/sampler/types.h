@@ -71,6 +71,7 @@ struct Sample {
     std::vector<FrameKey> frames;
     std::int32_t window = 0;
     std::uint64_t tick_id = 0;
+    std::uint64_t weight = 1;  // execution sample count or allocation bytes
 };
 
 }  // namespace spark

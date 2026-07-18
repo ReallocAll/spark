@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "sampler/call_tree.h"
+#include "sampler/profile_mode.h"
 #include "sampler/symbolicate.h"
 #include "sampler/types.h"
 #include "stats/system_stats.h"
@@ -18,7 +19,8 @@ namespace spark {
 struct ProfileMetadata {
     std::int64_t start_time_ms = 0;
     std::int64_t end_time_ms = 0;
-    std::int32_t interval_us = 4000;
+    std::int32_t interval = 4000;  // execution: microseconds; allocation: bytes
+    ProfileMode mode = ProfileMode::Execution;
     std::int32_t number_of_ticks = 0;
     std::string endstone_version;
     std::string minecraft_version;
@@ -32,6 +34,7 @@ struct ProfileMetadata {
     PlatformStats platform_stats;
     SystemStats system_stats;
     std::map<std::int32_t, WindowStats> window_stats;
+    std::map<std::string, std::string> extra_platform_metadata;
     std::vector<PluginInfo> plugins;
     WorldInfo world;
 };

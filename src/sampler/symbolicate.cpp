@@ -1,5 +1,6 @@
 #include "sampler/symbolicate.h"
 
+#include <cctype>
 #include <string_view>
 
 #if defined(_WIN32)
@@ -23,6 +24,77 @@ struct SymbolBuffer {
     SYMBOL_INFO info;
     char name[MAX_SYM_NAME];
 };
+
+bool equalsIgnoreCase(std::string_view a, std::string_view b)
+{
+    if (a.size() != b.size()) {
+        return false;
+    }
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        const auto ac = static_cast<unsigned char>(a[i]);
+        const auto bc = static_cast<unsigned char>(b[i]);
+        if (std::tolower(ac) != std::tolower(bc)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool startsWithIgnoreCase(std::string_view value, std::string_view prefix)
+{
+    return value.size() >= prefix.size() && equalsIgnoreCase(value.substr(0, prefix.size()), prefix);
+}
+
+bool isAmbiguousCrtModule(std::string_view module)
+{
+    return equalsIgnoreCase(module, "ucrtbase.dll") ||
+           equalsIgnoreCase(module, "vcruntime140.dll") ||
+           equalsIgnoreCase(module, "vcruntime140_1.dll") ||
+           equalsIgnoreCase(module, "msvcp140.dll") ||
+           startsWithIgnoreCase(module, "api-ms-win-crt-");
+}
+
+bool isWindowsSystemModule(std::string_view module)
+{
+    return isAmbiguousCrtModule(module) || equalsIgnoreCase(module, "ntdll.dll") ||
+           equalsIgnoreCase(module, "kernel32.dll") || equalsIgnoreCase(module, "kernelbase.dll");
+}
+
+// SymFromAddr returns the nearest symbol at or below an address. When only a
+// DLL export table is available (common for ucrtbase.dll), an unrelated export
+// can therefore be reported for a private routine many bytes later. Accept CRT
+// names only when DbgHelp knows the symbol extent, or when the address is exactly
+// at the exported entry point. Otherwise module+RVA is more honest than a false
+// function name such as ucrtbase.dll!wcsrchr.
+bool trustworthyWindowsSymbol(std::string_view module, const SYMBOL_INFO &symbol, DWORD64 displacement,
+                              SYM_TYPE module_symbol_type)
+{
+    if (!isWindowsSystemModule(module)) {
+        return true;
+    }
+
+    if (isAmbiguousCrtModule(module)) {
+        // When DbgHelp only has a DLL export table, SymFromAddr can attribute a
+        // private CRT routine to the preceding exported function. Export entries
+        // may also be assigned a synthetic non-zero Size, so Size/displacement
+        // alone is not sufficient to prove that the name is correct. Keep CRT
+        // names only when richer symbols (PDB/CodeView/etc.) are loaded.
+        if (module_symbol_type == SymExport || (symbol.Flags & SYMFLAG_EXPORT) != 0) {
+            return false;
+        }
+        if (symbol.Size != 0) {
+            return displacement < symbol.Size;
+        }
+        return displacement == 0;
+    }
+
+    // Apply a broad sanity limit to export-only symbols from the remaining core
+    // system DLLs. Real public/PDB function symbols normally carry a useful size.
+    if (symbol.Size == 0) {
+        return displacement <= 0x4000;
+    }
+    return displacement < symbol.Size;
+}
 
 class DbgHelpSession {
 public:
@@ -149,6 +221,8 @@ std::unordered_map<FrameKey, ResolvedFrame, FrameKeyHash> resolveFrames(const Mo
     HANDLE process = GetCurrentProcess();
     SymSetOptions(SymGetOptions() | SYMOPT_DEFERRED_LOADS | SYMOPT_UNDNAME | SYMOPT_LOAD_LINES);
     DbgHelpSession session(process);
+    std::unordered_map<ModuleId, SYM_TYPE> module_symbol_types;
+    module_symbol_types.reserve(modules.size());
 
     for (const FrameKey &key : keys) {
         ResolvedFrame rf;
@@ -159,8 +233,22 @@ std::unordered_map<FrameKey, ResolvedFrame, FrameKeyHash> resolveFrames(const Mo
             symbol.info.SizeOfStruct = sizeof(SYMBOL_INFO);
             symbol.info.MaxNameLen = MAX_SYM_NAME;
 
+            SYM_TYPE module_symbol_type = SymNone;
+            if (const auto it = module_symbol_types.find(key.module); it != module_symbol_types.end()) {
+                module_symbol_type = it->second;
+            }
+            else {
+                IMAGEHLP_MODULE64 module_info{};
+                module_info.SizeOfStruct = sizeof(module_info);
+                if (SymGetModuleInfo64(process, key.raw_address, &module_info) != FALSE) {
+                    module_symbol_type = module_info.SymType;
+                }
+                module_symbol_types.emplace(key.module, module_symbol_type);
+            }
+
             DWORD64 displacement = 0;
-            if (SymFromAddr(process, key.raw_address, &displacement, &symbol.info)) {
+            if (SymFromAddr(process, key.raw_address, &displacement, &symbol.info) &&
+                trustworthyWindowsSymbol(rf.class_name, symbol.info, displacement, module_symbol_type)) {
                 rf.method_name.assign(symbol.info.Name, symbol.info.NameLen);
 
                 IMAGEHLP_LINE64 line{};
