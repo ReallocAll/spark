@@ -124,6 +124,7 @@ bool Profiler::start(const ProfilerOptions &options, std::uint64_t main_tid, std
         config.interval_bytes = options.allocation_interval_bytes;
         config.target_tid = main_tid;
         config.only_ticks_over_ms = options.only_ticks_over_ms > 0 ? options.only_ticks_over_ms : 0;
+        config.fail_aggregator_for_testing = options.fail_allocation_aggregator_for_testing;
         started = allocation_sampler_.start(config, error);
     }
     else {
@@ -301,7 +302,25 @@ std::string Profiler::stop(const ExportContext &ctx)
 
 bool Profiler::cancel(std::string &error)
 {
-    return stopSampling(error);
+    std::string stop_error;
+    if (stopSampling(stop_error)) {
+        error.clear();
+        return true;
+    }
+
+    // A failed allocation aggregator invalidates the profile, but stopSampling
+    // still joins the service thread, releases the event pool, and returns the
+    // session to Idle. Cancelling intentionally discards that invalid data, so
+    // completed cleanup is a successful cancel rather than another backend
+    // failure presented to the user.
+    std::string backend_error;
+    if (!running_.load() && backendFailure(backend_error)) {
+        error.clear();
+        return true;
+    }
+
+    error = std::move(stop_error);
+    return false;
 }
 
 void Profiler::cancel()

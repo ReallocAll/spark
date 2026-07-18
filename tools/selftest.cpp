@@ -452,6 +452,38 @@ bool verifyAllocationLifecycle()
                      error.c_str());
         return false;
     }
+
+    spark::Profiler failed_profiler;
+    spark::ProfilerOptions options;
+    options.alloc = true;
+    options.allocation_interval_bytes = 256;
+    options.fail_allocation_aggregator_for_testing = true;
+    if (!failed_profiler.start(options, config.target_tid, error)) {
+        std::fprintf(stderr, "profiler failure state: injected start failed: %s\n",
+                     error.c_str());
+        return false;
+    }
+    bool profiler_failed = false;
+    for (int i = 0; i < 1000; ++i) {
+        if (failed_profiler.backendFailure(error)) {
+            profiler_failed = true;
+            break;
+        }
+        std::this_thread::sleep_for(1ms);
+    }
+    if (!profiler_failed || !failed_profiler.cancel(error) || failed_profiler.running()) {
+        std::fprintf(stderr, "profiler failure state: failed session did not cancel cleanly: %s\n",
+                     error.c_str());
+        return false;
+    }
+    options.fail_allocation_aggregator_for_testing = false;
+    if (!failed_profiler.start(options, config.target_tid, error) ||
+        !exerciseNativeAllocations() || !failed_profiler.stopSampling(error) ||
+        !failed_profiler.shutdown(error)) {
+        std::fprintf(stderr, "profiler failure state: healthy restart failed: %s\n",
+                     error.c_str());
+        return false;
+    }
     return true;
 }
 #endif

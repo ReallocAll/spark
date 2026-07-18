@@ -33,6 +33,8 @@ struct ProfilerOptions {
     bool save_to_file = false;
     std::string creator_name = "Console";
     bool creator_is_player = false;
+    // Deterministic service-failure injection used only by the offline selftest.
+    bool fail_allocation_aggregator_for_testing = false;
 };
 
 // Server facts needed only at export time (read from Endstone on the main thread).

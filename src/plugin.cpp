@@ -264,7 +264,11 @@ private:
             main_tid_.store(currentThreadId());
         }
         if (profiler_.running()) {
-            profiler_.onTick(getServer().getCurrentMillisecondsPerTick());
+            std::string backend_error;
+            const bool backend_failed = profiler_.backendFailure(backend_error);
+            if (!backend_failed) {
+                profiler_.onTick(getServer().getCurrentMillisecondsPerTick());
+            }
             std::int64_t auto_end = profiler_.autoEndTimeMs();
             if (auto_end > 0 && nowMs() >= auto_end) {
                 bool save = profiler_.options().save_to_file;
@@ -452,6 +456,19 @@ private:
                                                  : "There isn't an active profiler running.");
             return;
         }
+        std::string backend_error;
+        if (profiler_.backendFailure(backend_error)) {
+            std::string cleanup_error;
+            if (!profiler_.cancel(cleanup_error)) {
+                sender.sendMessage("{}Allocation profiler status: FAILED", ColorFormat::Red);
+                sender.sendMessage("Unable to discard the failed session safely: {}", cleanup_error);
+                return;
+            }
+            sender.sendMessage("{}Allocation profiler status: FAILED", ColorFormat::Red);
+            sender.sendMessage("Incomplete profile data was discarded: {}", backend_error);
+            sender.sendMessage("The allocation profiler backend is ready for a new session.");
+            return;
+        }
         bool save = profiler_.options().save_to_file || args.boolFlag("save-to-file");
         std::string comment;
         auto comments = args.stringFlag("comment");
@@ -476,10 +493,12 @@ private:
         const bool allocation = profiler_.mode() == spark::ProfileMode::Allocation;
         std::string backend_error;
         if (allocation && profiler_.backendFailure(backend_error)) {
-            sender.sendMessage("{}Allocation profiler backend failed: {}", ColorFormat::Red,
-                               backend_error);
-            sender.sendMessage("Run {}/spark profiler cancel{} to clean up this session.",
-                               ColorFormat::Gray, ColorFormat::Reset);
+            sender.sendMessage("{}Allocation Profiler status: FAILED", ColorFormat::Red);
+            sender.sendMessage("Backend service failure: {}", backend_error);
+            sender.sendMessage("The incomplete profile will not be exported.");
+            sender.sendMessage("Run {}/spark profiler stop{} or {}/spark profiler cancel{} to discard it.",
+                               ColorFormat::Gray, ColorFormat::Reset, ColorFormat::Gray,
+                               ColorFormat::Reset);
             return;
         }
         if (allocation) {
@@ -518,12 +537,21 @@ private:
             sender.sendMessage("There isn't an active profiler running.");
             return;
         }
+        std::string backend_error;
+        const bool failed = profiler_.backendFailure(backend_error);
         std::string error;
         if (!profiler_.cancel(error)) {
             sender.sendMessage("{}Unable to cancel the profiler safely: {}", ColorFormat::Red, error);
             return;
         }
-        sender.sendMessage("{}Profiler has been cancelled.", ColorFormat::Gold);
+        if (failed) {
+            sender.sendMessage("{}Failed allocation profile data was discarded: {}", ColorFormat::Red,
+                               backend_error);
+            sender.sendMessage("The allocation profiler backend is ready for a new session.");
+        }
+        else {
+            sender.sendMessage("{}Profiler has been cancelled.", ColorFormat::Gold);
+        }
     }
 
     // Fast on the main thread (join), then the slow export + network upload runs on a
@@ -539,7 +567,16 @@ private:
         // blocks export of the partial data.
         std::string stop_error;
         if (!profiler_.stopSampling(stop_error)) {
-            announce(sender_name, "Profiler stop failed: " + stop_error);
+            std::string backend_error;
+            if (!profiler_.running() && profiler_.backendFailure(backend_error)) {
+                announce(sender_name,
+                         "Allocation profiler FAILED; incomplete profile data was discarded: " +
+                             backend_error);
+                announce(sender_name, "The allocation profiler backend is ready for a new session.");
+            }
+            else {
+                announce(sender_name, "Profiler stop failed: " + stop_error);
+            }
             return;
         }
 

@@ -34,6 +34,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Treat the allocation aggregator as a fallible service: failures disable capture,
   block partial-profile export, remain visible through profiler status, and allow
   a clean subsequent session after stop/cancel.
+- Report failed allocation sessions explicitly, discard their incomplete data on
+  stop/cancel/timeout, and confirm when the backend is ready to start again.
 - Replace the finite repeated threshold table with constant-time systematic byte
   sampling using a fresh uniformly random phase per session. Allocation weights
   use successful requested sizes and every sampling point is attributed to the
