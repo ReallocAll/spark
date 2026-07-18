@@ -80,6 +80,9 @@ public:
     std::uint64_t sampledAllocationBytes() const;
     std::uint64_t observedAllocationBytes() const;
     std::uint64_t droppedSamples() const;
+    std::uint64_t freedAllocationSamples() const;
+    std::uint64_t liveAllocationSamples() const;
+    std::uint64_t liveAllocationBytes() const;
     bool backendFailure(std::string &error) const;
     const std::vector<AllocationHookCapability> &allocationHookCapabilities() const;
 

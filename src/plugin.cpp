@@ -521,6 +521,10 @@ private:
                                formatDuration(ran), profiler_.sampleCount(),
                                formatBytes(profiler_.sampledAllocationBytes()),
                                formatBytes(profiler_.observedAllocationBytes()));
+            sender.sendMessage("Sampled lifecycle: {} freed, {} still live ({}).",
+                               profiler_.freedAllocationSamples(),
+                               profiler_.liveAllocationSamples(),
+                               formatBytes(profiler_.liveAllocationBytes()));
             if (profiler_.droppedSamples() != 0) {
                 sender.sendMessage("Dropped allocation samples: {}", profiler_.droppedSamples());
             }

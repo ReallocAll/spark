@@ -369,6 +369,23 @@ __declspec(noinline) bool exerciseNativeAllocations()
             static_cast<unsigned char>(i);
         std::free(allocation);
     }
+    void *resized = std::malloc(1024);
+    if (resized == nullptr) {
+        return false;
+    }
+    void *replacement = std::realloc(resized, 4096);
+    if (replacement == nullptr) {
+        std::free(resized);
+        return false;
+    }
+    std::free(replacement);
+
+    void *cross_thread = std::malloc(4096);
+    if (cross_thread == nullptr) {
+        return false;
+    }
+    std::thread releaser([cross_thread]() { std::free(cross_thread); });
+    releaser.join();
     return true;
 }
 
@@ -389,7 +406,9 @@ bool runAllocationSession(spark::AllocationSampler &sampler,
         std::fprintf(stderr, "allocation lifecycle: stop failed: %s\n", error.c_str());
         return false;
     }
-    if (sampler.sampleCount() == 0 || sampler.observedBytes() == 0) {
+    if (sampler.sampleCount() == 0 || sampler.observedBytes() == 0 ||
+        sampler.freedSamples() == 0 || sampler.freedBytes() == 0 ||
+        sampler.lifecycleDropped() != 0) {
         std::fprintf(stderr, "allocation lifecycle: session captured no allocations\n");
         return false;
     }
@@ -415,7 +434,7 @@ bool verifyAllocationLifecycle()
     for (const spark::AllocationHookCapability &capability : capabilities) {
         active_hooks += capability.status == spark::AllocationHookStatus::Active ? 1 : 0;
     }
-    if (capabilities.size() != 15 || active_hooks < 3) {
+    if (capabilities.size() != 19 || active_hooks < 7) {
         std::fprintf(stderr,
                      "allocation lifecycle: invalid hook capability report (%zu total, %zu active)\n",
                      capabilities.size(), active_hooks);

@@ -107,6 +107,21 @@ std::uint64_t Profiler::droppedSamples() const
     return mode_ == ProfileMode::Allocation ? allocation_sampler_.droppedSamples() : 0;
 }
 
+std::uint64_t Profiler::freedAllocationSamples() const
+{
+    return mode_ == ProfileMode::Allocation ? allocation_sampler_.freedSamples() : 0;
+}
+
+std::uint64_t Profiler::liveAllocationSamples() const
+{
+    return mode_ == ProfileMode::Allocation ? allocation_sampler_.liveSamples() : 0;
+}
+
+std::uint64_t Profiler::liveAllocationBytes() const
+{
+    return mode_ == ProfileMode::Allocation ? allocation_sampler_.liveBytes() : 0;
+}
+
 bool Profiler::backendFailure(std::string &error) const
 {
     if (mode_ != ProfileMode::Allocation) {
@@ -275,6 +290,20 @@ std::string Profiler::exportData(const ExportContext &ctx) const
             std::to_string(allocation_sampler_.sampleCount());
         meta.extra_platform_metadata["Allocation samples dropped"] =
             std::to_string(allocation_sampler_.droppedSamples());
+        meta.extra_platform_metadata["Allocation sampled frees"] =
+            std::to_string(allocation_sampler_.freedSamples());
+        meta.extra_platform_metadata["Allocation sampled freed bytes"] =
+            std::to_string(allocation_sampler_.freedBytes());
+        meta.extra_platform_metadata["Allocation sampled live allocations"] =
+            std::to_string(allocation_sampler_.liveSamples());
+        meta.extra_platform_metadata["Allocation sampled live bytes"] =
+            std::to_string(allocation_sampler_.liveBytes());
+        meta.extra_platform_metadata["Allocation average sampled lifetime ms"] =
+            std::to_string(allocation_sampler_.averageLifetimeMs());
+        meta.extra_platform_metadata["Allocation maximum sampled lifetime ms"] =
+            std::to_string(allocation_sampler_.maximumLifetimeMs());
+        meta.extra_platform_metadata["Allocation lifecycle records dropped"] =
+            std::to_string(allocation_sampler_.lifecycleDropped());
         meta.extra_platform_metadata["Allocation sampled bytes"] =
             std::to_string(allocation_sampler_.sampledBytes());
         meta.extra_platform_metadata["Allocation observed request bytes"] =

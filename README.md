@@ -60,8 +60,10 @@ The current native backend reflects BDS constraints rather than a JVM:
   allocation that actually contains that sampling point;
 * stack capture uses `RtlCaptureStackBackTrace`; symbolization is deferred until
   the profile stops;
-* `free` is not hooked because a normal allocation profile measures allocation
-  traffic, not retained/net memory; `--alloc-live-only` is still unsupported.
+* sampled allocations are followed through `realloc`, `free`, aligned free, and
+  Windows heap release paths even when ownership moves to another thread. The
+  profile metadata reports freed/live sampled bytes and lifetime diagnostics;
+  normal `--alloc` profiles remain weighted by allocation traffic.
 
 The funchook trampoline set is prepared once and retained across profiler
 sessions. Entry hooks are installed lazily when the first allocation profile

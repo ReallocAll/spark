@@ -27,6 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `extra_platform_metadata`.
 - Report every candidate allocation entry point as active, aliased, missing, or
   unhookable in profiler status and exported platform metadata.
+- Follow sampled allocations through realloc and free entry points across threads,
+  reporting live/freed estimates and sampled allocation lifetimes.
 - Harden native hook lifecycle handling: prepare and retain trampolines separately
   from entry-hook installation, retain disabled entry hooks between sessions,
   stabilize and verify thread suspension, retry thread restoration, and require

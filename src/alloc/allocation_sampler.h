@@ -55,8 +55,8 @@ struct AllocationHookCapability {
 // Windows native allocation sampler. The backend hooks public UCRT allocation
 // entry points and samples allocation stacks by requested bytes. Tree weights
 // are estimated allocation bytes, not elapsed time. The current backend remains
-// intentionally focused on the selected server thread and does not implement
-// retained/live allocation tracking.
+// intentionally focused on allocations originating on the selected server
+// thread. Sampled allocations are followed through realloc/free on any thread.
 class AllocationSampler {
 public:
     AllocationSampler();
@@ -87,6 +87,13 @@ public:
     std::uint64_t sampledBytes() const;
     std::uint64_t observedBytes() const;
     std::uint64_t droppedSamples() const;
+    std::uint64_t freedSamples() const;
+    std::uint64_t freedBytes() const;
+    std::uint64_t liveSamples() const;
+    std::uint64_t liveBytes() const;
+    std::uint64_t averageLifetimeMs() const;
+    std::uint64_t maximumLifetimeMs() const;
+    std::uint64_t lifecycleDropped() const;
     bool running() const;
     bool hooksInstalled() const;
     bool failure(std::string &error) const;
