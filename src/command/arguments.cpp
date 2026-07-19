@@ -2,7 +2,7 @@
 
 #include <charconv>
 #include <cmath>
-#include <sstream>
+#include <utility>
 
 namespace spark {
 
@@ -18,10 +18,32 @@ bool isFlag(const std::string &token)
 std::vector<std::string> Arguments::tokenize(const std::string &line)
 {
     std::vector<std::string> tokens;
-    std::istringstream iss(line);
     std::string token;
-    while (iss >> token) {
-        tokens.push_back(token);
+    char quote = '\0';
+    for (char ch : line) {
+        if (quote != '\0') {
+            if (ch == quote) {
+                quote = '\0';
+            }
+            else {
+                token.push_back(ch);
+            }
+        }
+        else if (ch == '\'' || ch == '"') {
+            quote = ch;
+        }
+        else if (ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n') {
+            if (!token.empty()) {
+                tokens.push_back(std::move(token));
+                token.clear();
+            }
+        }
+        else {
+            token.push_back(ch);
+        }
+    }
+    if (!token.empty()) {
+        tokens.push_back(std::move(token));
     }
     return tokens;
 }

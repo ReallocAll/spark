@@ -16,7 +16,7 @@ class Arguments {
 public:
     explicit Arguments(const std::vector<std::string> &tokens);
 
-    // Tokenize a raw rest-of-line string on whitespace.
+    // Tokenize a raw rest-of-line string, preserving quoted names and patterns.
     static std::vector<std::string> tokenize(const std::string &line);
 
     const std::string &subCommand() const

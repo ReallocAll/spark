@@ -1,5 +1,6 @@
 #include "sampler/profiler.h"
 
+#include <algorithm>
 #include <chrono>
 #include <limits>
 #include <string_view>
@@ -148,6 +149,21 @@ bool Profiler::start(const ProfilerOptions &options, std::uint64_t main_tid, std
         return false;
     }
 
+    if (options.alloc && (options.regex || !options.threads.empty())) {
+        error = "custom thread selection is not supported by the native allocation engine";
+        return false;
+    }
+    if (!options.alloc && options.regex && options.threads.empty()) {
+        error = "--regex requires at least one --thread pattern";
+        return false;
+    }
+    if (!options.alloc && std::find(options.threads.begin(), options.threads.end(), "*") !=
+                              options.threads.end() &&
+        (options.regex || options.threads.size() != 1)) {
+        error = "--thread * cannot be combined with other thread selectors or --regex";
+        return false;
+    }
+
     options_ = options;
     mode_ = options.alloc ? ProfileMode::Allocation : ProfileMode::Execution;
 
@@ -185,11 +201,17 @@ bool Profiler::start(const ProfilerOptions &options, std::uint64_t main_tid, std
         config.interval_us = interval_;
         config.ignore_sleeping = options.ignore_sleeping;
         config.all_threads = options.threads.size() == 1 && options.threads.front() == "*";
+        config.regex_threads = options.regex;
+        if (!config.all_threads) {
+            config.thread_patterns = options.threads;
+        }
         config.only_ticks_over_ms = options.only_ticks_over_ms > 0 ? options.only_ticks_over_ms : 0;
         sampler_.setTarget(main_tid);
         started = sampler_.start(config);
         if (!started) {
-            error = "the platform stack-capture backend could not be initialized";
+            error = sampler_.lastError().empty()
+                        ? "the platform stack-capture backend could not be initialized"
+                        : sampler_.lastError();
         }
     }
 
@@ -293,6 +315,10 @@ std::string Profiler::exportData(const ExportContext &ctx) const
     meta.creator_is_player = options_.creator_is_player;
     meta.all_threads = mode_ == ProfileMode::Execution && options_.threads.size() == 1 &&
                        options_.threads.front() == "*";
+    meta.regex_threads = mode_ == ProfileMode::Execution && options_.regex;
+    if (meta.regex_threads) {
+        meta.thread_patterns = options_.threads;
+    }
     meta.ticked = options_.only_ticks_over_ms > 0;
     meta.tick_threshold_ms = options_.only_ticks_over_ms > 0 ? options_.only_ticks_over_ms : 0;
 
@@ -403,6 +429,9 @@ std::string Profiler::exportData(const ExportContext &ctx) const
     std::vector<ThreadTreeView> threads;
     for (const auto &[id, thread] : sampler_.threadTrees()) {
         threads.push_back({thread.thread_name, &thread.tree});
+        if (!meta.all_threads && !meta.regex_threads) {
+            meta.thread_ids.push_back(static_cast<std::int64_t>(id));
+        }
     }
     if (threads.empty()) {
         threads.push_back({meta.thread_name, &sampler_.tree()});

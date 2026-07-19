@@ -36,6 +36,9 @@ struct ProfileMetadata {
     bool creator_is_player = false;
     std::string thread_name = "Server thread";
     bool all_threads = false;
+    bool regex_threads = false;
+    std::vector<std::int64_t> thread_ids;
+    std::vector<std::string> thread_patterns;
     bool ticked = false;             // --only-ticks-over active
     std::int64_t tick_threshold_ms = 0;
     PlatformStats platform_stats;

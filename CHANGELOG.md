@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   thresholds for detecting intermittent server tick spikes.
 - Support `/spark profiler start --thread *` execution profiles across all BDS
   process threads, with dynamic thread discovery and per-thread viewer roots.
+- Support repeatable exact-name and regular-expression thread selection for
+  execution profiles, with matching thread-dumper metadata in viewer payloads.
 - Include the running BDS executable's SHA-256 in every profile so offline
   binary analysis can select the exact matching server build without collecting
   the executable or server-private data.

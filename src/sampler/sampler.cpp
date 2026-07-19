@@ -1,6 +1,7 @@
 #include "sampler/sampler.h"
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <string_view>
 #include <utility>
@@ -31,6 +32,14 @@ constexpr std::size_t kLeadingDrop = 0;
 #else
 constexpr std::size_t kLeadingDrop = 2;
 #endif
+
+bool equalsIgnoreCase(std::string_view left, std::string_view right)
+{
+    return left.size() == right.size() &&
+           std::equal(left.begin(), left.end(), right.begin(), [](unsigned char a, unsigned char b) {
+               return std::tolower(a) == std::tolower(b);
+           });
+}
 }  // namespace
 
 Sampler::~Sampler()
@@ -40,11 +49,29 @@ Sampler::~Sampler()
 
 bool Sampler::start(const SamplerConfig &config)
 {
+    last_error_.clear();
     if (running_.load()) {
+        last_error_ = "sampler is already running";
         return false;
     }
     config_ = config;
+    thread_regexes_.clear();
+    if (config_.regex_threads) {
+        try {
+            thread_regexes_.reserve(config_.thread_patterns.size());
+            for (const std::string &pattern : config_.thread_patterns) {
+                thread_regexes_.emplace_back(pattern, std::regex_constants::ECMAScript |
+                                                           std::regex_constants::icase);
+            }
+        }
+        catch (const std::regex_error &error) {
+            last_error_ = std::string("invalid thread name regex: ") + error.what();
+            thread_regexes_.clear();
+            return false;
+        }
+    }
     if (!Capture::arm()) {
+        last_error_ = "the platform stack-capture backend could not be initialized";
         return false;
     }
     try {
@@ -66,6 +93,7 @@ bool Sampler::start(const SamplerConfig &config)
             aggregator_thread_.join();
         }
         Capture::disarm();
+        last_error_ = "the sampler service threads could not be started";
         return false;
     }
     return true;
@@ -147,7 +175,7 @@ void Sampler::samplerLoop()
             }
         }
 
-        if (config_.all_threads) {
+        if (config_.all_threads || !config_.thread_patterns.empty()) {
             const auto now = std::chrono::steady_clock::now();
             if (now >= next_refresh) {
                 targets = enumerateProcessThreads();
@@ -157,6 +185,22 @@ void Sampler::samplerLoop()
                                   return thread.id == sampler_tid || thread.id == aggregator_tid;
                               }),
                               targets.end());
+                if (!config_.all_threads) {
+                    targets.erase(std::remove_if(targets.begin(), targets.end(), [&](const ThreadInfo &thread) {
+                                      if (config_.regex_threads) {
+                                          return std::none_of(thread_regexes_.begin(), thread_regexes_.end(),
+                                                              [&](const std::regex &pattern) {
+                                                                  return std::regex_match(thread.name, pattern);
+                                                              });
+                                      }
+                                      return std::none_of(config_.thread_patterns.begin(),
+                                                          config_.thread_patterns.end(),
+                                                          [&](const std::string &pattern) {
+                                                              return equalsIgnoreCase(thread.name, pattern);
+                                                          });
+                                  }),
+                                  targets.end());
+                }
                 for (ThreadInfo &thread : targets) {
                     thread.name += " (#" + std::to_string(thread.id) + ")";
                 }

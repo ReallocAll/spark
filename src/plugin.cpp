@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -320,7 +321,8 @@ private:
                            ColorFormat::Gray);
         sender.sendMessage("{}Flags: --alloc, --alloc-live-only, --interval <ms|bytes>, --timeout <seconds>",
                            ColorFormat::Gray);
-        sender.sendMessage("{}       --only-ticks-over <ms>, --save-to-file, --comment <text>", ColorFormat::Gray);
+        sender.sendMessage("{}       --thread <name|*>, --regex, --only-ticks-over <ms>", ColorFormat::Gray);
+        sender.sendMessage("{}       --save-to-file, --comment <text>", ColorFormat::Gray);
         sender.sendMessage("{}       --include-sleeping", ColorFormat::Gray);
     }
 
@@ -365,13 +367,23 @@ private:
         }
 #endif
         options.threads = args.stringFlag("thread");
-        if (options.alloc && !options.threads.empty()) {
+        options.regex = args.boolFlag("regex");
+        if (args.boolFlag("thread") && options.threads.empty()) {
+            sender.sendErrorMessage("--thread requires a thread name, pattern, or *.");
+            return;
+        }
+        if (options.alloc && (!options.threads.empty() || options.regex)) {
             sender.sendErrorMessage("Custom thread selection is not supported by the native allocation engine yet.");
             return;
         }
-        if (!options.alloc && !options.threads.empty() &&
-            !(options.threads.size() == 1 && options.threads.front() == "*")) {
-            sender.sendErrorMessage("This build currently supports only --thread * for execution profiles.");
+        if (!options.alloc && options.regex && options.threads.empty()) {
+            sender.sendErrorMessage("--regex requires at least one --thread pattern.");
+            return;
+        }
+        const auto all_selector = std::find(options.threads.begin(), options.threads.end(), "*");
+        if (!options.alloc && all_selector != options.threads.end() &&
+            (options.regex || options.threads.size() != 1)) {
+            sender.sendErrorMessage("--thread * cannot be combined with another --thread or --regex.");
             return;
         }
 
@@ -474,8 +486,12 @@ private:
                 sender.sendMessage("{}Profiler is now running!{} (async, {}ms interval)", ColorFormat::Gold,
                                    ColorFormat::Gray, options.interval_ms);
             }
-            else {
+            else if (options.threads.size() == 1 && options.threads.front() == "*") {
                 sender.sendMessage("{}Profiler is now running for all process threads!{} (async, {}ms interval)",
+                                   ColorFormat::Gold, ColorFormat::Gray, options.interval_ms);
+            }
+            else {
+                sender.sendMessage("{}Profiler is now running for selected process threads!{} (async, {}ms interval)",
                                    ColorFormat::Gold, ColorFormat::Gray, options.interval_ms);
             }
         }

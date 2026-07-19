@@ -98,11 +98,17 @@ std::string buildMetadata(const ProfileMetadata &m)
     }
     w.int64(2, m.start_time_ms);
     w.int32(3, m.interval);
-    // thread_dumper (4): { type = SPECIFIC }
+    // thread_dumper (4): { type = ALL/SPECIFIC/REGEX, ids, patterns }
     {
         std::string t;
         ProtoWriter tw(t);
-        tw.varint(1, m.all_threads ? 0 : 1);
+        tw.varint(1, m.all_threads ? 0 : (m.regex_threads ? 2 : 1));
+        for (std::int64_t id : m.thread_ids) {
+            tw.int64(2, id);
+        }
+        for (const std::string &pattern : m.thread_patterns) {
+            tw.string(3, pattern);
+        }
         w.message(4, t);
     }
     // data_aggregator (5): { type, thread_grouper = BY_NAME, tick_length_threshold }

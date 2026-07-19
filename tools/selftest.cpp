@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cctype>
 #include <cmath>
 #include <cstdlib>
 #include <cstdint>
@@ -15,6 +16,7 @@
 #include <iterator>
 #include <limits>
 #include <string>
+#include <string_view>
 #include <thread>
 
 #if defined(_WIN32)
@@ -251,6 +253,15 @@ bool verifyArgumentParsing()
     spark::Arguments missing({"start", "--value"});
     if (!missing.boolFlag("value") || missing.intFlag("value") || missing.doubleFlag("value")) {
         std::fprintf(stderr, "argument parsing: missing value validation failed\n");
+        return false;
+    }
+    const std::vector<std::string> quoted =
+        spark::Arguments::tokenize(R"(start --thread "Server thread" --thread '^Worker \d+$' --regex)");
+    spark::Arguments selected(quoted);
+    const std::vector<std::string> threads = selected.stringFlag("thread");
+    if (threads.size() != 2 || threads[0] != "Server thread" || threads[1] != R"(^Worker \d+$)" ||
+        !selected.boolFlag("regex")) {
+        std::fprintf(stderr, "argument parsing: quoted thread selector validation failed\n");
         return false;
     }
     return true;
@@ -492,6 +503,8 @@ bool verifyMultiThreadSerialization()
 
     spark::ProfileMetadata metadata;
     metadata.interval = 1000;
+    metadata.regex_threads = true;
+    metadata.thread_patterns = {"worker-.*"};
     std::unordered_map<spark::FrameKey, spark::ResolvedFrame, spark::FrameKeyHash> resolved;
     resolved[first] = {"selftest", "firstFrame"};
     resolved[second] = {"selftest", "secondFrame"};
@@ -500,6 +513,7 @@ bool verifyMultiThreadSerialization()
     std::string profile = spark::buildSamplerData(metadata, threads, resolved);
     if (profile.find("worker-one") == std::string::npos ||
         profile.find("worker-two") == std::string::npos ||
+        profile.find("worker-.*") == std::string::npos ||
         profile.find("firstFrame") == std::string::npos ||
         profile.find("secondFrame") == std::string::npos ||
         spark::collectFrameKeys(threads).size() != 2) {
@@ -536,6 +550,84 @@ bool verifyAllThreadSampling()
             std::fprintf(stderr, "all-thread sampling: invalid per-thread call tree\n");
             return false;
         }
+    }
+    return true;
+}
+
+std::string escapeRegex(const std::string &text)
+{
+    std::string escaped;
+    for (char ch : text) {
+        if (std::string_view(R"(\.^$|()[]{}*+?)").find(ch) != std::string_view::npos) {
+            escaped.push_back('\\');
+        }
+        escaped.push_back(ch);
+    }
+    return escaped;
+}
+
+bool verifySelectedThreadSampling(std::uint64_t worker_tid)
+{
+    using namespace std::chrono_literals;
+
+    const std::vector<spark::ThreadInfo> discovered = spark::enumerateProcessThreads();
+    auto worker = std::find_if(discovered.begin(), discovered.end(), [worker_tid](const spark::ThreadInfo &thread) {
+        return thread.id == worker_tid;
+    });
+    if (worker == discovered.end()) {
+        std::fprintf(stderr, "selected-thread sampling: worker thread was not discovered\n");
+        return false;
+    }
+
+    spark::Sampler sampler;
+    spark::SamplerConfig invalid;
+    invalid.regex_threads = true;
+    invalid.thread_patterns = {"["};
+    if (sampler.start(invalid) || sampler.lastError().find("invalid thread name regex") == std::string::npos) {
+        std::fprintf(stderr, "selected-thread sampling: invalid regex did not fail cleanly\n");
+        sampler.stop();
+        return false;
+    }
+
+    spark::SamplerConfig exact;
+    exact.interval_us = 2000;
+    exact.ignore_sleeping = false;
+    exact.thread_patterns = {worker->name};
+    std::transform(exact.thread_patterns.front().begin(), exact.thread_patterns.front().end(),
+                   exact.thread_patterns.front().begin(), [](unsigned char ch) {
+                       return static_cast<char>(std::toupper(ch));
+                   });
+    if (!sampler.start(exact)) {
+        std::fprintf(stderr, "selected-thread sampling: exact-name start failed: %s\n",
+                     sampler.lastError().c_str());
+        return false;
+    }
+    std::this_thread::sleep_for(150ms);
+    sampler.stop();
+    if (sampler.threadTrees().empty()) {
+        std::fprintf(stderr, "selected-thread sampling: exact-name selector captured no threads\n");
+        return false;
+    }
+    for (const auto &[id, thread] : sampler.threadTrees()) {
+        if (thread.thread_name.rfind(worker->name + " (#", 0) != 0) {
+            std::fprintf(stderr, "selected-thread sampling: exact-name selector captured an unexpected thread\n");
+            return false;
+        }
+    }
+
+    spark::SamplerConfig regex = exact;
+    regex.regex_threads = true;
+    regex.thread_patterns = {escapeRegex(worker->name)};
+    if (!sampler.start(regex)) {
+        std::fprintf(stderr, "selected-thread sampling: regex start failed: %s\n",
+                     sampler.lastError().c_str());
+        return false;
+    }
+    std::this_thread::sleep_for(150ms);
+    sampler.stop();
+    if (sampler.threadTrees().empty()) {
+        std::fprintf(stderr, "selected-thread sampling: regex selector captured no threads\n");
+        return false;
     }
     return true;
 }
@@ -853,7 +945,7 @@ int main(int argc, char **argv)
 
     if (!verifyArgumentParsing() || !verifyTickMonitor() || !verifyThreadDiscovery() ||
         !verifyMultiThreadSerialization() || !verifyUploadFailure() || !verifyCaptureLifecycle() ||
-        !verifyAllThreadSampling() ||
+        !verifyAllThreadSampling() || !verifySelectedThreadSampling(g_worker_tid.load()) ||
         !verifyExecutableHash() ||
         !verifyByteSampling() ||
         !verifyStopResponsiveness() ||

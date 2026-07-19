@@ -7,6 +7,8 @@
 #include <cstdint>
 #include <map>
 #include <mutex>
+#include <regex>
+#include <string>
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -22,6 +24,8 @@ struct SamplerConfig {
     int interval_us = 4000;
     bool ignore_sleeping = true;
     bool all_threads = false;
+    bool regex_threads = false;
+    std::vector<std::string> thread_patterns;
     std::int64_t only_ticks_over_ms = 0;  // 0 = disabled (record every tick)
 };
 
@@ -85,6 +89,10 @@ public:
     {
         return sample_count_.load(std::memory_order_relaxed);
     }
+    const std::string &lastError() const
+    {
+        return last_error_;
+    }
 
 private:
     struct TickEvent {
@@ -100,6 +108,8 @@ private:
     std::int32_t currentWindow() const;
 
     SamplerConfig config_;
+    std::vector<std::regex> thread_regexes_;
+    std::string last_error_;
     std::atomic<bool> running_{false};      // sampler (producer) thread
     std::atomic<bool> agg_running_{false};  // aggregator (consumer) thread
     std::atomic<std::uint64_t> target_tid_{0};

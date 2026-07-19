@@ -20,7 +20,7 @@ spark's bytebin and opened as an interactive flame graph at
 
 | Command                         | Description                                             |
 | ------------------------------- | ------------------------------------------------------- |
-| `/spark profiler start [flags]` | Start profiling the server thread (background).         |
+| `/spark profiler start [flags]` | Start profiling selected native threads (background).  |
 | `/spark profiler start --alloc` | Profile native allocation call stacks on Windows/Linux. |
 | `/spark profiler stop`          | Stop profiling and finalize the profile.                |
 | `/spark profiler info`          | Show status of the running profiler.                    |
@@ -53,7 +53,10 @@ Run the command again to disable the monitor.
   analysis; this implies `--alloc` (Windows and Linux x86-64).
 * `--timeout <seconds>` — auto-stop and finalize after N seconds.
 * `--thread *` — sample all BDS process threads and emit a separate viewer root
-  for each operating-system thread.
+  for each operating-system thread. Use one or more `--thread <name>` flags to
+  select threads by case-insensitive exact name, or add `--regex` to interpret
+  them as case-insensitive full-match regular expressions. Quote names or
+  patterns containing spaces.
 * `--only-ticks-over <ms>` — only record ticks longer than this.
 * `--save-to-file` — write a `.sparkprofile` file instead of uploading
   (open it by dragging it into the spark viewer).
