@@ -30,6 +30,7 @@
 #include "sampler/profiler.h"
 #include "spark_constants.h"
 #include "stats/executable_hash.h"
+#include "stats/tick_monitor.h"
 
 namespace {
 
@@ -259,6 +260,10 @@ public:
         else if (module == "health") {
             cmdHealth(sender);
         }
+        else if (module == "tickmonitor") {
+            std::vector<std::string> rest(tokens.begin() + 1, tokens.end());
+            cmdTickMonitor(sender, spark::Arguments(rest));
+        }
         else if (module == "profiler") {
             std::vector<std::string> rest(tokens.begin() + 1, tokens.end());
             cmdProfiler(sender, spark::Arguments(rest));
@@ -275,11 +280,19 @@ private:
         if (main_tid_.load() == 0) {
             main_tid_.store(currentThreadId());
         }
-        if (profiler_.running()) {
+        const bool profiler_running = profiler_.running();
+        const bool tick_monitor_running = tick_monitor_.running();
+        const double mspt = profiler_running || tick_monitor_running
+                                ? getServer().getCurrentMillisecondsPerTick()
+                                : 0.0;
+        if (tick_monitor_running) {
+            processTickMonitor(mspt);
+        }
+        if (profiler_running) {
             std::string backend_error;
             const bool backend_failed = profiler_.backendFailure(backend_error);
             if (!backend_failed) {
-                profiler_.onTick(getServer().getCurrentMillisecondsPerTick());
+                profiler_.onTick(mspt);
             }
             std::int64_t auto_end = profiler_.autoEndTimeMs();
             if (auto_end > 0 && nowMs() >= auto_end) {
@@ -303,6 +316,8 @@ private:
         sender.sendMessage("{}/spark tps {}- ticks per second & tick duration", ColorFormat::Yellow,
                            ColorFormat::Gray);
         sender.sendMessage("{}/spark health {}- server health report", ColorFormat::Yellow, ColorFormat::Gray);
+        sender.sendMessage("{}/spark tickmonitor {}- report unusually long ticks", ColorFormat::Yellow,
+                           ColorFormat::Gray);
         sender.sendMessage("{}Flags: --alloc, --alloc-live-only, --interval <ms|bytes>, --timeout <seconds>",
                            ColorFormat::Gray);
         sender.sendMessage("{}       --only-ticks-over <ms>, --save-to-file, --comment <text>", ColorFormat::Gray);
@@ -869,7 +884,83 @@ private:
 #endif
     }
 
+    void cmdTickMonitor(endstone::CommandSender &sender, const spark::Arguments &args)
+    {
+        if (tick_monitor_.running()) {
+            tick_monitor_.stop();
+            sender.sendMessage("{}Tick monitor disabled.", ColorFormat::Gold);
+            return;
+        }
+
+        const bool has_percentage = args.boolFlag("threshold");
+        const bool has_duration = args.boolFlag("threshold-tick");
+        if (has_percentage && has_duration) {
+            sender.sendErrorMessage("Choose either --threshold or --threshold-tick, not both.");
+            return;
+        }
+
+        spark::TickMonitorConfig config;
+        if (has_percentage) {
+            auto threshold = args.doubleFlag("threshold");
+            if (!threshold || *threshold <= 0.0) {
+                sender.sendErrorMessage("The percentage threshold must be a positive number.");
+                return;
+            }
+            config.mode = spark::TickMonitorMode::Percentage;
+            config.threshold = *threshold;
+        }
+        else if (has_duration) {
+            auto threshold = args.doubleFlag("threshold-tick");
+            if (!threshold || *threshold <= 0.0) {
+                sender.sendErrorMessage("The tick duration threshold must be a positive number of milliseconds.");
+                return;
+            }
+            config.mode = spark::TickMonitorMode::Duration;
+            config.threshold = *threshold;
+        }
+
+        if (!tick_monitor_.start(config)) {
+            sender.sendErrorMessage("Unable to start the tick monitor with the requested threshold.");
+            return;
+        }
+        tick_monitor_sender_ = sender.getName();
+        sender.sendMessage("{}Tick monitor started.{} Calculating the baseline over 120 ticks (about 6 seconds).",
+                           ColorFormat::Gold, ColorFormat::Gray);
+    }
+
+    void processTickMonitor(double mspt)
+    {
+        spark::TickMonitorUpdate update = tick_monitor_.onTick(mspt);
+        char message[256];
+        if (update.setup_completed) {
+            std::snprintf(message, sizeof(message),
+                          "Tick monitor baseline ready: min %.2fms, average %.2fms, max %.2fms.",
+                          update.setup_min_ms, update.baseline_ms, update.setup_max_ms);
+            announce(tick_monitor_sender_, message);
+
+            if (tick_monitor_.config().mode == spark::TickMonitorMode::Duration) {
+                std::snprintf(message, sizeof(message), "Reporting ticks longer than %.2fms.",
+                              tick_monitor_.config().threshold);
+            }
+            else {
+                std::snprintf(message, sizeof(message),
+                              "Reporting ticks more than %.2f%% above the baseline.",
+                              tick_monitor_.config().threshold);
+            }
+            announce(tick_monitor_sender_, message);
+        }
+        if (update.report) {
+            std::snprintf(message, sizeof(message),
+                          "Tick #%llu lasted %.2fms (%.2f%% change from the %.2fms baseline).",
+                          static_cast<unsigned long long>(update.tick), update.duration_ms,
+                          update.percentage_change, update.baseline_ms);
+            announce(tick_monitor_sender_, message);
+        }
+    }
+
     spark::Profiler profiler_;
+    spark::TickMonitor tick_monitor_;
+    std::string tick_monitor_sender_ = "CONSOLE";
     std::string bds_executable_sha256_;
     std::atomic<std::uint64_t> main_tid_{0};
     std::atomic<bool> exporting_{false};
@@ -895,7 +986,7 @@ ENDSTONE_PLUGIN("spark", "0.2.0", SparkPlugin)
 
     command("spark")
         .description("spark profiler")
-        .usages("/spark", "/spark (tps|health)<module: SparkStatusModule>",
+        .usages("/spark", "/spark (tps|health|tickmonitor)<module: SparkStatusModule>",
                 "/spark (profiler)<module: SparkProfilerModule> "
                 "(start|stop|info|cancel)[action: SparkProfilerAction] [flags: message]")
         .permissions("endstone.command.spark");

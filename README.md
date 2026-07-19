@@ -27,6 +27,7 @@ spark's bytebin and opened as an interactive flame graph at
 | `/spark profiler cancel`        | Stop profiling without generating a profile.            |
 | `/spark tps`                    | Show ticks-per-second and tick duration (MSPT).         |
 | `/spark health`                 | Show TPS/MSPT plus process memory, threads, and uptime. |
+| `/spark tickmonitor`            | Report ticks that exceed a duration or baseline change. |
 
 By default, stopping a profiler uploads the generated profile to spark's bytebin
 and prints the viewer link. With `--save-to-file`, the profile is written locally
@@ -34,6 +35,13 @@ as a `.sparkprofile` file instead. If an upload fails, Spark automatically
 preserves the compressed profile in its data folder and reports the local path.
 
 Permission: `endstone.command.spark` (operators by default).
+
+### `/spark tickmonitor`
+
+Run `/spark tickmonitor` to establish a 120-tick baseline and report ticks whose
+duration is more than 100% above it. Use `--threshold <percent>` to change the
+relative threshold, or `--threshold-tick <ms>` to use an absolute tick duration.
+Run the command again to disable the monitor.
 
 ### `/spark profiler start` flags
 

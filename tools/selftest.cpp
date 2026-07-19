@@ -39,6 +39,7 @@
 #include "sampler/types.h"
 #include "spark_constants.h"
 #include "stats/executable_hash.h"
+#include "stats/tick_monitor.h"
 
 namespace {
 
@@ -398,6 +399,57 @@ SPARK_NOINLINE bool exerciseNativeAllocations()
     return true;
 }
 
+bool verifyTickMonitor()
+{
+    spark::TickMonitor monitor;
+    spark::TickMonitorConfig config;
+    config.setup_ticks = 3;
+    config.threshold = 100.0;
+    if (!monitor.start(config)) {
+        std::fprintf(stderr, "tick monitor: valid percentage configuration was rejected\n");
+        return false;
+    }
+
+    monitor.onTick(10.0);
+    monitor.onTick(20.0);
+    spark::TickMonitorUpdate setup = monitor.onTick(30.0);
+    if (!setup.setup_completed || setup.report || setup.tick != 3 || setup.baseline_ms != 20.0 ||
+        setup.setup_min_ms != 10.0 || setup.setup_max_ms != 30.0) {
+        std::fprintf(stderr, "tick monitor: baseline calculation failed\n");
+        return false;
+    }
+    if (monitor.onTick(40.0).report) {
+        std::fprintf(stderr, "tick monitor: percentage threshold boundary was included\n");
+        return false;
+    }
+    spark::TickMonitorUpdate spike = monitor.onTick(50.0);
+    if (!spike.report || spike.tick != 5 || spike.percentage_change != 150.0) {
+        std::fprintf(stderr, "tick monitor: percentage spike was not reported\n");
+        return false;
+    }
+
+    config.mode = spark::TickMonitorMode::Duration;
+    config.threshold = 25.0;
+    config.setup_ticks = 1;
+    if (!monitor.start(config) || !monitor.onTick(10.0).setup_completed || monitor.onTick(25.0).report ||
+        !monitor.onTick(25.01).report) {
+        std::fprintf(stderr, "tick monitor: duration threshold failed\n");
+        return false;
+    }
+    monitor.stop();
+    if (monitor.running() || monitor.onTick(100.0).report) {
+        std::fprintf(stderr, "tick monitor: stop did not reset running state\n");
+        return false;
+    }
+
+    config.threshold = 0.0;
+    if (monitor.start(config)) {
+        std::fprintf(stderr, "tick monitor: invalid configuration was accepted\n");
+        return false;
+    }
+    return true;
+}
+
 bool verifyExecutableHash()
 {
     if (spark::sha256Hex("") !=
@@ -709,7 +761,7 @@ int main(int argc, char **argv)
         std::this_thread::sleep_for(1ms);
     }
 
-    if (!verifyArgumentParsing() || !verifyUploadFailure() || !verifyCaptureLifecycle() ||
+    if (!verifyArgumentParsing() || !verifyTickMonitor() || !verifyUploadFailure() || !verifyCaptureLifecycle() ||
         !verifyExecutableHash() ||
         !verifyByteSampling() ||
         !verifyStopResponsiveness() ||
