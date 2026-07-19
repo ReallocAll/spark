@@ -42,6 +42,7 @@ struct ProfilerOptions {
 struct ExportContext {
     std::string endstone_version;
     std::string minecraft_version;
+    std::string bds_executable_sha256;
     std::string comment;  // overrides the start-time comment when non-empty
     double tps = 0.0;
     double mspt = 0.0;

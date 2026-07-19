@@ -293,6 +293,11 @@ std::string Profiler::exportData(const ExportContext &ctx) const
     meta.ticked = options_.only_ticks_over_ms > 0;
     meta.tick_threshold_ms = options_.only_ticks_over_ms > 0 ? options_.only_ticks_over_ms : 0;
 
+    if (!ctx.bds_executable_sha256.empty()) {
+        meta.extra_platform_metadata["BDS executable SHA-256"] =
+            jsonString(ctx.bds_executable_sha256);
+    }
+
     if (mode_ == ProfileMode::Allocation) {
         // Upstream SamplerMetadata has no dedicated native allocation diagnostics.
         // The viewer JSON-parses every map value, so textual values must be encoded

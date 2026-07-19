@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Include the running BDS executable's SHA-256 in every profile so offline
+  binary analysis can select the exact matching server build without collecting
+  the executable or server-private data.
+
 ## [0.2.0] - 2026-07-18
 
 ### Added

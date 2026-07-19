@@ -53,6 +53,7 @@ add_library(spark_core STATIC
         src/sampler/symbolicate.cpp
         src/sampler/sampler.cpp
         src/sampler/profiler.cpp
+        src/stats/executable_hash.cpp
         src/stats/system_stats.cpp)
 if (WIN32)
     target_sources(spark_core PRIVATE

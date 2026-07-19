@@ -29,6 +29,7 @@
 #include "net/profile_file.h"
 #include "sampler/profiler.h"
 #include "spark_constants.h"
+#include "stats/executable_hash.h"
 
 namespace {
 
@@ -199,6 +200,11 @@ class SparkPlugin : public endstone::Plugin {
 public:
     void onEnable() override
     {
+        std::string hash_error;
+        bds_executable_sha256_ = spark::currentExecutableSha256(hash_error);
+        if (bds_executable_sha256_.empty()) {
+            getLogger().warning("Unable to identify the BDS executable: {}", hash_error);
+        }
         tick_task_ = getServer().getScheduler().runTaskTimer(
             *this, [this]() { onServerTick(); }, 0, 1);
         getLogger().info("endstone-spark v{} enabled. Run {}/spark{} to get started.", spark::kVersion,
@@ -643,6 +649,7 @@ private:
 
         pending_ctx_.endstone_version = getServer().getVersion();
         pending_ctx_.minecraft_version = getServer().getMinecraftVersion();
+        pending_ctx_.bds_executable_sha256 = bds_executable_sha256_;
         pending_ctx_.comment = comment;
         pending_ctx_.tps = getServer().getAverageTicksPerSecond();
         pending_ctx_.mspt = getServer().getAverageMillisecondsPerTick();
@@ -863,6 +870,7 @@ private:
     }
 
     spark::Profiler profiler_;
+    std::string bds_executable_sha256_;
     std::atomic<std::uint64_t> main_tid_{0};
     std::atomic<bool> exporting_{false};
     std::string start_sender_name_ = "CONSOLE";

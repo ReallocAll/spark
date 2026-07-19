@@ -65,6 +65,9 @@ Permission: `endstone.command.spark` (operators by default).
 * Samples aggregate into a call tree, serialize to spark's protobuf, gzip, and
   either upload to bytebin or write a local `.sparkprofile` file. Symbolization and
   output processing run on a background thread so the server tick never stalls.
+* Every profile includes the SHA-256 of the running BDS executable, allowing an
+  offline analyst to select the exact matching binary without receiving the
+  server owner's executable, paths, configuration, or world data.
 
 ### Native allocation profiler
 

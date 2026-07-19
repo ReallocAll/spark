@@ -38,6 +38,7 @@
 #include "sampler/symbolicate.h"
 #include "sampler/types.h"
 #include "spark_constants.h"
+#include "stats/executable_hash.h"
 
 namespace {
 
@@ -397,6 +398,30 @@ SPARK_NOINLINE bool exerciseNativeAllocations()
     return true;
 }
 
+bool verifyExecutableHash()
+{
+    if (spark::sha256Hex("") !=
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" ||
+        spark::sha256Hex("abc") !=
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad") {
+        std::fprintf(stderr, "executable hash: SHA-256 vector mismatch\n");
+        return false;
+    }
+
+    std::string error;
+    const std::string first = spark::currentExecutableSha256(error);
+    const std::string second = spark::currentExecutableSha256(error);
+    if (first.size() != 64 || first != second ||
+        !std::all_of(first.begin(), first.end(), [](unsigned char ch) {
+            return (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f');
+        })) {
+        std::fprintf(stderr, "executable hash: current executable hashing failed: %s\n",
+                     error.c_str());
+        return false;
+    }
+    return true;
+}
+
 bool runAllocationSession(spark::AllocationSampler &sampler,
                           const spark::AllocationSamplerConfig &config,
                           std::string &error)
@@ -685,6 +710,7 @@ int main(int argc, char **argv)
     }
 
     if (!verifyArgumentParsing() || !verifyUploadFailure() || !verifyCaptureLifecycle() ||
+        !verifyExecutableHash() ||
         !verifyByteSampling() ||
         !verifyStopResponsiveness() ||
         !verifySessionIsolation(g_worker_tid.load()) || !verifyTickFiltering(g_worker_tid.load())
@@ -722,7 +748,17 @@ int main(int argc, char **argv)
     spark::ExportContext ctx;
     ctx.endstone_version = "0.11.5";
     ctx.minecraft_version = "1.26.33";
+    std::string executable_hash_error;
+    ctx.bds_executable_sha256 = spark::currentExecutableSha256(executable_hash_error);
     std::string bytes = profiler.stop(ctx);
+
+    if (bytes.find("BDS executable SHA-256") == std::string::npos ||
+        bytes.find(ctx.bds_executable_sha256) == std::string::npos) {
+        std::fprintf(stderr, "executable hash: profile metadata is missing\n");
+        g_run.store(false);
+        w.join();
+        return 1;
+    }
 
     g_run.store(false);
     w.join();
