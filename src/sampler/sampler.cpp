@@ -158,6 +158,11 @@ void Sampler::onTick(double mspt_ms)
 
 void Sampler::samplerLoop()
 {
+    struct ThreadTiming {
+        std::chrono::steady_clock::time_point last_attempt{};
+        std::uint64_t previous_capture_us = 0;
+    };
+
     CaptureBuffer buf;
     const auto interval = std::chrono::microseconds(config_.interval_us);
     sampler_tid_.store(currentNativeThreadId(), std::memory_order_release);
@@ -166,6 +171,7 @@ void Sampler::samplerLoop()
     }
 
     std::vector<ThreadInfo> targets;
+    std::unordered_map<std::uint64_t, ThreadTiming> timings;
     auto next_refresh = std::chrono::steady_clock::time_point{};
     while (running_.load()) {
         {
@@ -201,6 +207,11 @@ void Sampler::samplerLoop()
                                   }),
                                   targets.end());
                 }
+                std::erase_if(timings, [&](const auto &entry) {
+                    return std::none_of(targets.begin(), targets.end(), [&](const ThreadInfo &thread) {
+                        return thread.id == entry.first;
+                    });
+                });
                 for (ThreadInfo &thread : targets) {
                     thread.name += " (#" + std::to_string(thread.id) + ")";
                 }
@@ -213,24 +224,48 @@ void Sampler::samplerLoop()
                                : std::vector<ThreadInfo>{{tid, target_name_}};
         }
 
-        const std::uint64_t tick_id = current_tick_.load();
-        const std::int32_t window = currentWindow();
         for (const ThreadInfo &target : targets) {
             if (!running_.load()) {
                 break;
             }
-            if (config_.ignore_sleeping && !Capture::isThreadRunning(target.id)) {
+
+            const bool target_running = !config_.ignore_sleeping || Capture::isThreadRunning(target.id);
+            const auto attempt_time = std::chrono::steady_clock::now();
+            auto [timing_it, inserted] = timings.try_emplace(target.id);
+            ThreadTiming &timing = timing_it->second;
+            std::uint64_t elapsed_us = static_cast<std::uint64_t>(config_.interval_us);
+            if (!inserted) {
+                const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+                    attempt_time - timing.last_attempt);
+                const std::uint64_t wall_us = elapsed.count() > 0
+                                                  ? static_cast<std::uint64_t>(elapsed.count())
+                                                  : 1;
+                elapsed_us = wall_us > timing.previous_capture_us
+                                 ? wall_us - timing.previous_capture_us
+                                 : 1;
+            }
+            timing.last_attempt = attempt_time;
+            timing.previous_capture_us = 0;
+
+            if (!target_running) {
                 continue;
             }
-            if (!Capture::captureThread(target.id, buf)) {
+            const bool captured = Capture::captureThread(target.id, buf);
+            const auto capture_elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - attempt_time);
+            if (capture_elapsed.count() > 0) {
+                timing.previous_capture_us = static_cast<std::uint64_t>(capture_elapsed.count());
+            }
+            if (!captured) {
                 continue;
             }
 
             Sample sample;
             sample.thread_id = target.id;
             sample.thread_name = target.name;
-            sample.tick_id = tick_id;
-            sample.window = window;
+            sample.tick_id = current_tick_.load();
+            sample.window = currentWindow();
+            sample.weight = elapsed_us;
             sample.frames.reserve(buf.count);
             for (std::size_t i = kLeadingDrop; i < buf.count; ++i) {
 #if defined(_WIN32)

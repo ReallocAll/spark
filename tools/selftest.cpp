@@ -113,7 +113,7 @@ bool verifySessionIsolation(std::uint64_t worker_tid)
         observed_samples = current_samples;
     }
     sampler.stop();
-    if (sampler.sampleCount() == 0 || sampler.sampleCount() != sampler.tree().sampleCount() ||
+    if (sampler.sampleCount() == 0 || sampler.tree().sampleCount() == 0 ||
         sampler.modules().size() == 0 || sampler.numberOfTicks() != 50 || sampler.windowTicks().empty()) {
         std::fprintf(stderr, "session isolation: first sampler session did not collect expected state\n");
         return false;
@@ -312,7 +312,7 @@ bool verifyTickFiltering(std::uint64_t worker_tid)
     std::this_thread::sleep_for(50ms);
     sampler.onTick(50.0);
     sampler.stop();
-    if (sampler.sampleCount() == 0 || sampler.sampleCount() != sampler.tree().sampleCount()) {
+    if (sampler.sampleCount() == 0 || sampler.tree().sampleCount() == 0) {
         std::fprintf(stderr, "tick filtering: slow tick samples were not retained\n");
         return false;
     }
@@ -540,16 +540,24 @@ bool verifyAllThreadSampling()
     std::this_thread::sleep_for(200ms);
     sampler.stop();
 
-    if (sampler.threadTrees().size() < 2 || sampler.sampleCount() == 0 ||
-        sampler.sampleCount() != sampler.tree().sampleCount()) {
+    if (sampler.threadTrees().size() < 2 || sampler.sampleCount() == 0) {
         std::fprintf(stderr, "all-thread sampling: fewer than two process threads were captured\n");
         return false;
     }
+    std::uint64_t thread_weight_sum = 0;
+    std::size_t weighted_threads = 0;
     for (const auto &[id, thread] : sampler.threadTrees()) {
+        const std::uint64_t weight_us = thread.tree.sampleCount();
         if (id == 0 || thread.thread_name.empty() || thread.tree.empty()) {
             std::fprintf(stderr, "all-thread sampling: invalid per-thread call tree\n");
             return false;
         }
+        weighted_threads += weight_us >= 20'000 ? 1 : 0;
+        thread_weight_sum += weight_us;
+    }
+    if (weighted_threads < 2 || sampler.tree().sampleCount() != thread_weight_sum) {
+        std::fprintf(stderr, "all-thread sampling: combined tree lost elapsed-time weight\n");
+        return false;
     }
     return true;
 }

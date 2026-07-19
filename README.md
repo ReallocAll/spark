@@ -78,6 +78,9 @@ Run the command again to disable the monitor.
 * Samples aggregate into a call tree, serialize to spark's protobuf, gzip, and
   either upload to bytebin or write a local `.sparkprofile` file. Symbolization and
   output processing run on a background thread so the server tick never stalls.
+  Execution samples use the measured elapsed time between sampling points, excluding
+  the target thread's own stack-walk suspension, so multi-thread sweeps retain correct
+  time weights even when their effective cadence is longer than the requested interval.
 * Every profile includes the SHA-256 of the running BDS executable, allowing an
   offline analyst to select the exact matching binary without receiving the
   server owner's executable, paths, configuration, or world data.

@@ -73,7 +73,7 @@ struct Sample {
     std::string thread_name;
     std::int32_t window = 0;
     std::uint64_t tick_id = 0;
-    std::uint64_t weight = 1;  // execution sample count or allocation bytes
+    std::uint64_t weight = 1;  // execution elapsed microseconds or allocation bytes
 };
 
 }  // namespace spark

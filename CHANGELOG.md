@@ -19,6 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   binary analysis can select the exact matching server build without collecting
   the executable or server-private data.
 
+### Fixed
+
+- Weight execution samples by each thread's measured runnable time instead of the
+  nominal interval, preserving viewer time semantics for sequential multi-thread sweeps.
+
 ## [0.2.0] - 2026-07-18
 
 ### Added

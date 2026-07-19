@@ -33,7 +33,7 @@ std::vector<double> alignValues(const std::map<std::int32_t, std::uint64_t> &tim
             out[i] = static_cast<double>(it->second);
         }
         else {
-            out[i] = static_cast<double>(it->second) * static_cast<double>(meta.interval) / 1000.0;
+            out[i] = static_cast<double>(it->second) / 1000.0;
         }
     }
     return out;

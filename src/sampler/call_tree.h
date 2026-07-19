@@ -12,7 +12,7 @@
 namespace spark {
 
 // Aggregated profiling stack for a single thread. Each node accumulates a mode-
-// dependent weight per time window: execution sample counts or allocation bytes.
+// dependent weight per time window: execution microseconds or allocation bytes.
 class CallTree {
 public:
     struct Node {
@@ -34,7 +34,7 @@ public:
         return root_.times.empty();
     }
 
-    // Total profile weight logged (execution sample count or allocation bytes).
+    // Total profile weight logged (execution microseconds or allocation bytes).
     std::uint64_t sampleCount() const;
 
 private:
