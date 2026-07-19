@@ -36,6 +36,7 @@
 #include "sampler/capture.h"
 #include "sampler/profiler.h"
 #include "sampler/symbolicate.h"
+#include "sampler/thread_info.h"
 #include "sampler/types.h"
 #include "spark_constants.h"
 #include "stats/executable_hash.h"
@@ -450,6 +451,32 @@ bool verifyTickMonitor()
     return true;
 }
 
+bool verifyThreadDiscovery()
+{
+    const std::uint64_t current = spark::currentNativeThreadId();
+    std::vector<spark::ThreadInfo> threads = spark::enumerateProcessThreads();
+    if (current == 0 || threads.empty()) {
+        std::fprintf(stderr, "thread discovery: current process threads were not enumerated\n");
+        return false;
+    }
+
+    bool found_current = false;
+    std::uint64_t previous = 0;
+    for (const spark::ThreadInfo &thread : threads) {
+        if (thread.id == 0 || thread.name.empty() || (previous != 0 && thread.id <= previous)) {
+            std::fprintf(stderr, "thread discovery: invalid or unordered thread entry\n");
+            return false;
+        }
+        found_current = found_current || thread.id == current;
+        previous = thread.id;
+    }
+    if (!found_current) {
+        std::fprintf(stderr, "thread discovery: current thread is missing\n");
+        return false;
+    }
+    return true;
+}
+
 bool verifyExecutableHash()
 {
     if (spark::sha256Hex("") !=
@@ -761,7 +788,8 @@ int main(int argc, char **argv)
         std::this_thread::sleep_for(1ms);
     }
 
-    if (!verifyArgumentParsing() || !verifyTickMonitor() || !verifyUploadFailure() || !verifyCaptureLifecycle() ||
+    if (!verifyArgumentParsing() || !verifyTickMonitor() || !verifyThreadDiscovery() || !verifyUploadFailure() ||
+        !verifyCaptureLifecycle() ||
         !verifyExecutableHash() ||
         !verifyByteSampling() ||
         !verifyStopResponsiveness() ||

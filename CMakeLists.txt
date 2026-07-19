@@ -53,6 +53,7 @@ add_library(spark_core STATIC
         src/sampler/symbolicate.cpp
         src/sampler/sampler.cpp
         src/sampler/profiler.cpp
+        src/sampler/thread_info.cpp
         src/stats/executable_hash.cpp
         src/stats/tick_monitor.cpp
         src/stats/system_stats.cpp)
