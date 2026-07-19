@@ -56,7 +56,8 @@ Run the command again to disable the monitor.
   for each operating-system thread. Use one or more `--thread <name>` flags to
   select threads by case-insensitive exact name, or add `--regex` to interpret
   them as case-insensitive full-match regular expressions. Quote names or
-  patterns containing spaces.
+  patterns containing spaces. Multi-thread profiles use the interval as a global
+  stack-walk budget and rotate fairly through matching threads.
 * `--only-ticks-over <ms>` — only record ticks longer than this.
 * `--save-to-file` — write a `.sparkprofile` file instead of uploading
   (open it by dragging it into the spark viewer).

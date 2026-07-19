@@ -611,18 +611,23 @@ bool verifyAllThreadSampling()
         std::fprintf(stderr, "all-thread sampling: fewer than two process threads were captured\n");
         return false;
     }
+    if (sampler.sampleCount() > 150) {
+        std::fprintf(stderr, "all-thread sampling: stack-walk interval budget was exceeded\n");
+        return false;
+    }
     std::uint64_t thread_weight_sum = 0;
-    std::size_t weighted_threads = 0;
     for (const auto &[id, thread] : sampler.threadTrees()) {
         const std::uint64_t weight_us = thread.tree.sampleCount();
         if (id == 0 || thread.thread_name.empty() || thread.tree.empty()) {
             std::fprintf(stderr, "all-thread sampling: invalid per-thread call tree\n");
             return false;
         }
-        weighted_threads += weight_us >= 20'000 ? 1 : 0;
         thread_weight_sum += weight_us;
     }
-    if (weighted_threads < 2 || sampler.tree().sampleCount() != thread_weight_sum) {
+    // A bounded round-robin sweep can capture a thread only once on a slow host.
+    // Preserve the invariant that every accepted weight reaches both tree views
+    // without requiring a minimum number of scheduling turns within 200ms.
+    if (sampler.tree().sampleCount() != thread_weight_sum) {
         std::fprintf(stderr, "all-thread sampling: combined tree lost elapsed-time weight\n");
         return false;
     }

@@ -25,6 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   nominal interval, preserving viewer time semantics for sequential multi-thread sweeps.
 - Detect idle Windows threads through `QueryThreadCycleTime` deltas so the default
   execution profiler skips their suspension and stack-walk overhead.
+- Schedule matching execution threads round-robin with at most one stack-walk attempt
+  per interval, bounding profiler overhead as the process thread count grows.
 
 ## [0.2.0] - 2026-07-18
 

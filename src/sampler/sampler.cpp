@@ -172,6 +172,7 @@ void Sampler::samplerLoop()
 
     std::vector<ThreadInfo> targets;
     std::unordered_map<std::uint64_t, ThreadTiming> timings;
+    std::size_t next_target = 0;
     auto next_refresh = std::chrono::steady_clock::time_point{};
     while (running_.load()) {
         {
@@ -224,10 +225,13 @@ void Sampler::samplerLoop()
                                : std::vector<ThreadInfo>{{tid, target_name_}};
         }
 
-        for (const ThreadInfo &target : targets) {
+        const std::size_t target_count = targets.size();
+        for (std::size_t checked = 0; checked < target_count; ++checked) {
             if (!running_.load()) {
                 break;
             }
+            const ThreadInfo &target = targets[next_target % target_count];
+            ++next_target;
 
             const bool target_running = !config_.ignore_sleeping || Capture::isThreadRunning(target.id);
             const auto attempt_time = std::chrono::steady_clock::now();
@@ -257,7 +261,7 @@ void Sampler::samplerLoop()
                 timing.previous_capture_us = static_cast<std::uint64_t>(capture_elapsed.count());
             }
             if (!captured) {
-                continue;
+                break;  // one potentially expensive stack-walk attempt per interval
             }
 
             Sample sample;
@@ -301,14 +305,15 @@ void Sampler::samplerLoop()
                 sample.frames.push_back(key);
             }
             if (sample.frames.empty()) {
-                continue;
+                break;
             }
             // Drop inter-tick and worker wait states so they don't swamp a
             // wall-clock profile when sleeping threads are excluded.
             if (config_.ignore_sleeping && isSleepFrame(sample.frames.front().raw_address)) {
-                continue;
+                break;
             }
             samples_.enqueue(std::move(sample));
+            break;
         }
     }
     sampler_tid_.store(0, std::memory_order_release);
