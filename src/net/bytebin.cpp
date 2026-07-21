@@ -53,8 +53,12 @@ std::size_t captureHeader(char *data, std::size_t size, std::size_t count,
   return length;
 }
 
-std::size_t discardBody(char *, std::size_t size, std::size_t count, void *) {
-  return size * count;
+std::size_t captureBody(char *data, std::size_t size, std::size_t count,
+                        void *user_data) {
+  const std::size_t length = size * count;
+  auto *body = static_cast<std::string *>(user_data);
+  body->append(data, length);
+  return length;
 }
 
 std::string contentKeyFromLocation(std::string_view location) {
@@ -66,9 +70,49 @@ std::string contentKeyFromLocation(std::string_view location) {
       slash == std::string_view::npos ? location : location.substr(slash + 1));
 }
 
+std::string contentKeyFromResponseBody(std::string_view body) {
+  const std::string cleaned = trim(body);
+  if (cleaned.empty()) {
+    return {};
+  }
+
+  // Most bytebin deployments return Location, but tolerate a plain key or a
+  // small JSON response from compatible frontends/proxies.
+  const auto extract_json_string = [&](std::string_view name) -> std::string {
+    const std::string needle = "\"" + std::string(name) + "\"";
+    std::size_t pos = cleaned.find(needle);
+    if (pos == std::string::npos) {
+      return {};
+    }
+    pos = cleaned.find(':', pos + needle.size());
+    if (pos == std::string::npos) {
+      return {};
+    }
+    pos = cleaned.find('\"', pos + 1);
+    if (pos == std::string::npos) {
+      return {};
+    }
+    const std::size_t end = cleaned.find('\"', pos + 1);
+    return end == std::string::npos ? std::string() : cleaned.substr(pos + 1, end - pos - 1);
+  };
+
+  for (std::string_view name : {std::string_view("key"), std::string_view("id"),
+                                std::string_view("location")}) {
+    std::string value = extract_json_string(name);
+    if (!value.empty()) {
+      return contentKeyFromLocation(value);
+    }
+  }
+
+  if (cleaned.find_first_of("{}[]\" \t\r\n") == std::string::npos) {
+    return contentKeyFromLocation(cleaned);
+  }
+  return {};
+}
+
 } // namespace
 
-UploadResult uploadToBytebin(const std::string &gzipped_body,
+UploadResult uploadToBytebin(const std::string &body,
                              const std::string &bytebin_url,
                              const std::string &content_type,
                              const std::string &user_agent) {
@@ -106,7 +150,7 @@ UploadResult uploadToBytebin(const std::string &gzipped_body,
   };
   const std::string content_type_header = "Content-Type: " + content_type;
   if (!append_header(content_type_header.c_str()) ||
-      !append_header("Content-Encoding: gzip")) {
+      !append_header("Expect:")) {
     curl_slist_free_all(raw_headers);
     result.error = "failed to allocate HTTP headers";
     return result;
@@ -114,12 +158,13 @@ UploadResult uploadToBytebin(const std::string &gzipped_body,
   CurlHeaders headers(raw_headers, curl_slist_free_all);
 
   std::string location;
+  std::string response_body;
   char error_buffer[CURL_ERROR_SIZE]{};
   curl_easy_setopt(curl.get(), CURLOPT_URL, url.c_str());
   curl_easy_setopt(curl.get(), CURLOPT_POST, 1L);
-  curl_easy_setopt(curl.get(), CURLOPT_POSTFIELDS, gzipped_body.data());
+  curl_easy_setopt(curl.get(), CURLOPT_POSTFIELDS, body.data());
   curl_easy_setopt(curl.get(), CURLOPT_POSTFIELDSIZE_LARGE,
-                   static_cast<curl_off_t>(gzipped_body.size()));
+                   static_cast<curl_off_t>(body.size()));
   curl_easy_setopt(curl.get(), CURLOPT_HTTPHEADER, headers.get());
   curl_easy_setopt(curl.get(), CURLOPT_USERAGENT, user_agent.c_str());
   curl_easy_setopt(curl.get(), CURLOPT_CONNECTTIMEOUT, 10L);
@@ -129,7 +174,8 @@ UploadResult uploadToBytebin(const std::string &gzipped_body,
   curl_easy_setopt(curl.get(), CURLOPT_PROTOCOLS_STR, "http,https");
   curl_easy_setopt(curl.get(), CURLOPT_HEADERFUNCTION, captureHeader);
   curl_easy_setopt(curl.get(), CURLOPT_HEADERDATA, &location);
-  curl_easy_setopt(curl.get(), CURLOPT_WRITEFUNCTION, discardBody);
+  curl_easy_setopt(curl.get(), CURLOPT_WRITEFUNCTION, captureBody);
+  curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &response_body);
   curl_easy_setopt(curl.get(), CURLOPT_ERRORBUFFER, error_buffer);
 
   const CURLcode request_result = curl_easy_perform(curl.get());
@@ -152,6 +198,9 @@ UploadResult uploadToBytebin(const std::string &gzipped_body,
   }
 
   result.key = contentKeyFromLocation(location);
+  if (result.key.empty()) {
+    result.key = contentKeyFromResponseBody(response_body);
+  }
   if (result.key.empty()) {
     result.error = "bytebin did not return a content key";
     return result;

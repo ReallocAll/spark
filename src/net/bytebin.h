@@ -11,8 +11,10 @@ struct UploadResult {
     std::string error;  // populated when !ok
 };
 
-// POST a (already gzipped) payload to a bytebin instance and return the content key.
-UploadResult uploadToBytebin(const std::string &gzipped_body, const std::string &bytebin_url,
+// POST a raw payload to a bytebin instance and return the content key.
+// Request-side Content-Encoding is intentionally omitted: the viewer must receive
+// the protobuf payload, not a second gzip envelope.
+UploadResult uploadToBytebin(const std::string &body, const std::string &bytebin_url,
                              const std::string &content_type, const std::string &user_agent);
 
 }  // namespace spark

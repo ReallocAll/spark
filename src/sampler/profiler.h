@@ -50,6 +50,7 @@ struct ExportContext {
     long player_count = -1;
     int online_mode = 0;  // 0 unknown, 1 offline, 2 online
     std::int64_t uptime_ms = 0;
+    std::map<std::string, std::string> extra_platform_metadata;  // values must be valid JSON
     std::vector<PluginInfo> plugins;
     WorldInfo world;
 };

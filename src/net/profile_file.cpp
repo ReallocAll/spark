@@ -17,7 +17,7 @@ ProfileFileResult failure(std::string message)
 }  // namespace
 
 ProfileFileResult saveProfileToDirectory(const std::filesystem::path &folder,
-                                         std::string_view compressed_profile,
+                                         std::string_view profile,
                                          std::int64_t timestamp_ms)
 {
     std::error_code error;
@@ -50,8 +50,7 @@ ProfileFileResult saveProfileToDirectory(const std::filesystem::path &folder,
     temporary += ".tmp";
     {
         std::ofstream stream(temporary, std::ios::binary | std::ios::trunc);
-        stream.write(compressed_profile.data(),
-                     static_cast<std::streamsize>(compressed_profile.size()));
+        stream.write(profile.data(), static_cast<std::streamsize>(profile.size()));
         stream.close();
         if (!stream) {
             std::filesystem::remove(temporary, error);

@@ -15,7 +15,26 @@
 #include <utility>
 #include <vector>
 
-#include <endstone/endstone.hpp>
+#include <endstone/color_format.h>
+#include <endstone/level/location.h>
+#include <endstone/plugin/plugin.h>
+#include <endstone/scheduler/scheduler.h>
+#include <endstone/scheduler/task.h>
+#include <endstone/server.h>
+
+// Forward declarations needed due to missing forward declarations in Endstone headers
+namespace endstone {
+class Level;
+class Dimension;
+class Actor;
+}
+
+// Include complete type definitions
+// Note: dimension.h has a bug - it uses Level& without forward declaring it
+// We work around this by forward declaring Level first
+namespace endstone { class Level; }
+#include <endstone/level/dimension.h>
+#include <endstone/level/level.h>
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -26,11 +45,11 @@
 
 #include "command/arguments.h"
 #include "net/bytebin.h"
-#include "net/gzip.h"
 #include "net/profile_file.h"
 #include "sampler/profiler.h"
 #include "spark_constants.h"
 #include "stats/executable_hash.h"
+#include "stats/server_stats.h"
 #include "stats/tick_monitor.h"
 
 namespace {
@@ -118,26 +137,14 @@ auto pointerFromApi(Value &&value)
 }
 
 template <typename ActorType>
-std::string actorTypeName(const ActorType &type)
+std::string actorTypeName(const ActorType &)
 {
-    if constexpr (requires(const ActorType &value) { value.getId(); }) {
-        return static_cast<std::string>(type.getId());
-    }
-    else {
-        return type;
-    }
+    // Endstone v0.5.0 doesn't expose actor type through the public API
+    return "entity";
 }
 
-template <typename Dimension>
-std::string dimensionName(const Dimension &dimension)
-{
-    if constexpr (requires(const Dimension &value) { value.getName(); }) {
-        return dimension.getName();
-    }
-    else {
-        return static_cast<std::string>(dimension.getId());
-    }
-}
+// dimensionName helper removed - Endstone v0.5.0 Dimension::getName() returns std::string directly
+// We use dimension->getName() inline instead to avoid template instantiation issues
 
 const std::string &tpsColor(float tps)
 {
@@ -281,19 +288,26 @@ private:
         if (main_tid_.load() == 0) {
             main_tid_.store(currentThreadId());
         }
+
+        // Endstone v0.5.0 exposes neither TPS nor complete tick boundaries.
+        // ServerStats therefore measures callback cadence for TPS and combines
+        // main-thread CPU time with clear wall-clock overruns for the closest
+        // non-hook MSPT estimate available.
+        server_stats_.onTick();
+
         const bool profiler_running = profiler_.running();
         const bool tick_monitor_running = tick_monitor_.running();
-        const double mspt = profiler_running || tick_monitor_running
-                                ? getServer().getCurrentMillisecondsPerTick()
-                                : 0.0;
+        const double estimated_mspt = profiler_running || tick_monitor_running
+                                          ? server_stats_.getLastMillisecondsPerTick()
+                                          : 0.0;
         if (tick_monitor_running) {
-            processTickMonitor(mspt);
+            processTickMonitor(estimated_mspt);
         }
         if (profiler_running) {
             std::string backend_error;
             const bool backend_failed = profiler_.backendFailure(backend_error);
             if (!backend_failed) {
-                profiler_.onTick(mspt);
+                profiler_.onTick(estimated_mspt);
             }
             std::int64_t auto_end = profiler_.autoEndTimeMs();
             if (auto_end > 0 && nowMs() >= auto_end) {
@@ -429,7 +443,7 @@ private:
         }
         long timeout = timeout_flag.value_or(-1);
         if (timeout_flag && timeout <= 10) {
-            sender.sendErrorMessage("The timeout is too short for useful results — choose a value over 10 seconds.");
+            sender.sendErrorMessage("The timeout is too short for useful results -- choose a value over 10 seconds.");
             return;
         }
         options.timeout_seconds = timeout;
@@ -455,7 +469,7 @@ private:
 
         std::uint64_t tid = main_tid_.load();
         if (tid == 0) {
-            sender.sendErrorMessage("The server thread hasn't been identified yet — try again in a moment.");
+            sender.sendErrorMessage("The server thread hasn't been identified yet -- try again in a moment.");
             return;
         }
 
@@ -670,6 +684,11 @@ private:
     // which matters when the plugin and the runtime are built with different libc++.
     void finishProfiler(const std::string &sender_name, bool save, const std::string &comment)
     {
+        // Include complete type definitions needed for dimension/world access
+        // These must be included locally where used due to forward-decl dependencies
+        using endstone::Dimension;
+        using endstone::Level;
+
         // Stop before gathering metadata so spark's own world/plugin snapshot
         // allocations do not pollute an allocation profile. Entry hooks remain
         // disabled pass-throughs between sessions; a backend service failure
@@ -693,14 +712,25 @@ private:
         pending_ctx_.minecraft_version = getServer().getMinecraftVersion();
         pending_ctx_.bds_executable_sha256 = bds_executable_sha256_;
         pending_ctx_.comment = comment;
-        pending_ctx_.tps = getServer().getAverageTicksPerSecond();
-        pending_ctx_.mspt = getServer().getAverageMillisecondsPerTick();
-        pending_ctx_.mspt_max = getServer().getCurrentMillisecondsPerTick();
+        pending_ctx_.tps = server_stats_.getAverageTicksPerSecond();
+        pending_ctx_.mspt = server_stats_.getAverageMillisecondsPerTick();
+        pending_ctx_.mspt_max = server_stats_.getMaximumMillisecondsPerTick();
         pending_ctx_.player_count = static_cast<long>(getServer().getOnlinePlayers().size());
-        pending_ctx_.online_mode = getServer().getOnlineMode() ? 2 : 1;
+        // Endstone v0.5.0 cannot report this value. UNKNOWN is preferable to
+        // fabricating offline mode and is supported by the sampler schema.
+        pending_ctx_.online_mode = 0;
+        pending_ctx_.extra_platform_metadata.clear();
+        pending_ctx_.extra_platform_metadata["MSPT source"] =
+            server_stats_.usesThreadCpuTime()
+                ? R"("hybrid estimate: main-thread CPU time while within the 20 TPS budget, blended to callback wall time during clear overruns")"
+                : R"("fallback estimate: callback overrun beyond the 50 ms pacing budget; native thread CPU accounting unavailable")";
+        pending_ctx_.extra_platform_metadata["MSPT limitation"] =
+            R"("non-hook estimate; blocking waits inside a healthy tick can be under-reported")";
+        pending_ctx_.extra_platform_metadata["Uptime source"] =
+            R"("plugin statistics tracker construction time; not server process start")";
         {
             std::int64_t start_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                        getServer().getStartTime().time_since_epoch())
+                                        server_stats_.getStartTime().time_since_epoch())
                                         .count();
             pending_ctx_.uptime_ms = nowMs() - start_ms;
         }
@@ -716,65 +746,16 @@ private:
         }
 
         pending_ctx_.world = spark::WorldInfo{};
-        auto &&level_result = getServer().getLevel();
-        if (endstone::Level *level = pointerFromApi(level_result)) {
-            for (endstone::Dimension *dimension : level->getDimensions()) {
-                std::map<std::pair<int, int>, spark::WorldChunk> chunks;
-                for (const auto &chunk : dimension->getLoadedChunks()) {
-                    if (chunk) {
-                        int x = chunk->getX();
-                        int z = chunk->getZ();
-                        chunks.try_emplace({x, z}, spark::WorldChunk{x, z});
-                    }
-                }
-                if (chunks.empty()) {
-                    continue;
-                }
-
-                for (endstone::Actor *actor : dimension->getActors()) {
-                    if (!actor) {
-                        continue;
-                    }
-                    endstone::Location location = actor->getLocation();
-                    int chunk_x = floorDiv(location.getBlockX(), 16);
-                    int chunk_z = floorDiv(location.getBlockZ(), 16);
-                    auto it = chunks.find({chunk_x, chunk_z});
-                    if (it == chunks.end()) {
-                        continue;
-                    }
-                    it->second.total_entities++;
-                    it->second.entity_counts[actorTypeName(actor->getType())]++;
-                }
-
-                spark::WorldEntry world;
-                world.name = dimensionName(*dimension);
-                std::map<std::pair<int, int>, spark::WorldRegion> regions;
-                for (auto &[coordinate, chunk] : chunks) {
-                    auto region_coordinate = std::pair{floorDiv(coordinate.first, 32),
-                                                       floorDiv(coordinate.second, 32)};
-                    spark::WorldRegion &region = regions[region_coordinate];
-                    region.total_entities += chunk.total_entities;
-                    world.total_entities += chunk.total_entities;
-                    for (const auto &[type, count] : chunk.entity_counts) {
-                        pending_ctx_.world.entity_counts[type] += count;
-                    }
-                    region.chunks.push_back(std::move(chunk));
-                }
-                for (auto &entry : regions) {
-                    world.regions.push_back(std::move(entry.second));
-                }
-                pending_ctx_.world.total_entities += world.total_entities;
-                pending_ctx_.world.worlds.push_back(std::move(world));
-            }
-            pending_ctx_.world.present = !pending_ctx_.world.worlds.empty();
-        }
+        // Endstone v0.5.0 exposes actors only at Level scope and does not expose
+        // loaded chunks or a reliable actor-to-dimension mapping. Do not emit a
+        // fabricated World/Region/Chunk hierarchy.
 
         pending_save_ = save;
         pending_sender_ = sender_name;
         pending_folder_ = getDataFolder();
 
         exporting_.store(true);
-        // NOTE: Endstone's runTaskAsync has a use-after-free — scheduler.cpp submits
+        // NOTE: Endstone's runTaskAsync has a use-after-free -- scheduler.cpp submits
         // `[&task]{ task->run(); }`, capturing the loop variable by reference into a
         // queue it then erases. So we run the export on our own thread and hop back to
         // the main thread with a sync task (the safe path).
@@ -803,13 +784,12 @@ private:
         std::string message;
         try {
             std::string body = profiler_.exportData(pending_ctx_);
-            std::string compressed = spark::gzipCompress(body);
             if (pending_save_) {
                 spark::ProfileFileResult saved =
-                    spark::saveProfileToDirectory(pending_folder_, compressed, nowMs());
+                    spark::saveProfileToDirectory(pending_folder_, body, nowMs());
                 if (saved.ok) {
                     outcome = ExportOutcome::Saved;
-                    message = "Saved to " + saved.path.string() + " — open it at " +
+                    message = "Saved to " + saved.path.string() + " -- open it at " +
                               spark::kViewerUrl;
                 }
                 else {
@@ -817,8 +797,12 @@ private:
                 }
             }
             else {
+                // Send the raw protobuf. Bytebin stores/serves the payload with
+                // the supplied sampler content type; avoiding request-side gzip
+                // prevents proxies or Bytebin from preserving an extra gzip layer
+                // that the spark viewer then tries to parse as protobuf.
                 spark::UploadResult result =
-                    spark::uploadToBytebin(compressed, spark::kBytebinUrl,
+                    spark::uploadToBytebin(body, spark::kBytebinUrl,
                                            spark::kSamplerContentType,
                                            std::string("endstone-spark/") + spark::kVersion);
                 if (result.ok) {
@@ -827,12 +811,12 @@ private:
                 }
                 else {
                     spark::ProfileFileResult saved =
-                        spark::saveProfileToDirectory(pending_folder_, compressed, nowMs());
+                        spark::saveProfileToDirectory(pending_folder_, body, nowMs());
                     if (saved.ok) {
                         outcome = ExportOutcome::Saved;
                         message = "Upload failed (" + result.error +
                                   "), so the profile was saved to " + saved.path.string() +
-                                  " — open it at " + spark::kViewerUrl;
+                                  " -- open it at " + spark::kViewerUrl;
                     }
                     else {
                         message = "Upload failed (" + result.error +
@@ -882,22 +866,23 @@ private:
 
     void cmdTps(endstone::CommandSender &sender)
     {
-        endstone::Server &s = getServer();
-        float ctps = s.getCurrentTicksPerSecond();
-        float atps = s.getAverageTicksPerSecond();
-        float cmspt = s.getCurrentMillisecondsPerTick();
-        float amspt = s.getAverageMillisecondsPerTick();
+        float ctps = server_stats_.getCurrentTicksPerSecond();
+        float atps = server_stats_.getAverageTicksPerSecond();
+        float cmspt = server_stats_.getCurrentMillisecondsPerTick();
+        float amspt = server_stats_.getAverageMillisecondsPerTick();
         sender.sendMessage("{}TPS {}(cur/avg){}: {}{:.1f}{} / {}{:.1f}", ColorFormat::Gold, ColorFormat::Gray,
                            ColorFormat::Reset, tpsColor(ctps), ctps, ColorFormat::Gray, tpsColor(atps), atps);
-        sender.sendMessage("{}MSPT {}(cur/avg){}: {}{:.2f}ms{} / {}{:.2f}ms", ColorFormat::Gold, ColorFormat::Gray,
-                           ColorFormat::Reset, msptColor(cmspt), cmspt, ColorFormat::Gray, msptColor(amspt), amspt);
+        sender.sendMessage("{}Estimated MSPT {}(cur/avg; non-hook hybrid){}: "
+                           "{}{:.2f}ms{} / {}{:.2f}ms",
+                           ColorFormat::Gold, ColorFormat::Gray, ColorFormat::Reset,
+                           msptColor(cmspt), cmspt, ColorFormat::Gray, msptColor(amspt), amspt);
     }
 
     void cmdHealth(endstone::CommandSender &sender)
     {
         cmdTps(sender);
         long uptime = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now() -
-                                                                       getServer().getStartTime())
+                                                                       server_stats_.getStartTime())
                           .count();
         sender.sendMessage("{}Uptime: {}{}", ColorFormat::Gold, ColorFormat::Gray, formatDuration(uptime));
         sender.sendMessage("{}Players online: {}{}", ColorFormat::Gold, ColorFormat::Gray,
@@ -987,6 +972,7 @@ private:
 
     spark::Profiler profiler_;
     spark::TickMonitor tick_monitor_;
+    spark::ServerStats server_stats_;
     std::string tick_monitor_sender_ = "CONSOLE";
     std::string bds_executable_sha256_;
     std::atomic<std::uint64_t> main_tid_{0};
@@ -1006,7 +992,7 @@ private:
 
 ENDSTONE_PLUGIN("spark", "0.3.0", SparkPlugin)
 {
-    description = "spark profiler for Endstone — find what's slowing your server down.";
+    description = "spark profiler for Endstone -- find what's slowing your server down.";
     authors = {"endstone-spark (profiler format & viewer by lucko/spark)"};
     prefix = "spark";
     load = endstone::PluginLoadOrder::PostWorld;

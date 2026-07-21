@@ -14,10 +14,10 @@ struct ProfileFileResult {
     std::string error;
 };
 
-// Atomically writes an already-compressed spark profile to a unique file in
-// `folder`. Existing profiles are never overwritten.
+// Atomically writes a raw SamplerData protobuf payload to a unique .sparkprofile
+// file in `folder`. Existing profiles are never overwritten.
 ProfileFileResult saveProfileToDirectory(const std::filesystem::path &folder,
-                                         std::string_view compressed_profile,
+                                         std::string_view profile,
                                          std::int64_t timestamp_ms);
 
 }  // namespace spark

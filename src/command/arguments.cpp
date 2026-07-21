@@ -2,6 +2,8 @@
 
 #include <charconv>
 #include <cmath>
+#include <locale>
+#include <sstream>
 #include <utility>
 
 namespace spark {
@@ -96,9 +98,15 @@ std::optional<double> Arguments::doubleFlag(const std::string &name) const
     }
     const std::string &text = it->second;
     double value = 0.0;
-    auto [end, error] =
-        std::from_chars(text.data(), text.data() + text.size(), value, std::chars_format::general);
-    if (error != std::errc{} || end != text.data() + text.size() || !std::isfinite(value)) {
+
+    // libc++ 18 does not provide the floating-point std::from_chars
+    // overloads. Use the classic C locale so command-line decimal parsing
+    // remains deterministic and independent of the process locale.
+    std::istringstream stream(text);
+    stream.imbue(std::locale::classic());
+    stream >> std::noskipws >> value;
+
+    if (!stream || stream.peek() != std::char_traits<char>::eof() || !std::isfinite(value)) {
         return std::nullopt;
     }
     return value;

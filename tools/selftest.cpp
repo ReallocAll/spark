@@ -1,7 +1,7 @@
 // Offline end-to-end test for the sampler + spark serializer, with no BDS involved.
 // Spawns a worker thread with a recognizable nested call pattern plus a sleeping
-// phase, profiles it, and writes profile.pb (raw SamplerData) + profile.sparkprofile
-// (gzipped, loadable in the spark viewer). Pass --upload to POST to bytebin.
+// phase, profiles it, and writes profile.pb + profile.sparkprofile as raw
+// SamplerData protobuf payloads. Pass --upload to POST a gzipped payload to bytebin.
 
 #include <algorithm>
 #include <atomic>
@@ -1084,9 +1084,10 @@ int main(int argc, char **argv)
 
     std::ofstream("profile.pb", std::ios::binary).write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
     std::string gz = spark::gzipCompress(bytes);
-    std::ofstream("profile.sparkprofile", std::ios::binary).write(gz.data(), static_cast<std::streamsize>(gz.size()));
+    std::ofstream("profile.sparkprofile", std::ios::binary)
+        .write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
 
-    spark::ProfileFileResult saved = spark::saveProfileToDirectory(".", gz, 42);
+    spark::ProfileFileResult saved = spark::saveProfileToDirectory(".", bytes, 42);
     if (!saved.ok) {
         std::fprintf(stderr, "profile file: atomic save failed: %s\n", saved.error.c_str());
         return 1;
@@ -1097,8 +1098,8 @@ int main(int argc, char **argv)
     saved_stream.close();
     std::error_code cleanup_error;
     std::filesystem::remove(saved.path, cleanup_error);
-    if (round_trip != gz || cleanup_error) {
-        std::fprintf(stderr, "profile file: saved gzip payload did not round-trip cleanly\n");
+    if (round_trip != bytes || cleanup_error) {
+        std::fprintf(stderr, "profile file: saved protobuf payload did not round-trip cleanly\n");
         return 1;
     }
 
@@ -1107,7 +1108,7 @@ int main(int argc, char **argv)
     std::printf("wrote profile.pb, profile.sparkprofile\n");
 
     if (upload) {
-        auto result = spark::uploadToBytebin(gz, spark::kBytebinUrl,
+        auto result = spark::uploadToBytebin(bytes, spark::kBytebinUrl,
                                                       spark::kSamplerContentType,
                                                       std::string("endstone-spark/") + spark::kVersion);
         if (result.ok) {

@@ -1,4 +1,5 @@
 cmake_minimum_required(VERSION 3.23)
+
 project(spark VERSION 0.3.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -40,7 +41,7 @@ endif ()
 # pass -DFETCHCONTENT_SOURCE_DIR_ENDSTONE=<path> to reuse an existing checkout.
 FetchContent_Declare(endstone
         GIT_REPOSITORY https://github.com/EndstoneMC/endstone.git
-        GIT_TAG v0.11)
+        GIT_TAG v0.5.0)
 FetchContent_MakeAvailable(endstone)
 
 # --- platform-independent profiler core (no Endstone dependency) ---
@@ -56,7 +57,8 @@ add_library(spark_core STATIC
         src/sampler/thread_info.cpp
         src/stats/executable_hash.cpp
         src/stats/tick_monitor.cpp
-        src/stats/system_stats.cpp)
+        src/stats/system_stats.cpp
+        src/stats/server_stats.cpp)
 if (WIN32)
     target_sources(spark_core PRIVATE
             src/sampler/capture_windows.cpp
