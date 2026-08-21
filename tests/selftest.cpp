@@ -1448,6 +1448,41 @@ bool verifyStatisticsSerialization()
     return true;
 }
 
+bool verifyGameRuleSerialization()
+{
+    spark::ModuleTable modules;
+    const spark::ModuleId module = modules.intern("game-rule-module");
+    const spark::FrameKey frame{.module = module, .rva = 0x10, .raw_address = 0x10};
+    spark::CallTree tree;
+    tree.log({frame}, 0);
+
+    spark::ProfileMetadata metadata;
+    metadata.platform_stats.present = true;
+    metadata.world.present = true;
+    metadata.world.game_rules.push_back({.name = "dodaylightcycle", .world_values = {{"level", "false"}}});
+
+    std::unordered_map<spark::FrameKey, spark::ResolvedFrame, spark::FrameKeyHash> resolved;
+    const std::string profile = spark::buildSamplerData(metadata, tree, resolved);
+
+    ProtoField world_statistics;
+    ProtoField game_rule;
+    ProtoField name;
+    ProtoField default_value;
+    ProtoField world_value;
+    ProtoField world_name;
+    ProtoField current_value;
+    if (!findProtoPath(profile, {1, 8, 8}, world_statistics) ||
+        !findProtoPath(world_statistics.bytes, {4}, game_rule) || !findProtoField(game_rule.bytes, 1, name) ||
+        name.bytes != "dodaylightcycle" || findProtoField(game_rule.bytes, 2, default_value) ||
+        !findProtoPath(game_rule.bytes, {3}, world_value) || !findProtoField(world_value.bytes, 1, world_name) ||
+        world_name.bytes != "level" || !findProtoField(world_value.bytes, 2, current_value) ||
+        current_value.bytes != "false") {
+        std::fprintf(stderr, "game rule serialization: name/current mapping or absent default was incorrect\n");
+        return false;
+    }
+    return true;
+}
+
 bool verifyLiveProfilerWindowStatistics(std::uint64_t worker_tid)
 {
     spark::StatisticsService statistics;
@@ -3762,7 +3797,7 @@ int main(int argc, char **argv)
 
     if (argc > 1 && std::string(argv[1]) == "--statistics-only") {
         return verifyStatisticsService() && verifySystemResourceStats() && verifyWorldGaugeStatistics() &&
-                       verifyWorldGaugeAbsentWhenNotRecorded()
+                       verifyWorldGaugeAbsentWhenNotRecorded() && verifyGameRuleSerialization()
                  ? 0
                  : 1;
     }
@@ -3793,9 +3828,9 @@ int main(int argc, char **argv)
         !verifyThreadSelectorSemantics() || !verifyTickMonitor() || !verifyStatisticsService() ||
         !verifySystemResourceStats() || !verifyWorldGaugeStatistics() || !verifyWorldGaugeAbsentWhenNotRecorded() ||
         !verifyThreadDiscovery() || !verifyMultiThreadSerialization() || !verifyStatisticsSerialization() ||
-        !verifyHealthServerConfigurations() || !verifyLiveProfilerWindowStatistics(GWorkerTid.load()) ||
-        !verifyLiveExportStopCancel(GWorkerTid.load()) || !verifyLiveExportTimeout(GWorkerTid.load()) ||
-        !verifyViewerShutdownDuringLiveExport(GWorkerTid.load()) ||
+        !verifyGameRuleSerialization() || !verifyHealthServerConfigurations() ||
+        !verifyLiveProfilerWindowStatistics(GWorkerTid.load()) || !verifyLiveExportStopCancel(GWorkerTid.load()) ||
+        !verifyLiveExportTimeout(GWorkerTid.load()) || !verifyViewerShutdownDuringLiveExport(GWorkerTid.load()) ||
         !verifyViewerDisconnectKeepsProfilerRunning(GWorkerTid.load()) ||
         !verifyAllocationViewerLifecycle(GWorkerTid.load()) || !verifyWorkerExceptionBoundaries(GWorkerTid.load()) ||
         !verifyAsyncNetworkCommands(GWorkerTid.load()) || !verifyBackgroundCommandValidation(GWorkerTid.load()) ||
