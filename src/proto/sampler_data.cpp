@@ -237,7 +237,7 @@ std::string buildMetadata(const ProfileMetadata &m)
         if (p.online_mode > 0) {
             pw.varint(9, static_cast<std::uint64_t>(p.online_mode));
         }
-        if (m.world.present) {  // world (8): WorldStatistics { total_entities, entity_counts, worlds }
+        if (m.world.present) {  // world (8): WorldStatistics { total_entities, entity_counts, worlds, game_rules }
             std::string ws;
             ProtoWriter wsw(ws);
             wsw.int32(1, m.world.total_entities);
@@ -275,6 +275,22 @@ std::string buildMetadata(const ProfileMetadata &m)
                     worldw.message(3, region);
                 }
                 wsw.message(3, world);
+            }
+            for (const GameRuleInfo &game_rule : m.world.game_rules) {
+                std::string rule;
+                ProtoWriter rulew(rule);
+                rulew.string(1, game_rule.name);
+                if (game_rule.default_value.has_value()) {
+                    rulew.string(2, *game_rule.default_value);
+                }
+                for (const auto &[world_name, value] : game_rule.world_values) {
+                    std::string world_value;
+                    ProtoWriter world_value_writer(world_value);
+                    world_value_writer.string(1, world_name);
+                    world_value_writer.string(2, value);
+                    rulew.message(3, world_value);
+                }
+                wsw.message(4, rule);
             }
             pw.message(8, ws);
         }

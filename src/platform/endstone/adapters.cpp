@@ -1,12 +1,15 @@
 #include "platform/endstone/adapters.h"
 
+#include <array>
 #include <atomic>
+#include <charconv>
 #include <chrono>
 #include <filesystem>
 #include <map>
 #include <memory>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "core/metadata/server_properties.h"
@@ -76,6 +79,85 @@ int floorDiv(int value, int divisor)
     int quotient = value / divisor;
     int remainder = value % divisor;
     return remainder < 0 ? quotient - 1 : quotient;
+}
+
+std::string formatGameRuleValue(const endstone::GameRuleValue &value)
+{
+    if (const auto *bool_value = std::get_if<bool>(&value)) {
+        return *bool_value ? "true" : "false";
+    }
+    if (const auto *int_value = std::get_if<int>(&value)) {
+        return std::to_string(*int_value);
+    }
+    const auto *float_value = std::get_if<float>(&value);
+    if (float_value == nullptr) {
+        return {};
+    }
+
+    char buffer[64];
+    const auto result = std::to_chars(buffer, buffer + sizeof(buffer), *float_value, std::chars_format::general);
+    if (result.ec != std::errc{}) {
+        return {};
+    }
+    return {buffer, result.ptr};
+}
+
+constexpr std::array KBooleanGameRules{
+    endstone::GameRule::CommandBlockOutput,
+    endstone::GameRule::CommandBlocksEnabled,
+    endstone::GameRule::DoDayLightCycle,
+    endstone::GameRule::DoEntityDrops,
+    endstone::GameRule::DoFireTick,
+    endstone::GameRule::DoImmediateRespawn,
+    endstone::GameRule::DoInsomnia,
+    endstone::GameRule::DoLimitedCrafting,
+    endstone::GameRule::DoMobLoot,
+    endstone::GameRule::DoMobSpawning,
+    endstone::GameRule::DoTileDrops,
+    endstone::GameRule::DoWeatherCycle,
+    endstone::GameRule::DrowningDamage,
+    endstone::GameRule::FallDamage,
+    endstone::GameRule::FireDamage,
+    endstone::GameRule::FreezeDamage,
+    endstone::GameRule::KeepInventory,
+    endstone::GameRule::LocatorBar,
+    endstone::GameRule::MobGriefing,
+    endstone::GameRule::NaturalRegeneration,
+    endstone::GameRule::ProjectilesCanBreakBlocks,
+    endstone::GameRule::Pvp,
+    endstone::GameRule::RecipesUnlock,
+    endstone::GameRule::RespawnBlocksExplode,
+    endstone::GameRule::SendCommandFeedback,
+    endstone::GameRule::ShowBorderEffect,
+    endstone::GameRule::ShowCoordinates,
+    endstone::GameRule::ShowDaysPlayed,
+    endstone::GameRule::ShowDeathMessages,
+    endstone::GameRule::ShowRecipeMessages,
+    endstone::GameRule::ShowTags,
+    endstone::GameRule::TntExplodes,
+    endstone::GameRule::TntExplosionDropDecay,
+};
+
+constexpr std::array KIntegerGameRules{
+    endstone::GameRule::FunctionCommandLimit,      endstone::GameRule::MaxCommandChainLength,
+    endstone::GameRule::PlayersSleepingPercentage, endstone::GameRule::PlayerWaypoints,
+    endstone::GameRule::RandomTickSpeed,           endstone::GameRule::SpawnRadius,
+};
+
+template <typename T, std::size_t N>
+void appendGameRules(WorldInfo &world, endstone::Level &level, const std::string &world_name,
+                     const std::array<endstone::GameRuleId<T>, N> &rules)
+{
+    for (const auto id : rules) {
+        if (!level.hasGameRule(id)) {
+            continue;
+        }
+
+        GameRuleInfo info;
+        info.name = std::string(id.getKey());
+        info.world_values[world_name] = formatGameRuleValue(endstone::GameRuleValue{level.getGameRule(id)});
+        world.game_rules.push_back(std::move(info));
+    }
 }
 
 }  // namespace
@@ -173,7 +255,12 @@ void EndstoneMetadataProvider::gatherWorldMetadata(ExportContext &ctx)
         ctx.world.total_entities += world.total_entities;
         ctx.world.worlds.push_back(std::move(world));
     }
-    ctx.world.present = !ctx.world.worlds.empty();
+
+    const std::string world_name = level.getName();
+    appendGameRules(ctx.world, level, world_name, KBooleanGameRules);
+    appendGameRules(ctx.world, level, world_name, KIntegerGameRules);
+
+    ctx.world.present = !ctx.world.worlds.empty() || !ctx.world.game_rules.empty();
 }
 
 std::int64_t EndstoneMetadataProvider::serverUptimeSeconds()
