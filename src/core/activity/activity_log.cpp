@@ -1,11 +1,12 @@
 #include "core/activity/activity_log.h"
 
 #include <algorithm>
-#include <chrono>
 #include <cstdio>
 #include <fstream>
 #include <sstream>
 #include <string>
+
+#include "core/util/monotonic_time.h"
 
 namespace spark {
 
@@ -15,8 +16,7 @@ constexpr std::int64_t KUrlExpiryMs = 60LL * 24 * 3600 * 1000;  // 60 days
 
 std::int64_t nowMs()
 {
-    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
-        .count();
+    return monotonicUnixMillis();
 }
 
 std::string jsonEscape(std::string_view s)

@@ -173,6 +173,9 @@ bool JournalRecord::asCleanEnd(std::uint64_t &timestamp_ns) const
 
 bool JournalRecord::asSessionConfig(SessionConfig &config) const
 {
+    config.present = false;
+    config.has_window_adjustment = false;
+    config.window_adjustment_ms = 0;
     ByteCursor c(payload.data(), payload.size());
     if (!c.u32(config.interval_us)) {
         return false;
@@ -239,6 +242,15 @@ bool JournalRecord::asSessionConfig(SessionConfig &config) const
         }
         config.thread_patterns.emplace_back(sv.data(), sv.size());
     }
+    if (c.remaining() == sizeof(std::int32_t)) {
+        if (!c.i32(config.window_adjustment_ms)) {
+            return false;
+        }
+        config.has_window_adjustment = true;
+    }
+    else if (c.remaining() != 0) {
+        return false;
+    }
     config.present = true;
     return true;
 }
@@ -283,7 +295,8 @@ bool JournalReader::readSegment(const std::filesystem::path &path, JournalReadRe
     if (!c.u16(version)) {
         return false;
     }
-    if (version != kJournalVersion) {
+    if (version != kLegacyJournalVersion && version != kJournalVersion) {
+        result.valid = false;
         return false;
     }
     std::uint16_t reserved;
@@ -308,12 +321,19 @@ bool JournalReader::readSegment(const std::filesystem::path &path, JournalReadRe
     }
 
     if (!result.valid) {
+        result.version = version;
         result.session_id = session_id;
         result.created_ns = created_ns;
         result.valid = true;
     }
-    else if (result.session_id != session_id) {
-        return false;
+    else {
+        if (result.version != version) {
+            result.valid = false;
+            return false;
+        }
+        if (result.session_id != session_id) {
+            return false;
+        }
     }
 
     // Records.
@@ -380,8 +400,15 @@ bool JournalReader::readSegment(const std::filesystem::path &path, JournalReadRe
         if (rec.type == RecordType::CleanEnd) {
             result.has_clean_end = true;
         }
-        if (rec.type == RecordType::SessionConfig && !result.session_config.present) {
-            rec.asSessionConfig(result.session_config);
+        if (rec.type == RecordType::SessionConfig) {
+            SessionConfig parsed_config;
+            if (!rec.asSessionConfig(parsed_config)) {
+                result.valid = false;
+                return false;
+            }
+            if (!result.session_config.present) {
+                result.session_config = std::move(parsed_config);
+            }
         }
         result.records.push_back(std::move(rec));
     }

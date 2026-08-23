@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <exception>
+#include <limits>
 #include <string_view>
 #include <utility>
 
@@ -28,6 +29,19 @@ constexpr std::size_t KLeadingDrop = 0;
 #else
 constexpr std::size_t KLeadingDrop = 2;
 #endif
+
+std::int32_t clampWindow(std::int64_t window) noexcept
+{
+    constexpr std::int64_t k_min = std::numeric_limits<std::int32_t>::min();
+    constexpr std::int64_t k_max = std::numeric_limits<std::int32_t>::max();
+    if (window < k_min) {
+        return std::numeric_limits<std::int32_t>::min();
+    }
+    if (window > k_max) {
+        return std::numeric_limits<std::int32_t>::max();
+    }
+    return static_cast<std::int32_t>(window);
+}
 
 }  // namespace
 
@@ -118,7 +132,6 @@ bool Sampler::start(const SamplerConfig &config)
         return false;
     }
     resetSession();
-    start_time_ = std::chrono::steady_clock::now();
     if (!startServiceThreads()) {
         return false;
     }
@@ -141,6 +154,12 @@ bool Sampler::stop()
         return false;
     }
     return true;
+}
+
+void Sampler::requestStop() noexcept
+{
+    running_.store(false, std::memory_order_release);
+    wait_cv_.notify_all();
 }
 
 void Sampler::pauseForExport()
@@ -184,12 +203,15 @@ void Sampler::resetSession()
     tick_decisions_.clear();
     tick_decision_base_ = 0;
     window_sample_counts_.clear();
-    next_history_prune_window_ = profiling_window::kHistorySize;
+    const std::int32_t current_window = currentWindow();
+    next_history_prune_window_ = current_window;
     modules_ = ModuleTable{};
     window_ticks_.clear();
-    next_tick_history_prune_window_ = profiling_window::kHistorySize;
+    next_tick_history_prune_window_ = current_window;
     current_tick_.store(0);
     sample_count_.store(0, std::memory_order_relaxed);
+    dropped_samples_.store(0, std::memory_order_relaxed);
+    dropped_tick_events_.store(0, std::memory_order_relaxed);
     sampler_tid_.store(0, std::memory_order_relaxed);
     aggregator_tid_.store(0, std::memory_order_relaxed);
     worker_failed_.store(false, std::memory_order_relaxed);
@@ -200,17 +222,17 @@ void Sampler::resetSession()
     journaled_threads_.clear();
 }
 
-std::int32_t Sampler::currentWindow() const
+std::int32_t Sampler::currentWindow()
 {
-    const auto elapsed = std::chrono::steady_clock::now() - start_time_;
-    const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
-    return static_cast<std::int32_t>(elapsed_ms / profiling_window::kSizeMs);
+    return profiling_window::windowNow();
 }
 
 void Sampler::onTick(double mspt_ms)
 {
     std::uint64_t finished = current_tick_.load();
-    ticks_.enqueue(TickEvent{.tick_id = finished, .mspt_ms = mspt_ms});
+    if (!ticks_.try_enqueue(tick_producer_, TickEvent{.tick_id = finished, .mspt_ms = mspt_ms})) {
+        dropped_tick_events_.fetch_add(1, std::memory_order_relaxed);
+    }
     current_tick_.store(finished + 1);
 
     const std::int32_t window = currentWindow();
@@ -219,6 +241,15 @@ void Sampler::onTick(double mspt_ms)
     w.mspt_sum += mspt_ms;
     w.mspt_max = std::max(mspt_ms, w.mspt_max);
     maybePruneTickHistory(window);
+}
+
+bool Sampler::enqueueSample(Sample sample) noexcept
+{
+    if (samples_.try_enqueue(sample_producer_, std::move(sample))) {
+        return true;
+    }
+    dropped_samples_.fetch_add(1, std::memory_order_relaxed);
+    return false;
 }
 
 void Sampler::samplerLoop()
@@ -367,7 +398,7 @@ void Sampler::samplerLoop()
             if (config_.ignore_sleeping && isSleepFrame(sample.frames.front().raw_address)) {
                 break;
             }
-            samples_.enqueue(std::move(sample));
+            enqueueSample(std::move(sample));
             break;
         }
         sampler_heartbeat_.beat();
@@ -402,7 +433,8 @@ void Sampler::maybePruneHistory(std::int32_t current_window)
     if (!config_.continuous || current_window < next_history_prune_window_) {
         return;
     }
-    const std::int32_t minimum_window = current_window - profiling_window::kHistorySize;
+    const std::int32_t minimum_window = clampWindow(static_cast<std::int64_t>(current_window) -
+                                                    static_cast<std::int64_t>(profiling_window::kHistorySize));
     tree_.pruneBefore(minimum_window);
     std::erase_if(thread_trees_,
                   [minimum_window](auto &entry) { return entry.second.tree.pruneBefore(minimum_window); });
@@ -413,7 +445,7 @@ void Sampler::maybePruneHistory(std::int32_t current_window)
     }
     window_sample_counts_.erase(window_sample_counts_.begin(), end);
     sample_count_.fetch_sub(removed_samples, std::memory_order_relaxed);
-    next_history_prune_window_ = current_window + kHistoryPruneIntervalWindows;
+    next_history_prune_window_ = static_cast<std::int64_t>(current_window) + kHistoryPruneIntervalWindows;
 }
 
 void Sampler::maybePruneTickHistory(std::int32_t current_window)
@@ -421,9 +453,10 @@ void Sampler::maybePruneTickHistory(std::int32_t current_window)
     if (!config_.continuous || current_window < next_tick_history_prune_window_) {
         return;
     }
-    const std::int32_t minimum_window = current_window - profiling_window::kHistorySize;
+    const std::int32_t minimum_window = clampWindow(static_cast<std::int64_t>(current_window) -
+                                                    static_cast<std::int64_t>(profiling_window::kHistorySize));
     window_ticks_.erase(window_ticks_.begin(), window_ticks_.lower_bound(minimum_window));
-    next_tick_history_prune_window_ = current_window + kHistoryPruneIntervalWindows;
+    next_tick_history_prune_window_ = static_cast<std::int64_t>(current_window) + kHistoryPruneIntervalWindows;
 }
 
 void Sampler::recordTickDecision(std::uint64_t tick_id, bool keep)

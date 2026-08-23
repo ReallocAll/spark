@@ -24,6 +24,12 @@ set_target_properties(spark_symbol_guess_evidence_test PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME spark_symbol_guess_evidence_test COMMAND spark_symbol_guess_evidence_test)
 
+add_executable(spark_sampler_bounded_queue_test native/sampler/bounded_queue_test.cpp)
+target_link_libraries(spark_sampler_bounded_queue_test PRIVATE spark_core)
+set_target_properties(spark_sampler_bounded_queue_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME spark_sampler_bounded_queue_test COMMAND spark_sampler_bounded_queue_test)
+
 add_executable(spark_ping_statistics_test core/stats/ping_statistics_test.cpp)
 target_link_libraries(spark_ping_statistics_test PRIVATE spark_core)
 set_target_properties(spark_ping_statistics_test PROPERTIES
@@ -35,6 +41,12 @@ target_link_libraries(spark_network_monitor_test PRIVATE spark_core)
 set_target_properties(spark_network_monitor_test PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME spark_network_monitor_test COMMAND spark_network_monitor_test)
+
+add_executable(spark_arguments_test core/command/arguments_test.cpp)
+target_link_libraries(spark_arguments_test PRIVATE spark_core)
+set_target_properties(spark_arguments_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME spark_arguments_test COMMAND spark_arguments_test)
 
 add_executable(spark_placeholder_statistics_test core/stats/placeholder_statistics_test.cpp)
 target_link_libraries(spark_placeholder_statistics_test PRIVATE spark_core)
@@ -90,11 +102,47 @@ set_target_properties(spark_viewer_update_worker_test PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME spark_viewer_update_worker_test COMMAND spark_viewer_update_worker_test)
 
+add_executable(spark_profiler_timeout_test application/profiler/profiler_timeout_test.cpp)
+target_link_libraries(spark_profiler_timeout_test PRIVATE spark_application)
+set_target_properties(spark_profiler_timeout_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME spark_profiler_timeout_test COMMAND spark_profiler_timeout_test)
+
+add_executable(spark_profiler_timeout_integration_test application/profiler/profiler_timeout_integration_test.cpp)
+target_link_libraries(spark_profiler_timeout_integration_test PRIVATE spark_application)
+set_target_properties(spark_profiler_timeout_integration_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME spark_profiler_timeout_integration_test COMMAND spark_profiler_timeout_integration_test)
+
+add_executable(spark_health_dashboard_test application/health/health_dashboard_test.cpp)
+target_link_libraries(spark_health_dashboard_test PRIVATE spark_application)
+set_target_properties(spark_health_dashboard_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME spark_health_dashboard_test COMMAND spark_health_dashboard_test)
+
+add_executable(spark_health_command_routing_test application/health/health_command_routing_test.cpp)
+target_link_libraries(spark_health_command_routing_test PRIVATE spark_application)
+set_target_properties(spark_health_command_routing_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME spark_health_command_routing_test COMMAND spark_health_command_routing_test)
+
+add_executable(spark_health_report_test application/health/health_report_test.cpp)
+target_link_libraries(spark_health_report_test PRIVATE spark_application)
+set_target_properties(spark_health_report_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME spark_health_report_test COMMAND spark_health_report_test)
+
 add_executable(spark_profiler_start_options_test application/profiler/profiler_start_options_test.cpp)
 target_link_libraries(spark_profiler_start_options_test PRIVATE spark_application)
 set_target_properties(spark_profiler_start_options_test PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME spark_profiler_start_options_test COMMAND spark_profiler_start_options_test)
+
+add_executable(spark_profiler_open_orchestrator_test application/profiler/profiler_open_orchestrator_test.cpp)
+target_link_libraries(spark_profiler_open_orchestrator_test PRIVATE spark_application)
+set_target_properties(spark_profiler_open_orchestrator_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME spark_profiler_open_orchestrator_test COMMAND spark_profiler_open_orchestrator_test)
 
 add_executable(spark_placeholder_resolver_test application/placeholder/spark_placeholder_resolver_test.cpp)
 target_link_libraries(spark_placeholder_resolver_test PRIVATE spark_application)
@@ -125,6 +173,12 @@ target_link_libraries(spark_profiler_export_test PRIVATE spark_core)
 set_target_properties(spark_profiler_export_test PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME spark_profiler_export_test COMMAND spark_profiler_export_test)
+
+add_executable(spark_included_ticks_test core/profiler/included_ticks_test.cpp)
+target_link_libraries(spark_included_ticks_test PRIVATE spark_core)
+set_target_properties(spark_included_ticks_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME spark_included_ticks_test COMMAND spark_included_ticks_test)
 
 add_executable(spark_config_test core/config/spark_config_test.cpp)
 target_link_libraries(spark_config_test PRIVATE spark_core)
@@ -186,11 +240,23 @@ set_target_properties(spark_profiler_upload_alias_test PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME spark_profiler_upload_alias_test COMMAND spark_profiler_upload_alias_test)
 
+add_executable(spark_command_registry_test application/command/command_registry_test.cpp)
+target_link_libraries(spark_command_registry_test PRIVATE spark_application)
+set_target_properties(spark_command_registry_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME spark_command_registry_test COMMAND spark_command_registry_test)
+
 add_executable(spark_world_region_test core/util/world_region_test.cpp)
 target_link_libraries(spark_world_region_test PRIVATE spark_core)
 set_target_properties(spark_world_region_test PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME spark_world_region_test COMMAND spark_world_region_test)
+
+add_executable(spark_monotonic_time_test core/util/monotonic_time_test.cpp)
+target_link_libraries(spark_monotonic_time_test PRIVATE spark_core)
+set_target_properties(spark_monotonic_time_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME spark_monotonic_time_test COMMAND spark_monotonic_time_test)
 
 add_executable(spark_server_properties_test core/metadata/server_properties_test.cpp)
 target_link_libraries(spark_server_properties_test PRIVATE spark_core)

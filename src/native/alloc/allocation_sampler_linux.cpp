@@ -58,7 +58,6 @@ constexpr std::size_t KMaxProfileNodes = 131072;
 constexpr std::size_t KMaxPendingSamples = 32768;
 constexpr std::size_t KMaxTickDecisions = 100000;
 constexpr std::size_t KTickEventCapacity = 4096;
-constexpr std::int32_t KMaxProfileWindows = 86400;
 constexpr std::size_t KFramesToSkip = 4;
 
 void *tombstonePointer() noexcept
@@ -361,7 +360,6 @@ struct AllocationSampler::Impl {
     std::atomic<std::uint64_t> generation{0};
     std::atomic<std::uint64_t> interval_bytes{kDefaultAllocationIntervalBytes};
     std::atomic<std::uint64_t> sampling_seed{0};
-    std::atomic<std::uint64_t> started_ms{0};
     std::atomic<std::uint64_t> hook_calls{0};
     std::atomic<std::uint64_t> successful_allocation_calls{0};
     std::atomic<std::uint64_t> sample_count{0};
@@ -996,12 +994,7 @@ struct AllocationSampler::Impl {
         allocation->tick_id = current_tick.load(std::memory_order_relaxed);
         allocation->thread_id = thread.session_thread_id;
         allocation->os_thread_id = thread.os_thread_id;
-        const std::uint64_t started = started_ms.load(std::memory_order_relaxed);
-        allocation->window = static_cast<std::int32_t>((
-            std::min)(static_cast<std::uint64_t>(KMaxProfileWindows - 1),
-                      started != 0 && allocation->allocated_ms >= started
-                          ? (allocation->allocated_ms - started) / static_cast<std::uint64_t>(profiling_window::kSizeMs)
-                          : 0));
+        allocation->window = profiling_window::windowNow();
         allocation->depth = static_cast<std::uint16_t>(
             cpptrace::safe_generate_raw_trace(allocation->frames, KStackDepth, KFramesToSkip));
         if (allocation->depth == 0 || !insertLiveAllocation(allocation)) {
@@ -1650,8 +1643,7 @@ struct AllocationSampler::Impl {
             return false;
         }
         interval_bytes.store(static_cast<std::uint64_t>(new_config.interval_bytes), std::memory_order_relaxed);
-        started_ms.store(monotonicMs(), std::memory_order_relaxed);
-        last_module_rescan_ms = started_ms.load(std::memory_order_relaxed);
+        last_module_rescan_ms = monotonicMs();
         const std::uint64_t next_generation = generation.fetch_add(1, std::memory_order_relaxed) + 1;
         sampling_seed.store(next_generation ^ monotonicMs() ^ new_config.session_seed, std::memory_order_relaxed);
 
@@ -1790,12 +1782,7 @@ struct AllocationSampler::Impl {
                 last_module_rescan_ms = now;
             }
         }
-        const std::uint64_t started = started_ms.load(std::memory_order_relaxed);
-        const std::int32_t window = static_cast<std::int32_t>(
-            (std::min)(static_cast<std::uint64_t>(KMaxProfileWindows - 1),
-                       started != 0 && now >= started
-                           ? (now - started) / static_cast<std::uint64_t>(profiling_window::kSizeMs)
-                           : 0));
+        const std::int32_t window = profiling_window::windowNow();
         WindowTickStats &stats = window_ticks[window];
         ++stats.ticks;
         stats.mspt_sum += mspt_ms;
@@ -1837,6 +1824,13 @@ bool AllocationSampler::stop(std::string &error)
 {
     return impl_->stopSession(error);
 }
+
+void AllocationSampler::requestStop() noexcept
+{
+    impl_->tracking.store(false, std::memory_order_release);
+    impl_->running.store(false, std::memory_order_release);
+}
+
 bool AllocationSampler::shutdown(std::string &error)
 {
     return impl_->shutdownBackend(error);

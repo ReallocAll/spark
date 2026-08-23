@@ -145,7 +145,10 @@ void ViewerUpdateWorker::run() noexcept
                 if (!running_.load(std::memory_order_acquire)) {
                     break;
                 }
-                work = std::move(work_).value();
+                if (!work_) {
+                    continue;
+                }
+                work = std::move(*work_);
                 work_.reset();
                 work_active_ = true;
             }

@@ -134,7 +134,10 @@ std::string buildMetadata(const ProfileMetadata &m)
         dw.varint(1, m.ticked ? 1 : 0);
         dw.varint(2, static_cast<std::int32_t>(m.thread_grouper));
         if (m.ticked) {
-            dw.int64(3, m.tick_threshold_ms);
+            dw.int64(3, m.tick_threshold_us);
+            if (m.number_of_included_ticks > 0) {
+                dw.int32(4, m.number_of_included_ticks);
+            }
         }
         w.message(5, d);
     }

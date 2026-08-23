@@ -279,7 +279,7 @@ void testRollingSnapshotRecovery()
     cfg.sync_interval_ms = 20;
     spark::RecoveryWriter writer(cfg);
     assert(writer.start());
-    writer.journalSessionConfig(4000, 0, false, false, false, 1, 0, false, "Console", false, "rolling recovery", {});
+    writer.journalSessionConfig(4000, 0, false, false, false, 1, 0, false, "Console", false, "rolling recovery", {}, 0);
     writer.journalModuleDef(0, "bedrock_server");
     writer.journalThreadDef(1, 100, "Server thread");
     for (int i = 0; i < 200; ++i) {

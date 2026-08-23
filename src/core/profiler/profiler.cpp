@@ -1,11 +1,13 @@
 #include "core/profiler/profiler.h"
 
 #include <algorithm>
-#include <chrono>
+#include <cmath>
 #include <limits>
 #include <regex>
 #include <stdexcept>
 
+#include "core/util/monotonic_time.h"
+#include "profiling_window.h"
 #include "spark_constants.h"
 
 namespace spark {
@@ -13,8 +15,7 @@ namespace {
 
 std::int64_t nowMs()
 {
-    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
-        .count();
+    return monotonicUnixMillis();
 }
 
 }  // namespace
@@ -36,7 +37,7 @@ std::uint64_t Profiler::observedAllocationBytes() const
 
 std::uint64_t Profiler::droppedSamples() const
 {
-    return mode_ == ProfileMode::Allocation ? allocation_sampler_.droppedSamples() : 0;
+    return mode_ == ProfileMode::Allocation ? allocation_sampler_.droppedSamples() : sampler_.droppedSamples();
 }
 
 std::uint64_t Profiler::filteredAllocationSamples() const
@@ -87,6 +88,20 @@ std::size_t Profiler::allocationHookTargetCount() const
     return allocation_sampler_.hookTargetCount();
 }
 
+void Profiler::requestStop() noexcept
+{
+    sampling_stop_requested_.store(true, std::memory_order_release);
+    if (!running_.load(std::memory_order_acquire)) {
+        return;
+    }
+    if (mode_ == ProfileMode::Allocation) {
+        allocation_sampler_.requestStop();
+    }
+    else {
+        sampler_.requestStop();
+    }
+}
+
 bool Profiler::start(const ProfilerOptions &options, std::uint64_t main_tid, std::string &error)
 {
     std::scoped_lock lifecycle_lock(lifecycle_mutex_);
@@ -95,6 +110,7 @@ bool Profiler::start(const ProfilerOptions &options, std::uint64_t main_tid, std
         return false;
     }
     sampling_stop_requested_.store(false, std::memory_order_release);
+    included_ticks_.store(0, std::memory_order_relaxed);
 
     if (options.regex && options.threads.empty()) {
         error = "--regex requires at least one --thread pattern";
@@ -113,6 +129,10 @@ bool Profiler::start(const ProfilerOptions &options, std::uint64_t main_tid, std
     if (options.timeout_seconds > 0 &&
         options.timeout_seconds > (std::numeric_limits<std::int64_t>::max() - session_start_ms) / 1000) {
         error = "profiling timeout is too large";
+        return false;
+    }
+    if (options.only_ticks_over_ms > std::numeric_limits<std::int64_t>::max() / 1000) {
+        error = "tick threshold is too large";
         return false;
     }
 
@@ -145,7 +165,7 @@ bool Profiler::start(const ProfilerOptions &options, std::uint64_t main_tid, std
                     options.only_ticks_over_ms > 0 ? static_cast<std::int32_t>(options.only_ticks_over_ms) : 0,
                     config.all_threads, config.regex_threads, false, static_cast<std::uint8_t>(options.thread_grouper),
                     1, config.live_only, options.creator_name, options.creator_is_player, options.comment,
-                    options.threads);
+                    options.threads, profiling_window::windowAdjustmentMs());
                 // The bounded allocation ModuleTable pre-creates a sentinel
                 // module 0 for overflow paths; journal it so recovery can
                 // remap frames that were assigned to it.
@@ -191,7 +211,8 @@ bool Profiler::start(const ProfilerOptions &options, std::uint64_t main_tid, std
                     options.only_ticks_over_ms > 0 ? static_cast<std::int32_t>(options.only_ticks_over_ms) : 0,
                     config.all_threads, config.regex_threads, config.ignore_sleeping,
                     static_cast<std::uint8_t>(options.thread_grouper), 0, false, options.creator_name,
-                    options.creator_is_player, options.comment, options.threads);
+                    options.creator_is_player, options.comment, options.threads,
+                    profiling_window::windowAdjustmentMs());
                 writer->requestFlush();
                 std::scoped_lock lock(recovery_mutex_);
                 recovery_writer_ = std::move(writer);
@@ -225,6 +246,13 @@ void Profiler::onTick(double mspt_ms)
 {
     if (!running_.load()) {
         return;
+    }
+    if (options_.only_ticks_over_ms > 0 && std::isfinite(mspt_ms) &&
+        mspt_ms > static_cast<double>(options_.only_ticks_over_ms)) {
+        std::int32_t current = included_ticks_.load(std::memory_order_relaxed);
+        while (current < std::numeric_limits<std::int32_t>::max() &&
+               !included_ticks_.compare_exchange_weak(current, current + 1, std::memory_order_relaxed)) {
+        }
     }
     if (mode_ == ProfileMode::Allocation) {
         allocation_sampler_.onTick(mspt_ms);

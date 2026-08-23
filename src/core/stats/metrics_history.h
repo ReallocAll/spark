@@ -90,11 +90,11 @@ private:
         std::int32_t chunks = 0;
     };
 
-    bool due(std::int64_t timestamp_ms, std::size_t size, std::int64_t newest_timestamp_ms) const;
-    bool appendDouble(std::vector<DoubleEntry> &series, std::size_t &head, std::size_t &size, std::int64_t timestamp_ms,
-                      double value);
-    bool appendAverages(std::vector<AveragesEntry> &series, std::size_t &head, std::size_t &size,
-                        std::int64_t timestamp_ms, const MetricsAverages &value);
+    static bool due(std::int64_t timestamp_ms, std::size_t size, std::int64_t newest_timestamp_ms);
+    static bool appendDouble(std::vector<DoubleEntry> &series, std::size_t &head, std::size_t &size,
+                             std::int64_t timestamp_ms, double value);
+    static bool appendAverages(std::vector<AveragesEntry> &series, std::size_t &head, std::size_t &size,
+                               std::int64_t timestamp_ms, const MetricsAverages &value);
     bool appendWorld(std::int64_t timestamp_ms, std::int32_t players, std::int32_t entities, std::int32_t chunks,
                      std::int32_t tile_entities);
 

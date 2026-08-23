@@ -1,5 +1,4 @@
 #include <algorithm>
-#include <chrono>
 #include <deque>
 #include <limits>
 #include <map>
@@ -11,6 +10,7 @@
 
 #include "core/profiler/profiler.h"
 #include "core/profiler/thread_grouper.h"
+#include "core/util/monotonic_time.h"
 #include "proto/sampler_data.h"
 #include "spark_constants.h"
 #ifdef _WIN32
@@ -24,8 +24,7 @@ namespace {
 
 std::int64_t nowMs()
 {
-    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
-        .count();
+    return monotonicUnixMillis();
 }
 
 // spark-viewer parses every extra_platform_metadata value with JSON.parse().
@@ -284,7 +283,8 @@ std::string Profiler::exportData(const ExportContext &ctx, const AllocationSnaps
         meta.thread_patterns = options_.threads;
     }
     meta.ticked = options_.only_ticks_over_ms > 0;
-    meta.tick_threshold_ms = options_.only_ticks_over_ms > 0 ? options_.only_ticks_over_ms : 0;
+    meta.tick_threshold_us = options_.only_ticks_over_ms > 0 ? options_.only_ticks_over_ms * 1000 : 0;
+    meta.number_of_included_ticks = meta.ticked ? included_ticks_.load(std::memory_order_relaxed) : 0;
 
     if (!ctx.bds_executable_sha256.empty()) {
         meta.extra_platform_metadata["BDS executable SHA-256"] = jsonString(ctx.bds_executable_sha256);
@@ -420,6 +420,13 @@ std::string Profiler::exportData(const ExportContext &ctx, const AllocationSnaps
             std::to_string(allocation_sampler_.hookTargetCount());
         meta.extra_platform_metadata["Allocation hook aliases"] = std::to_string(aliases);
         meta.extra_platform_metadata["Allocation hook capabilities"] = jsonString(allocationHookSummary(capabilities));
+    }
+    else {
+        meta.extra_platform_metadata["Execution samples dropped"] = std::to_string(sampler_.droppedSamples());
+        meta.extra_platform_metadata["Execution tick events dropped"] = std::to_string(sampler_.droppedTickEvents());
+        meta.extra_platform_metadata["Execution sample queue capacity"] =
+            std::to_string(Sampler::sampleQueueCapacity());
+        meta.extra_platform_metadata["Execution tick event capacity"] = std::to_string(Sampler::tickQueueCapacity());
     }
 
     meta.platform_stats.present = true;

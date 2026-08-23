@@ -8,7 +8,7 @@
 
 namespace spark {
 
-// SocketChannelInfo (spark_sampler.proto field 8 in SamplerData)
+// SocketChannelInfo (spark.proto; used by SamplerData and HealthData)
 struct SocketChannelInfo {
     std::string channel_id;
     std::vector<std::uint8_t> public_key;  // X.509 DER

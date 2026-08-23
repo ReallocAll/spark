@@ -29,6 +29,8 @@ bool AllocationSampler::stop(std::string &error)
     return true;
 }
 
+void AllocationSampler::requestStop() noexcept {}
+
 bool AllocationSampler::shutdown(std::string &error)
 {
     error.clear();

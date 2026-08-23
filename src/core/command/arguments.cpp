@@ -1,7 +1,9 @@
 #include "core/command/arguments.h"
 
+#include <cctype>
 #include <charconv>
 #include <cmath>
+#include <limits>
 #include <utility>
 
 namespace spark {
@@ -10,7 +12,15 @@ namespace {
 
 bool isFlag(const std::string &token)
 {
-    return token.starts_with("--");
+    return token.size() > 2 && token.starts_with("--");
+}
+
+std::string lowerCase(std::string value)
+{
+    for (char &ch : value) {
+        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    }
+    return value;
 }
 
 }  // namespace
@@ -48,34 +58,63 @@ std::vector<std::string> Arguments::tokenize(const std::string &line)
     return tokens;
 }
 
-Arguments::Arguments(const std::vector<std::string> &tokens) : raw_(tokens)
+Arguments::Arguments(const std::vector<std::string> &tokens, bool allow_subcommand) : raw_(tokens)
 {
     std::size_t i = 0;
-    if (!raw_.empty() && !isFlag(raw_[0])) {
-        sub_ = raw_[0];
-        i = 1;
-    }
+    std::string flag;
+    std::vector<std::string> values;
+
+    const auto store = [this](const std::string &name, const std::vector<std::string> &flag_values) {
+        std::string value;
+        for (std::size_t i = 0; i < flag_values.size(); ++i) {
+            if (i != 0) {
+                value += ' ';
+            }
+            value += flag_values[i];
+        }
+
+        present_.insert(name);
+        const auto range = values_.equal_range(name);
+        for (auto it = range.first; it != range.second; ++it) {
+            if (it->second == value) {
+                return;
+            }
+        }
+        values_.emplace(name, std::move(value));
+    };
+
     for (; i < raw_.size(); ++i) {
-        if (!isFlag(raw_[i])) {
+        const std::string &token = raw_[i];
+        if (i == 0 && allow_subcommand && !isFlag(token)) {
+            sub_ = token;
             continue;
         }
-        std::string name = raw_[i].substr(2);
-        present_.insert(name);
-        if (i + 1 < raw_.size() && !isFlag(raw_[i + 1])) {
-            values_.emplace(name, raw_[i + 1]);
-            ++i;
+        if (isFlag(token)) {
+            if (!flag.empty()) {
+                store(flag, values);
+            }
+            flag = lowerCase(token.substr(2));
+            values.clear();
+            continue;
         }
+        if (flag.empty()) {
+            throw ParseError("Expected flag at position " + std::to_string(i) + " but got '" + token + "' instead!");
+        }
+        values.push_back(token);
+    }
+    if (!flag.empty()) {
+        store(flag, values);
     }
 }
 
 bool Arguments::boolFlag(const std::string &name) const
 {
-    return present_.contains(name);
+    return present_.contains(lowerCase(name));
 }
 
 std::optional<std::int64_t> Arguments::intFlag(const std::string &name) const
 {
-    auto it = values_.find(name);
+    auto it = values_.find(lowerCase(name));
     if (it == values_.end()) {
         return std::nullopt;
     }
@@ -85,12 +124,15 @@ std::optional<std::int64_t> Arguments::intFlag(const std::string &name) const
     if (error != std::errc{} || end != text.data() + text.size()) {
         return std::nullopt;
     }
-    return value;
+    if (value == std::numeric_limits<std::int64_t>::min()) {
+        return value;
+    }
+    return value < 0 ? -value : value;
 }
 
 std::optional<double> Arguments::doubleFlag(const std::string &name) const
 {
-    auto it = values_.find(name);
+    auto it = values_.find(lowerCase(name));
     if (it == values_.end()) {
         return std::nullopt;
     }
@@ -100,13 +142,13 @@ std::optional<double> Arguments::doubleFlag(const std::string &name) const
     if (error != std::errc{} || end != text.data() + text.size() || !std::isfinite(value)) {
         return std::nullopt;
     }
-    return value;
+    return std::abs(value);
 }
 
 std::vector<std::string> Arguments::stringFlag(const std::string &name) const
 {
     std::vector<std::string> out;
-    auto range = values_.equal_range(name);
+    auto range = values_.equal_range(lowerCase(name));
     for (auto it = range.first; it != range.second; ++it) {
         out.push_back(it->second);
     }

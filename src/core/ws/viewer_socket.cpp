@@ -1,10 +1,10 @@
 #include "core/ws/viewer_socket.h"
 
-#include <chrono>
 #include <cstring>
 #include <utility>
 
 #include "core/util/base64.h"
+#include "core/util/monotonic_time.h"
 #include "net/bytebin.h"
 #include "net/gzip.h"
 #include "proto/sampler_data.h"
@@ -16,8 +16,7 @@ namespace {
 
 std::int64_t nowMs()
 {
-    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
-        .count();
+    return monotonicUnixMillis();
 }
 
 }  // namespace

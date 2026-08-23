@@ -5,17 +5,23 @@
 #include <map>
 #include <optional>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
 namespace spark {
 
-// A command argument parser matching spark's: a leading sub-command followed by
-// `--flag [value]` options (a flag may repeat). Endstone hands commands a single
-// rest-of-line string, so we tokenize it ourselves.
+// A command argument parser matching spark's: an optional leading sub-command
+// followed by `--flag [value]` options (a flag may repeat). Endstone hands
+// commands a single rest-of-line string, so we tokenize it ourselves.
 class Arguments {
 public:
-    explicit Arguments(const std::vector<std::string> &tokens);
+    class ParseError final : public std::invalid_argument {
+    public:
+        using std::invalid_argument::invalid_argument;
+    };
+
+    explicit Arguments(const std::vector<std::string> &tokens, bool allow_subcommand);
 
     // Tokenize a raw rest-of-line string, preserving quoted names and patterns.
     static std::vector<std::string> tokenize(const std::string &line);

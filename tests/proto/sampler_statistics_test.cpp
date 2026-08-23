@@ -31,6 +31,9 @@ int main()
     metadata.platform_stats.present = true;
     metadata.system_stats.present = true;
     metadata.system_stats.cpu_threads = 8;
+    metadata.ticked = true;
+    metadata.tick_threshold_us = 50'000;
+    metadata.number_of_included_ticks = 7;
 
     metadata.statistics.tps.last_1m = {.present = true, .value = 19.0, .span_ms = 60'000, .samples = 1140};
     metadata.statistics.tps.last_5m = {.present = true, .value = 18.0, .span_ms = 300'000, .samples = 5400};
@@ -124,6 +127,18 @@ int main()
                });
     });
     if (!check(rolling_values, "rolling TPS/MSPT/CPU values did not round-trip")) {
+        return 1;
+    }
+
+    const bool tick_filter_values =
+        spark::proto_test::findMessageBytes(profile, 1, [](std::string_view metadata_bytes) {
+            return spark::proto_test::findMessageBytes(metadata_bytes, 5, [](std::string_view aggregator) {
+                return spark::proto_test::hasVarint(aggregator, 1, 1) &&
+                       spark::proto_test::hasVarint(aggregator, 3, 50'000) &&
+                       spark::proto_test::hasVarint(aggregator, 4, 7);
+            });
+        });
+    if (!check(tick_filter_values, "tick threshold or included-tick count was not encoded")) {
         return 1;
     }
 

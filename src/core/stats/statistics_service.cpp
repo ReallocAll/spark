@@ -6,6 +6,8 @@
 #include <limits>
 #include <vector>
 
+#include "core/util/monotonic_time.h"
+
 namespace spark {
 namespace {
 
@@ -17,8 +19,7 @@ std::int64_t steadyNowMs()
 
 std::int64_t unixNowMs()
 {
-    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
-        .count();
+    return monotonicUnixMillis();
 }
 
 double clampUsage(double value)
@@ -394,18 +395,16 @@ std::map<std::int32_t, WindowStats> StatisticsService::profileWindows(std::int64
         return result;
     }
 
-    const std::int64_t profile_start_steady = start_steady_ms_ + (profile_start_unix_ms - start_unix_ms_);
-    const std::int64_t profile_end_steady = start_steady_ms_ + (profile_end_unix_ms - start_unix_ms_);
+    const std::int32_t adjustment_ms = profiling_window::windowAdjustmentMs();
     const std::int64_t available_start =
-        (std::max)({profile_start_steady, start_steady_ms_, profile_end_steady - kMaximumHistoryMs});
-    if (available_start >= profile_end_steady) {
+        (std::max)({profile_start_unix_ms, start_unix_ms_, profile_end_unix_ms - kMaximumHistoryMs});
+    if (available_start >= profile_end_unix_ms) {
         return result;
     }
 
-    const std::int64_t first_window = (available_start - profile_start_steady) / profiling_window::kSizeMs;
-    const std::int64_t last_window = (profile_end_steady - profile_start_steady - 1) / profiling_window::kSizeMs;
-    if (first_window > std::numeric_limits<std::int32_t>::max() ||
-        last_window > std::numeric_limits<std::int32_t>::max()) {
+    const std::int32_t first_window = profiling_window::timeToWindow(available_start, adjustment_ms);
+    const std::int32_t last_window = profiling_window::timeToWindow(profile_end_unix_ms - 1, adjustment_ms);
+    if (first_window > last_window) {
         return result;
     }
 
@@ -417,30 +416,34 @@ std::map<std::int32_t, WindowStats> StatisticsService::profileWindows(std::int64
         std::int64_t process_covered_ms = 0;
         std::int64_t system_covered_ms = 0;
     };
-    std::vector<Accumulator> accumulators(static_cast<std::size_t>(last_window - first_window + 1));
+    std::map<std::int32_t, Accumulator> accumulators;
 
     for (std::int64_t window = first_window; window <= last_window; ++window) {
-        Accumulator &accumulator = accumulators[static_cast<std::size_t>(window - first_window)];
-        const std::int64_t nominal_start = profile_start_steady + window * profiling_window::kSizeMs;
+        const auto window_id = static_cast<std::int32_t>(window);
+        Accumulator &accumulator = accumulators[window_id];
+        const std::int64_t nominal_start = profiling_window::windowStartTime(window_id, adjustment_ms);
+        const std::int64_t nominal_end = profiling_window::windowEndTime(window_id, adjustment_ms);
         const std::int64_t start = (std::max)(available_start, nominal_start);
-        const std::int64_t end = (std::min)(profile_end_steady, nominal_start + profiling_window::kSizeMs);
+        const std::int64_t end = (std::min)(profile_end_unix_ms, nominal_end);
         accumulator.stats.ticks_present = true;
         accumulator.stats.tps_present = true;
-        accumulator.stats.start_time_ms = unixTimeFor(start);
-        accumulator.stats.end_time_ms = unixTimeFor(end);
+        accumulator.stats.start_time_ms = start;
+        accumulator.stats.end_time_ms = end;
         accumulator.stats.duration_ms = static_cast<int>((std::max<std::int64_t>)(0, end - start));
     }
 
     for (std::size_t i = 0; i < tick_size_; ++i) {
         const TickSample &sample = ticks_[(tick_begin_ + i) % ticks_.size()];
-        if (sample.steady_ms < available_start || sample.steady_ms >= profile_end_steady) {
+        const std::int64_t sample_unix_ms = unixTimeFor(sample.steady_ms);
+        if (sample_unix_ms < available_start || sample_unix_ms >= profile_end_unix_ms) {
             continue;
         }
-        const std::int64_t window = (sample.steady_ms - profile_start_steady) / profiling_window::kSizeMs;
-        if (window < first_window || window > last_window) {
+        const std::int32_t window = profiling_window::timeToWindow(sample_unix_ms, adjustment_ms);
+        auto accumulator_it = accumulators.find(window);
+        if (accumulator_it == accumulators.end()) {
             continue;
         }
-        Accumulator &accumulator = accumulators[static_cast<std::size_t>(window - first_window)];
+        Accumulator &accumulator = accumulator_it->second;
         ++accumulator.stats.ticks;
         if (sample.duration_valid) {
             accumulator.durations.push_back(sample.duration_ms);
@@ -450,7 +453,7 @@ std::map<std::int32_t, WindowStats> StatisticsService::profileWindows(std::int64
     for (std::size_t i = 0; i < cpu_size_; ++i) {
         const CpuSample &sample = cpu_[(cpu_begin_ + i) % cpu_.size()];
         for (std::int64_t window = first_window; window <= last_window; ++window) {
-            Accumulator &accumulator = accumulators[static_cast<std::size_t>(window - first_window)];
+            Accumulator &accumulator = accumulators.at(static_cast<std::int32_t>(window));
             const std::int64_t window_start = start_steady_ms_ + (accumulator.stats.start_time_ms - start_unix_ms_);
             const std::int64_t window_end = start_steady_ms_ + (accumulator.stats.end_time_ms - start_unix_ms_);
             const std::int64_t overlap_start = (std::max)(window_start, sample.start_steady_ms);
@@ -471,7 +474,8 @@ std::map<std::int32_t, WindowStats> StatisticsService::profileWindows(std::int64
     }
 
     for (std::int64_t window = first_window; window <= last_window; ++window) {
-        Accumulator &accumulator = accumulators[static_cast<std::size_t>(window - first_window)];
+        const auto window_id = static_cast<std::int32_t>(window);
+        Accumulator &accumulator = accumulators.at(window_id);
         WindowStats &stats = accumulator.stats;
         if (stats.duration_ms > 0) {
             stats.tps = static_cast<double>(stats.ticks) * 1000.0 / static_cast<double>(stats.duration_ms);
@@ -497,7 +501,7 @@ std::map<std::int32_t, WindowStats> StatisticsService::profileWindows(std::int64
 
         for (std::size_t i = 0; i < gauge_size_; ++i) {
             const GaugeSample &gauge = gauges_[(gauge_begin_ + i) % gauges_.size()];
-            if (gauge.steady_ms <= start_steady_ms_ + (stats.end_time_ms - start_unix_ms_)) {
+            if (unixTimeFor(gauge.steady_ms) <= stats.end_time_ms) {
                 stats.players_present = true;
                 stats.players = gauge.players;
                 if (gauge.world_gauges_set) {
@@ -508,7 +512,7 @@ std::map<std::int32_t, WindowStats> StatisticsService::profileWindows(std::int64
                 }
             }
         }
-        result.emplace(static_cast<std::int32_t>(window), stats);
+        result.emplace(window_id, stats);
     }
     return result;
 }

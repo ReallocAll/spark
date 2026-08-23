@@ -28,7 +28,7 @@ void MetricsHistory::clear()
     player_ping_size_ = 0;
 }
 
-bool MetricsHistory::due(std::int64_t timestamp_ms, std::size_t size, std::int64_t newest_timestamp_ms) const
+bool MetricsHistory::due(std::int64_t timestamp_ms, std::size_t size, std::int64_t newest_timestamp_ms)
 {
     if (timestamp_ms <= 0 || size == 0) {
         return timestamp_ms > 0;

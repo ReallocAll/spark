@@ -76,6 +76,13 @@ if (WIN32)
     add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
 endif ()
 
+# --- shared profiling time primitives (no native or core dependencies) ---
+add_library(spark_profiling_time STATIC
+        src/core/util/monotonic_time.cpp
+        src/core/profiler/profiling_window.cpp)
+target_include_directories(spark_profiling_time PUBLIC src)
+set_target_properties(spark_profiling_time PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
 # --- native backend: sampler, symbol guesser, allocation hooks (no Endstone) ---
 add_library(spark_native STATIC
         src/native/alloc/allocation_thread_filter.cpp
@@ -93,7 +100,8 @@ if (WIN32)
             src/native/symbol/dbghelp_manager.cpp
             src/native/symbol/symbol_guess_windows.cpp
             src/native/sampler/capture_windows.cpp
-            src/native/alloc/allocation_sampler_windows.cpp)
+            src/native/alloc/allocation_sampler_windows.cpp
+            src/native/alloc/windows_thread_suspension.cpp)
 elseif (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
     target_sources(spark_native PRIVATE
             src/native/sampler/capture_linux.cpp
@@ -105,7 +113,7 @@ else ()
             src/native/alloc/allocation_sampler_stub.cpp)
 endif ()
 target_include_directories(spark_native PUBLIC src)
-target_link_libraries(spark_native PUBLIC cpptrace::cpptrace concurrentqueue::concurrentqueue
+target_link_libraries(spark_native PUBLIC spark_profiling_time cpptrace::cpptrace concurrentqueue::concurrentqueue
         Threads::Threads)
 set_target_properties(spark_native PROPERTIES POSITION_INDEPENDENT_CODE ON)
 if (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
@@ -175,10 +183,15 @@ add_library(spark_application STATIC
         src/application/activity/activity_command.cpp
         src/application/command/command_registry.cpp
         src/application/health/health_command.cpp
+        src/application/health/health_report.cpp
+        src/application/health/health_dashboard.cpp
+        src/application/health/health_dashboard_connection.cpp
         src/application/placeholder/spark_placeholder_resolver.cpp
         src/application/profiler/profile_exporter.cpp
+        src/application/profiler/profiler_open_orchestrator.cpp
         src/application/profiler/profiler_service.cpp
         src/application/profiler/profiler_start_options.cpp
+        src/application/profiler/profiler_timeout.cpp
         src/application/profiler/viewer_update_worker.cpp
         src/application/spark_application.cpp
         src/application/tick_monitor/tick_monitor_command.cpp)

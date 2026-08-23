@@ -2,7 +2,6 @@
 #define ENDSTONE_SPARK_SAMPLER_H
 
 #include <atomic>
-#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
@@ -60,6 +59,7 @@ public:
 
     bool start(const SamplerConfig &config);  // arms capture + spawns threads
     bool stop();                              // stops + joins; safe to call once
+    void requestStop() noexcept;              // stops the producer without joining or disarming
 
     // Temporarily stop both service threads without clearing accumulated data
     // or disarming the capture backend. Allows safe concurrent reads from
@@ -91,6 +91,10 @@ public:
     const std::map<std::int32_t, WindowTickStats> &windowTicks() const { return window_ticks_; }
     std::uint64_t numberOfTicks() const { return current_tick_.load(); }
     std::uint64_t sampleCount() const { return sample_count_.load(std::memory_order_relaxed); }
+    std::uint64_t droppedSamples() const { return dropped_samples_.load(std::memory_order_relaxed); }
+    std::uint64_t droppedTickEvents() const { return dropped_tick_events_.load(std::memory_order_relaxed); }
+    static constexpr std::size_t sampleQueueCapacity() { return kSampleQueueCapacity; }
+    static constexpr std::size_t tickQueueCapacity() { return kTickQueueCapacity; }
     const std::string &lastError() const { return last_error_; }
 
     // Heartbeats updated by the sampler and aggregator threads.
@@ -100,6 +104,13 @@ public:
 private:
     friend struct SamplerTestAccess;
     friend struct ProfilerTestAccess;
+
+    static constexpr std::size_t kSampleQueueCapacity = 4096;
+    static constexpr std::size_t kTickQueueCapacity = 4096;
+
+    struct QueueTraits : moodycamel::ConcurrentQueueDefaultTraits {
+        static constexpr std::size_t MAX_SUBQUEUE_SIZE = kSampleQueueCapacity;
+    };
 
     struct TickEvent {
         std::uint64_t tick_id;
@@ -111,10 +122,11 @@ private:
     void acceptSample(const Sample &sample);
     void flushOrDrop(std::uint64_t tick_id, bool keep);
     void resetSession();
-    std::int32_t currentWindow() const;
+    static std::int32_t currentWindow();
     void maybePruneHistory(std::int32_t current_window);
     void maybePruneTickHistory(std::int32_t current_window);
     void recordTickDecision(std::uint64_t tick_id, bool keep);
+    bool enqueueSample(Sample sample) noexcept;
     void markWorkerFailure() noexcept;
     bool startServiceThreads();
 
@@ -126,20 +138,23 @@ private:
     std::atomic<std::uint64_t> target_tid_{0};
     std::atomic<std::uint64_t> current_tick_{0};
     std::atomic<std::uint64_t> sample_count_{0};
+    std::atomic<std::uint64_t> dropped_samples_{0};
+    std::atomic<std::uint64_t> dropped_tick_events_{0};
     std::atomic<std::uint64_t> sampler_tid_{0};
     std::atomic<std::uint64_t> aggregator_tid_{0};
     std::atomic<bool> worker_failed_{false};
     std::atomic<std::uint64_t> service_start_count_{0};
     std::string target_name_ = "Server thread";
-    std::chrono::steady_clock::time_point start_time_{};
 
     std::thread sampler_thread_;
     std::thread aggregator_thread_;
     std::condition_variable wait_cv_;
     std::mutex wait_mutex_;
 
-    moodycamel::ConcurrentQueue<Sample> samples_;
-    moodycamel::ConcurrentQueue<TickEvent> ticks_;
+    moodycamel::ConcurrentQueue<Sample, QueueTraits> samples_{kSampleQueueCapacity};
+    moodycamel::ProducerToken sample_producer_{samples_};
+    moodycamel::ConcurrentQueue<TickEvent, QueueTraits> ticks_{kTickQueueCapacity};
+    moodycamel::ProducerToken tick_producer_{ticks_};
 
     // aggregator-thread state
     CallTree tree_;
@@ -148,14 +163,14 @@ private:
     std::deque<std::uint8_t> tick_decisions_;  // 0 pending, 1 drop, 2 keep
     std::uint64_t tick_decision_base_ = 0;
     std::map<std::int32_t, std::uint64_t> window_sample_counts_;
-    std::int32_t next_history_prune_window_ = 60;
+    std::int64_t next_history_prune_window_ = profiling_window::kHistorySize;
 
     // sampler-thread state
     ModuleTable modules_;
 
     // main-thread state (written by onTick, read at export after join)
     std::map<std::int32_t, WindowTickStats> window_ticks_;
-    std::int32_t next_tick_history_prune_window_ = 60;
+    std::int64_t next_tick_history_prune_window_ = profiling_window::kHistorySize;
 
     // Heartbeats for stall-watchdog diagnostics (updated by service threads).
     Heartbeat sampler_heartbeat_;

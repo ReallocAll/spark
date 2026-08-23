@@ -27,6 +27,8 @@ struct SessionConfig {
     bool creator_is_player = false;
     std::string comment;
     std::vector<std::string> thread_patterns;
+    bool has_window_adjustment = false;
+    std::int32_t window_adjustment_ms = 0;
 };
 
 // A parsed journal record.
@@ -60,6 +62,7 @@ struct MetadataSnapshot {
 // Result of reading a journal session.
 struct JournalReadResult {
     bool valid = false;  // at least the file header was parsed
+    std::uint16_t version = 0;
     std::uint64_t session_id = 0;
     std::uint64_t created_ns = 0;
     bool has_clean_end = false;

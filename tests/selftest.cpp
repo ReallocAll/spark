@@ -238,9 +238,12 @@ struct SamplerTestAccess {
     {
         Sampler continuous;
         continuous.config_.continuous = true;
+        const std::int32_t base_window = profiling_window::windowNow();
+        continuous.resetSession();
         Sample sample;
         sample.weight = 1;
-        for (std::int32_t window = 0; window <= 120; ++window) {
+        for (std::int32_t offset = 0; offset <= 120; ++offset) {
+            const auto window = static_cast<std::int32_t>(static_cast<std::int64_t>(base_window) + offset);
             sample.thread_id = static_cast<std::uint64_t>(window) + 1;
             sample.thread_name = "Rotating thread";
             sample.frames = {{.module = 0,
@@ -248,12 +251,12 @@ struct SamplerTestAccess {
                               .raw_address = static_cast<std::uint64_t>(window) + 1}};
             sample.window = window;
             continuous.acceptSample(sample);
-            if (window == 0 || window == 120) {
+            if (offset == 0 || offset == 120) {
                 sample.thread_id = 10'000;
                 sample.thread_name = "Spanning thread";
                 sample.frames = {{.module = 1,
-                                  .rva = static_cast<std::uint64_t>(window == 0 ? 100 : 101),
-                                  .raw_address = static_cast<std::uint64_t>(window == 0 ? 100 : 101)},
+                                  .rva = static_cast<std::uint64_t>(offset == 0 ? 100 : 101),
+                                  .raw_address = static_cast<std::uint64_t>(offset == 0 ? 100 : 101)},
                                  {.module = 1, .rva = 200, .raw_address = 200},
                                  {.module = 1, .rva = 300, .raw_address = 300}};
                 continuous.acceptSample(sample);
@@ -274,7 +277,9 @@ struct SamplerTestAccess {
         resolved[expired_nested] = {.class_name = "test", .method_name = "expired-nested-frame"};
         ProfileMetadata metadata;
         const std::string payload = buildSamplerData(metadata, continuous.tree_, resolved);
-        if (root.times.size() != 61 || root.times.begin()->first != 60 || root.times.rbegin()->first != 120 ||
+        if (root.times.size() != 61 ||
+            root.times.begin()->first != static_cast<std::int32_t>(static_cast<std::int64_t>(base_window) + 60) ||
+            root.times.rbegin()->first != static_cast<std::int32_t>(static_cast<std::int64_t>(base_window) + 120) ||
             continuous.window_ticks_.size() != 61 || continuous.sampleCount() != 62 ||
             continuous.thread_trees_.size() != 62 || spanning == continuous.thread_trees_.end() ||
             spanning->second.tree.root().times.size() != 1 || countNodes(root) != 64 ||
@@ -291,7 +296,8 @@ struct SamplerTestAccess {
 
         Sampler foreground;
         foreground.config_.continuous = false;
-        for (std::int32_t window = 0; window <= 120; ++window) {
+        for (std::int32_t offset = 0; offset <= 120; ++offset) {
+            const auto window = static_cast<std::int32_t>(static_cast<std::int64_t>(base_window) + offset);
             sample.thread_id = static_cast<std::uint64_t>(window) + 1;
             sample.frames = {{.module = 0,
                               .rva = static_cast<std::uint64_t>(window) + 1,
@@ -503,7 +509,8 @@ bool verifyHealthServerConfigurations()
     TestDispatcher dispatcher;
     TestNotifier notifier;
     TestCommandSender sender;
-    spark::HealthCommand health(statistics, metadata_provider, {}, {}, dispatcher, notifier);
+    spark::TrustedViewersState trusted_viewers(std::filesystem::temp_directory_path() / "spark-health-viewers.json");
+    spark::HealthCommand health(statistics, metadata_provider, {}, {}, {}, trusted_viewers, dispatcher, notifier);
     const spark::HealthData data = spark::HealthCommandTestAccess::capture(health, sender, 1234);
     const std::string payload = spark::buildHealthData(data);
 
@@ -911,33 +918,33 @@ bool verifyStopResponsiveness()
 bool verifyArgumentParsing()
 {
     auto integer = [](const std::string &text) {
-        spark::Arguments args({"start", "--value", text});
+        spark::Arguments args({"start", "--value", text}, true);
         return args.intFlag("value");
     };
     auto floating = [](const std::string &text) {
-        spark::Arguments args({"start", "--value", text});
+        spark::Arguments args({"start", "--value", text}, true);
         return args.doubleFlag("value");
     };
 
-    if (integer("100") != 100 || integer("-1") != -1 || integer("abc") || integer("100abc") ||
+    if (integer("100") != 100 || integer("-1") != 1 || integer("abc") || integer("100abc") ||
         integer("999999999999999999999999999999999999")) {
         std::fprintf(stderr, "argument parsing: integer validation failed\n");
         return false;
     }
-    if (floating("1.25") != 1.25 || floating("-1.25") != -1.25 || floating("abc") || floating("100abc") ||
+    if (floating("1.25") != 1.25 || floating("-1.25") != 1.25 || floating("abc") || floating("100abc") ||
         floating("1e9999") || floating("NaN") || floating("inf")) {
         std::fprintf(stderr, "argument parsing: floating-point validation failed\n");
         return false;
     }
 
-    spark::Arguments missing({"start", "--value"});
+    spark::Arguments missing({"start", "--value"}, true);
     if (!missing.boolFlag("value") || missing.intFlag("value") || missing.doubleFlag("value")) {
         std::fprintf(stderr, "argument parsing: missing value validation failed\n");
         return false;
     }
     const std::vector<std::string> quoted =
         spark::Arguments::tokenize(R"(start --thread "Server thread" --thread '^Worker \d+$' --regex)");
-    spark::Arguments selected(quoted);
+    spark::Arguments selected(quoted, true);
     const std::vector<std::string> threads = selected.stringFlag("thread");
     if (threads.size() != 2 || threads[0] != "Server thread" || threads[1] != R"(^Worker \d+$)" ||
         !selected.boolFlag("regex")) {
@@ -1682,7 +1689,7 @@ bool verifyViewerShutdownDuringLiveExport(std::uint64_t worker_tid)
             upload("channel");
             return std::string();
         });
-    service.cmdOpen(sender);
+    service.cmdOpen(sender, spark::Arguments({"open"}, true));
     const std::uint64_t service_starts = spark::ProfilerServiceTestAccess::samplerServiceStarts(service);
     {
         std::unique_lock lock(mutex);
@@ -1774,7 +1781,7 @@ bool verifyAllocationViewerLifecycle(std::uint64_t worker_tid)
             spark::ViewerSocketTestAccess::markOpen(socket);
             return std::string("https://spark.lucko.me/test");
         });
-    service.cmdOpen(sender);
+    service.cmdOpen(sender, spark::Arguments({"open"}, true));
     if (!waitForCondition(
             [&] {
                 return !spark::ProfilerServiceTestAccess::viewerOpenPending(service) &&
@@ -1794,7 +1801,7 @@ bool verifyAllocationViewerLifecycle(std::uint64_t worker_tid)
         return false;
     }
 
-    service.cmdOpen(sender);
+    service.cmdOpen(sender, spark::Arguments({"open"}, true));
     if (!waitForCondition(
             [&] {
                 return !spark::ProfilerServiceTestAccess::viewerOpenPending(service) &&
@@ -1855,7 +1862,7 @@ bool verifyWorkerExceptionBoundaries(std::uint64_t worker_tid)
             upload("channel");
             return std::string();
         });
-    service.cmdOpen(sender);
+    service.cmdOpen(sender, spark::Arguments({"open"}, true));
     if (!waitForCondition([&] { return !spark::ProfilerServiceTestAccess::viewerOpenPending(service); }, 3s) ||
         !service.running() || !spark::ProfilerServiceTestAccess::samplerRunning(service)) {
         std::fprintf(stderr, "worker exception: viewer failure escaped or left sampler paused\n");
@@ -1864,13 +1871,13 @@ bool verifyWorkerExceptionBoundaries(std::uint64_t worker_tid)
     spark::ProfilerServiceTestAccess::setLiveExportPausedHook(service, {});
     spark::ProfilerServiceTestAccess::setViewerOpenFunction(
         service, [](spark::ViewerSocket &, const spark::ViewerSocket::UploadCallback &) { return std::string(); });
-    service.cmdOpen(sender);
+    service.cmdOpen(sender, spark::Arguments({"open"}, true));
     if (!waitForCondition([&] { return !spark::ProfilerServiceTestAccess::viewerOpenPending(service); }, 3s)) {
         return false;
     }
 
     dispatcher.setReject(true);
-    service.cmdStop(sender, spark::Arguments({"stop", "--save-to-file"}));
+    service.cmdStop(sender, spark::Arguments({"stop", "--save-to-file"}, true));
     if (!waitForCondition([&] { return spark::ProfilerServiceTestAccess::exportCompletionPending(service); }, 3s)) {
         return false;
     }
@@ -1882,11 +1889,11 @@ bool verifyWorkerExceptionBoundaries(std::uint64_t worker_tid)
     }
     service.shutdown();
 
-    spark::HealthCommand health(statistics, metadata_provider, {}, {}, dispatcher, notifier);
+    spark::HealthCommand health(statistics, metadata_provider, {}, {}, {}, trusted_viewers, dispatcher, notifier);
     spark::HealthCommandTestAccess::setUploadFunction(health,
                                                       [](const std::string &, const std::string &, const std::string &,
                                                          const std::string &) -> spark::UploadResult { throw 7; });
-    health.cmdHealth(sender, spark::Arguments({"health", "--upload"}));
+    health.cmdHealth(sender, spark::Arguments({"health", "--upload"}, true));
     if (!waitForCondition([&] { return !spark::HealthCommandTestAccess::uploading(health); }, 3s)) {
         std::fprintf(stderr, "worker exception: health worker exception escaped\n");
         return false;
@@ -1926,7 +1933,7 @@ bool verifyAsyncNetworkCommands(std::uint64_t worker_tid)
             cv.wait(lock, [&release]() { return release; });
             return std::string();
         });
-    service.cmdOpen(sender);
+    service.cmdOpen(sender, spark::Arguments({"open"}, true));
     {
         std::unique_lock<std::mutex> lock(mutex);
         if (!cv.wait_for(lock, std::chrono::seconds(2), [&entered]() { return entered; })) {
@@ -1947,7 +1954,7 @@ bool verifyAsyncNetworkCommands(std::uint64_t worker_tid)
         return false;
     }
 
-    spark::HealthCommand health(statistics, metadata_provider, {}, {}, dispatcher, notifier);
+    spark::HealthCommand health(statistics, metadata_provider, {}, {}, {}, trusted_viewers, dispatcher, notifier);
     entered = false;
     release = false;
     spark::HealthCommandTestAccess::setUploadFunction(
@@ -1961,7 +1968,7 @@ bool verifyAsyncNetworkCommands(std::uint64_t worker_tid)
             result.error = "controlled failure";
             return result;
         });
-    health.cmdHealth(sender, spark::Arguments({"health", "--upload"}));
+    health.cmdHealth(sender, spark::Arguments({"health", "--upload"}, true));
     {
         std::unique_lock<std::mutex> lock(mutex);
         if (!cv.wait_for(lock, std::chrono::seconds(2), [&entered]() { return entered; })) {
@@ -2003,13 +2010,13 @@ bool verifyBackgroundCommandValidation(std::uint64_t worker_tid)
     }
 
     TestCommandSender sender;
-    service.cmdStart(sender, spark::Arguments({"start", "--interval", "invalid"}));
+    service.cmdStart(sender, spark::Arguments({"start", "--interval", "invalid"}, true));
     if (sender.errors.empty() || !service.running() || !service.isBackgroundRunning()) {
         std::fprintf(stderr, "background validation: invalid foreground request stopped background profiling\n");
         return false;
     }
 
-    service.cmdStart(sender, spark::Arguments({"start", "--interval", "1"}));
+    service.cmdStart(sender, spark::Arguments({"start", "--interval", "1"}, true));
     if (!service.running() || service.isBackgroundRunning()) {
         std::fprintf(stderr, "background validation: valid foreground request did not replace background profiling\n");
         return false;
@@ -2022,8 +2029,8 @@ bool verifyBackgroundCommandValidation(std::uint64_t worker_tid)
     }
 
     service.startBackgroundProfiler();
-    service.cmdStart(sender, spark::Arguments({"start", "--interval", "1", "--save-to-file"}));
-    service.cmdStop(sender, spark::Arguments({"stop"}));
+    service.cmdStart(sender, spark::Arguments({"start", "--interval", "1", "--save-to-file"}, true));
+    service.cmdStop(sender, spark::Arguments({"stop"}, true));
     if (!waitForCondition(
             [&service]() { return !service.exporting() && service.running() && service.isBackgroundRunning(); },
             std::chrono::seconds(10))) {
@@ -2033,7 +2040,7 @@ bool verifyBackgroundCommandValidation(std::uint64_t worker_tid)
     service.cmdCancel(sender);
 
     service.startBackgroundProfiler();
-    service.cmdStart(sender, spark::Arguments({"start", "--interval", "1", "--timeout", "11", "--save-to-file"}));
+    service.cmdStart(sender, spark::Arguments({"start", "--interval", "1", "--timeout", "11", "--save-to-file"}, true));
     spark::ProfilerServiceTestAccess::expire(service);
     service.onTick(50.0);
     if (!waitForCondition([&service]() { return !service.exporting(); }, std::chrono::seconds(10))) {
@@ -2271,7 +2278,11 @@ bool verifyStatisticsService()
 
     auto window_service = std::make_unique<spark::StatisticsService>();
     spark::CpuSnapshot window_cpu = initial_cpu();
-    window_service->startAt(0, 4'000'000, window_cpu);
+    const std::int32_t window_adjustment = spark::profiling_window::windowAdjustmentMs();
+    const std::int64_t window_profile_start = spark::profiling_window::windowStartTime(
+        spark::profiling_window::timeToWindow(4'000'000, window_adjustment) + 1, window_adjustment);
+    const std::int64_t window_profile_end = window_profile_start + 2 * spark::profiling_window::kSizeMs;
+    window_service->startAt(0, window_profile_start, window_cpu);
     window_service->recordPlayerCountAt(2, 0);
     window_service->recordTickAt(1.0, 100);
     window_service->recordTickAt(9.0, 600);
@@ -2288,17 +2299,23 @@ bool verifyStatisticsService()
     window_cpu.system_total += 6'000;
     window_cpu.wall_ms = 120'000;
     window_service->recordCpuSnapshot(window_cpu);
-    const auto windows = window_service->profileWindows(4'000'000, 4'120'000);
-    auto first_window = windows.find(0);
-    auto second_window = windows.find(1);
+    const auto windows = window_service->profileWindows(window_profile_start, window_profile_end);
+    const std::int32_t first_window_id = spark::profiling_window::timeToWindow(window_profile_start, window_adjustment);
+    const std::int32_t second_window_id = spark::profiling_window::timeToWindow(
+        window_profile_start + spark::profiling_window::kSizeMs, window_adjustment);
+    auto first_window = windows.find(first_window_id);
+    auto second_window = windows.find(second_window_id);
+    const std::int32_t adjustment_ms = window_adjustment;
+    const std::int64_t first_window_start = spark::profiling_window::windowStartTime(first_window_id, adjustment_ms);
+    const std::int64_t first_window_end = spark::profiling_window::windowEndTime(first_window_id, adjustment_ms);
     if (windows.size() != 2 || first_window == windows.end() || second_window == windows.end() ||
         first_window->second.ticks != 2 || !close(first_window->second.tps, 2.0 / 60.0) ||
         !close(first_window->second.mspt_median, 5.0) || !close(first_window->second.mspt_max, 9.0) ||
         !close(first_window->second.cpu_process, 0.1) || !close(first_window->second.cpu_system, 0.2) ||
-        first_window->second.players != 3 || first_window->second.start_time_ms != 4'000'000 ||
-        first_window->second.end_time_ms != 4'060'000 || first_window->second.duration_ms != 60'000 ||
-        second_window->second.players != 3 || second_window->second.entities_present ||
-        second_window->second.chunks_present) {
+        first_window->second.players != 3 || first_window->second.start_time_ms != first_window_start ||
+        first_window->second.end_time_ms != first_window_end ||
+        first_window->second.duration_ms != spark::profiling_window::kSizeMs || second_window->second.players != 3 ||
+        second_window->second.entities_present || second_window->second.chunks_present) {
         std::fprintf(stderr,
                      "statistics service: per-minute profile windows were "
                      "incorrect (count=%zu first ticks=%d tps=%.3f "
@@ -2320,16 +2337,35 @@ bool verifyStatisticsService()
     }
 
     auto background_service = std::make_unique<spark::StatisticsService>();
-    background_service->startAt(0, 7'000'000, initial_cpu());
+    const std::int64_t background_profile_start = spark::profiling_window::windowStartTime(
+        spark::profiling_window::timeToWindow(7'000'000, window_adjustment) + 1, window_adjustment);
+    const std::int64_t background_profile_end = background_profile_start + 30 * spark::profiling_window::kSizeMs;
+    background_service->startAt(0, background_profile_start, initial_cpu());
     for (int minute = 0; minute < 30; ++minute) {
         background_service->recordTickAt(5.0, static_cast<std::int64_t>(minute) * 60'000 + 100);
     }
     const auto background_windows =
-        background_service->profileWindows(7'000'000, 7'000'000 + 30 * spark::profiling_window::kSizeMs);
-    if (background_windows.size() != 30 || !background_windows.contains(0) || !background_windows.contains(29) ||
-        background_windows.at(0).duration_ms != spark::profiling_window::kSizeMs ||
-        background_windows.at(29).duration_ms != spark::profiling_window::kSizeMs) {
+        background_service->profileWindows(background_profile_start, background_profile_end);
+    const std::int32_t background_first_window =
+        spark::profiling_window::timeToWindow(background_profile_start, window_adjustment);
+    const std::int32_t background_last_window =
+        spark::profiling_window::timeToWindow(background_profile_end - 1, window_adjustment);
+    if (background_windows.size() != 30 || !background_windows.contains(background_first_window) ||
+        !background_windows.contains(background_last_window) ||
+        background_windows.at(background_first_window).duration_ms != spark::profiling_window::kSizeMs ||
+        background_windows.at(background_last_window).duration_ms != spark::profiling_window::kSizeMs) {
         std::fprintf(stderr, "statistics service: background Refine history did not retain 30 minute windows\n");
+        return false;
+    }
+
+    const auto clipped_windows =
+        background_service->profileWindows(background_profile_start - spark::profiling_window::kSizeMs / 2,
+                                           background_profile_start + spark::profiling_window::kSizeMs);
+    if (clipped_windows.size() != 1 || !clipped_windows.contains(background_first_window) ||
+        clipped_windows.at(background_first_window).start_time_ms != background_profile_start ||
+        clipped_windows.at(background_first_window).end_time_ms !=
+            background_profile_start + spark::profiling_window::kSizeMs) {
+        std::fprintf(stderr, "statistics service: profile window history was not clipped to service start\n");
         return false;
     }
     return true;
@@ -2344,7 +2380,11 @@ bool verifyWorldGaugeStatistics()
     cpu.wall_ms = 0;
 
     auto svc = std::make_unique<spark::StatisticsService>();
-    svc->startAt(0, 5'000'000, cpu);
+    const std::int32_t window_adjustment = spark::profiling_window::windowAdjustmentMs();
+    const std::int64_t profile_start = spark::profiling_window::windowStartTime(
+        spark::profiling_window::timeToWindow(5'000'000, window_adjustment) + 1, window_adjustment);
+    const std::int64_t profile_end = profile_start + 2 * spark::profiling_window::kSizeMs;
+    svc->startAt(0, profile_start, cpu);
     svc->recordPlayerCountAt(1, 0);
     svc->recordWorldGaugesAt(10, 20, 0);
     svc->recordTickAt(5.0, 100);
@@ -2366,9 +2406,12 @@ bool verifyWorldGaugeStatistics()
     svc->recordPlayerCountAt(3, 120'000);
     svc->recordWorldGaugesAt(20, 30, 120'000);
 
-    const auto windows = svc->profileWindows(5'000'000, 5'120'000);
-    auto first = windows.find(0);
-    auto second = windows.find(1);
+    const auto windows = svc->profileWindows(profile_start, profile_end);
+    const std::int32_t first_window_id = spark::profiling_window::timeToWindow(profile_start, window_adjustment);
+    const std::int32_t second_window_id =
+        spark::profiling_window::timeToWindow(profile_start + spark::profiling_window::kSizeMs, window_adjustment);
+    auto first = windows.find(first_window_id);
+    auto second = windows.find(second_window_id);
     // The gauge loop picks the last sample within each window's end time,
     // matching the existing players behavior.
     if (windows.size() != 2 || first == windows.end() || second == windows.end() || !first->second.entities_present ||
@@ -2396,7 +2439,11 @@ bool verifyWorldGaugeAbsentWhenNotRecorded()
     cpu.wall_ms = 0;
 
     auto svc = std::make_unique<spark::StatisticsService>();
-    svc->startAt(0, 6'000'000, cpu);
+    const std::int32_t window_adjustment = spark::profiling_window::windowAdjustmentMs();
+    const std::int64_t profile_start = spark::profiling_window::windowStartTime(
+        spark::profiling_window::timeToWindow(6'000'000, window_adjustment) + 1, window_adjustment);
+    const std::int64_t profile_end = profile_start + spark::profiling_window::kSizeMs;
+    svc->startAt(0, profile_start, cpu);
     svc->recordPlayerCountAt(1, 0);
     svc->recordTickAt(5.0, 100);
     svc->recordTickAt(5.0, 600);
@@ -2406,8 +2453,9 @@ bool verifyWorldGaugeAbsentWhenNotRecorded()
     cpu.wall_ms = 60'000;
     svc->recordCpuSnapshot(cpu);
 
-    const auto windows = svc->profileWindows(6'000'000, 6'060'000);
-    auto first = windows.find(0);
+    const auto windows = svc->profileWindows(profile_start, profile_end);
+    const std::int32_t first_window_id = spark::profiling_window::timeToWindow(profile_start, window_adjustment);
+    auto first = windows.find(first_window_id);
     if (windows.size() != 1 || first == windows.end() || first->second.entities_present ||
         first->second.chunks_present) {
         std::fprintf(stderr,

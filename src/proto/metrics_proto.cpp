@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 #include "proto/proto_writer.h"
@@ -22,7 +23,7 @@ std::vector<std::uint32_t> timestampDeltas(const auto &samples)
         }
         else {
             const std::int64_t delta = timestamp - previous;
-            if (delta < 0 || delta > std::numeric_limits<std::uint32_t>::max()) {
+            if (delta < 0 || std::cmp_greater(delta, std::numeric_limits<std::uint32_t>::max())) {
                 throw std::logic_error("metric timestamp delta cannot be represented as uint32");
             }
             deltas.push_back(static_cast<std::uint32_t>(delta));
