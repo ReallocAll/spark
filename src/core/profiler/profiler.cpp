@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <limits>
 #include <regex>
 #include <stdexcept>
@@ -95,6 +96,7 @@ bool Profiler::start(const ProfilerOptions &options, std::uint64_t main_tid, std
         return false;
     }
     sampling_stop_requested_.store(false, std::memory_order_release);
+    included_ticks_.store(0, std::memory_order_relaxed);
 
     if (options.regex && options.threads.empty()) {
         error = "--regex requires at least one --thread pattern";
@@ -113,6 +115,10 @@ bool Profiler::start(const ProfilerOptions &options, std::uint64_t main_tid, std
     if (options.timeout_seconds > 0 &&
         options.timeout_seconds > (std::numeric_limits<std::int64_t>::max() - session_start_ms) / 1000) {
         error = "profiling timeout is too large";
+        return false;
+    }
+    if (options.only_ticks_over_ms > std::numeric_limits<std::int64_t>::max() / 1000) {
+        error = "tick threshold is too large";
         return false;
     }
 
@@ -225,6 +231,12 @@ void Profiler::onTick(double mspt_ms)
 {
     if (!running_.load()) {
         return;
+    }
+    if (options_.only_ticks_over_ms > 0 && std::isfinite(mspt_ms) && mspt_ms > options_.only_ticks_over_ms) {
+        std::int32_t current = included_ticks_.load(std::memory_order_relaxed);
+        while (current < std::numeric_limits<std::int32_t>::max() &&
+               !included_ticks_.compare_exchange_weak(current, current + 1, std::memory_order_relaxed)) {
+        }
     }
     if (mode_ == ProfileMode::Allocation) {
         allocation_sampler_.onTick(mspt_ms);

@@ -144,6 +144,12 @@ set_target_properties(spark_profiler_export_test PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME spark_profiler_export_test COMMAND spark_profiler_export_test)
 
+add_executable(spark_included_ticks_test core/profiler/included_ticks_test.cpp)
+target_link_libraries(spark_included_ticks_test PRIVATE spark_core)
+set_target_properties(spark_included_ticks_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME spark_included_ticks_test COMMAND spark_included_ticks_test)
+
 add_executable(spark_config_test core/config/spark_config_test.cpp)
 target_link_libraries(spark_config_test PRIVATE spark_core)
 set_target_properties(spark_config_test PROPERTIES

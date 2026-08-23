@@ -169,6 +169,7 @@ private:
     std::unique_ptr<RecoveryWriter> recovery_writer_;
     mutable std::mutex lifecycle_mutex_;
     std::atomic<bool> sampling_stop_requested_{false};
+    std::atomic<std::int32_t> included_ticks_{0};
     std::function<void()> live_export_paused_hook_;
     std::function<void()> stop_requested_hook_;
 };

@@ -344,7 +344,8 @@ RecoveredProfile RecoveryPlayer::replay(const std::filesystem::path &directory)
         meta.thread_patterns = sc.thread_patterns;
     }
     meta.ticked = sc.present && sc.only_ticks_over_ms > 0;
-    meta.tick_threshold_ms = sc.present && sc.only_ticks_over_ms > 0 ? sc.only_ticks_over_ms : 0;
+    meta.tick_threshold_us =
+        sc.present && sc.only_ticks_over_ms > 0 ? static_cast<std::int64_t>(sc.only_ticks_over_ms) * 1000 : 0;
     meta.window_stats = window_stats;
 
     // Collect thread views for serialization.
