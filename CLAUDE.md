@@ -12,7 +12,7 @@ The plugin must remain safe inside a long-running server process. Sampling and a
 
 ### Prerequisites
 
-- CMake 3.23+
+- CMake 3.29+
 - Ninja
 - Conan 2
 - Python 3.12 for release-tool tests

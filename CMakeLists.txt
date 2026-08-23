@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.23)
+cmake_minimum_required(VERSION 3.29)
 project(spark VERSION 0.5.3 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -49,9 +49,13 @@ endif ()
 # Endstone's root CMake returns right after its include/ target when consumed as a
 # subproject, so this only pulls the headers, not the server. For local iteration,
 # pass -DFETCHCONTENT_SOURCE_DIR_ENDSTONE=<path> to reuse an existing checkout.
+set(ENDSTONE_SPARK_ENDSTONE_GIT_REPOSITORY "https://github.com/EndstoneMC/endstone.git" CACHE STRING
+        "Repository providing the Endstone public plugin API")
+set(ENDSTONE_SPARK_ENDSTONE_GIT_TAG "develop" CACHE STRING
+        "Git ref providing the Endstone public plugin API")
 FetchContent_Declare(endstone
-        GIT_REPOSITORY https://github.com/EndstoneMC/endstone.git
-        GIT_TAG develop)
+        GIT_REPOSITORY ${ENDSTONE_SPARK_ENDSTONE_GIT_REPOSITORY}
+        GIT_TAG ${ENDSTONE_SPARK_ENDSTONE_GIT_TAG})
 FetchContent_MakeAvailable(endstone)
 
 # PAPI is optional at runtime; only its public headers are fetched.
