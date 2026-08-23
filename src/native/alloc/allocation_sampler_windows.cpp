@@ -692,9 +692,10 @@ struct AllocationSampler::Impl {
             .load(std::memory_order_relaxed);
     }
 
-    static void publishEntry(LiveIndexEntry &entry, void *pointer, LiveAllocation *allocation) noexcept
+    static void publishEntry(LiveIndexEntry &entry, void *pointer, std::uint64_t allocation_id,
+                             LiveAllocation *allocation) noexcept
     {
-        std::atomic_ref<std::uint64_t>(entry.allocation_id).store(allocation->allocation_id, std::memory_order_relaxed);
+        std::atomic_ref<std::uint64_t>(entry.allocation_id).store(allocation_id, std::memory_order_relaxed);
         std::atomic_ref<LiveAllocation *>(entry.allocation).store(allocation, std::memory_order_relaxed);
         std::atomic_ref<void *>(entry.pointer).store(pointer, std::memory_order_release);
     }
@@ -772,10 +773,11 @@ struct AllocationSampler::Impl {
         if (allocation == nullptr) {
             return;
         }
-        if (!insertLiveAllocation(allocation)) {
+        const std::uint64_t weight = allocation->weight_bytes;
+        if (!insertLiveAllocation(allocation, false)) {
             lifecycle_dropped.fetch_add(1, std::memory_order_relaxed);
             live_samples.fetch_sub(1, std::memory_order_relaxed);
-            live_bytes.fetch_sub(allocation->weight_bytes, std::memory_order_relaxed);
+            live_bytes.fetch_sub(weight, std::memory_order_relaxed);
             recycleLiveRecord(allocation);
         }
     }
@@ -1147,11 +1149,24 @@ struct AllocationSampler::Impl {
         return new_pointer;
     }
 
-    bool insertLiveAllocation(LiveAllocation *allocation) noexcept
+    void accountLiveAllocation(std::uint64_t weight) noexcept
+    {
+        const std::uint64_t current_live = live_samples.fetch_add(1, std::memory_order_relaxed) + 1;
+        live_bytes.fetch_add(weight, std::memory_order_relaxed);
+        std::uint64_t previous_peak = peak_live_samples.load(std::memory_order_relaxed);
+        while (previous_peak < current_live &&
+               !peak_live_samples.compare_exchange_weak(previous_peak, current_live, std::memory_order_relaxed)) {
+        }
+    }
+
+    bool insertLiveAllocation(LiveAllocation *allocation, bool account_live) noexcept
     {
         LiveAllocation *replaced = nullptr;
         bool inserted = false;
-        const std::uint64_t hash = liveIndexHash(allocation->pointer);
+        void *pointer = allocation->pointer;
+        const std::uint64_t allocation_id = allocation->allocation_id;
+        const std::uint64_t weight = allocation->weight_bytes;
+        const std::uint64_t hash = liveIndexHash(pointer);
         const std::size_t shard = liveIndexShard(hash);
         if (config.force_live_lock_contention_for_testing || !::TryAcquireSRWLockExclusive(&live_index_locks[shard])) {
             contention_dropped.fetch_add(1, std::memory_order_relaxed);
@@ -1170,22 +1185,31 @@ struct AllocationSampler::Impl {
                 }
                 continue;
             }
-            if (entry_pointer == allocation->pointer) {
+            if (entry_pointer == pointer) {
                 replaced = entryAllocation(entry);
                 std::atomic_ref<void *>(entry.pointer).store(tombstonePointer(), std::memory_order_release);
-                publishEntry(entry, allocation->pointer, allocation);
+                if (account_live) {
+                    accountLiveAllocation(weight);
+                }
+                publishEntry(entry, pointer, allocation_id, allocation);
                 inserted = true;
                 break;
             }
             if (entry_pointer == nullptr) {
                 LiveIndexEntry &destination = live_index[tombstone != KLiveIndexCapacity ? tombstone : slot];
-                publishEntry(destination, allocation->pointer, allocation);
+                if (account_live) {
+                    accountLiveAllocation(weight);
+                }
+                publishEntry(destination, pointer, allocation_id, allocation);
                 inserted = true;
                 break;
             }
         }
         if (!inserted && tombstone != KLiveIndexCapacity) {
-            publishEntry(live_index[tombstone], allocation->pointer, allocation);
+            if (account_live) {
+                accountLiveAllocation(weight);
+            }
+            publishEntry(live_index[tombstone], pointer, allocation_id, allocation);
             inserted = true;
         }
         lifecycle_version.fetch_add(1, std::memory_order_release);
@@ -1267,20 +1291,34 @@ struct AllocationSampler::Impl {
         allocation->window = profiling_window::windowNow();
         allocation->depth = static_cast<std::uint16_t>(
             ::RtlCaptureStackBackTrace(KFramesToSkip, static_cast<ULONG>(KStackDepth), allocation->frames, nullptr));
-        if (allocation->depth == 0 || !insertLiveAllocation(allocation)) {
+        const std::uint64_t allocation_weight = allocation->weight_bytes;
+        const std::uint64_t allocation_tick = allocation->tick_id;
+        const std::uint64_t allocation_thread = allocation->thread_id;
+        const std::uint64_t allocation_os_thread = allocation->os_thread_id;
+        const std::int32_t allocation_window = allocation->window;
+        const std::uint16_t allocation_depth = allocation->depth;
+        const bool live_only = config.live_only;
+        AllocationEvent snapshot{};
+        snapshot.thread_id = allocation_thread;
+        snapshot.os_thread_id = allocation_os_thread;
+        snapshot.thread_observation = live_only;
+        if (!live_only) {
+            snapshot.weight_bytes = allocation_weight;
+            snapshot.tick_id = allocation_tick;
+            snapshot.window = allocation_window;
+            snapshot.depth = allocation_depth;
+            std::memcpy(static_cast<void *>(snapshot.frames), static_cast<const void *>(allocation->frames),
+                        static_cast<std::size_t>(allocation_depth) * sizeof(void *));
+        }
+        const bool inserted = allocation_depth != 0 && insertLiveAllocation(allocation, true);
+        if (!inserted) {
             dropped_samples.fetch_add(1, std::memory_order_relaxed);
             lifecycle_dropped.fetch_add(1, std::memory_order_relaxed);
             recycleLiveRecord(allocation);
             return;
         }
-        const std::uint64_t current_live = live_samples.fetch_add(1, std::memory_order_relaxed) + 1;
-        live_bytes.fetch_add(weight, std::memory_order_relaxed);
-        std::uint64_t previous_peak = peak_live_samples.load(std::memory_order_relaxed);
-        while (previous_peak < current_live &&
-               !peak_live_samples.compare_exchange_weak(previous_peak, current_live, std::memory_order_relaxed)) {
-        }
 
-        if (config.live_only) {
+        if (live_only) {
             if (!thread.identity_announced) {
                 PSLIST_ENTRY observation_entry = ::InterlockedPopEntrySList(&free_events);
                 if (observation_entry == nullptr) {
@@ -1289,8 +1327,8 @@ struct AllocationSampler::Impl {
                 }
                 else {
                     auto *observation = CONTAINING_RECORD(observation_entry, AllocationEvent, entry);
-                    observation->thread_id = allocation->thread_id;
-                    observation->os_thread_id = allocation->os_thread_id;
+                    observation->thread_id = snapshot.thread_id;
+                    observation->os_thread_id = snapshot.os_thread_id;
                     observation->depth = 0;
                     observation->thread_observation = true;
                     const std::uint64_t ready = ready_event_count.fetch_add(1, std::memory_order_relaxed) + 1;
@@ -1312,15 +1350,15 @@ struct AllocationSampler::Impl {
             return;
         }
         auto *event = CONTAINING_RECORD(entry, AllocationEvent, entry);
-        event->weight_bytes = weight;
-        event->tick_id = allocation->tick_id;
-        event->thread_id = allocation->thread_id;
-        event->os_thread_id = allocation->os_thread_id;
-        event->window = allocation->window;
-        event->depth = allocation->depth;
-        event->thread_observation = false;
-        std::memcpy(static_cast<void *>(event->frames), static_cast<const void *>(allocation->frames),
-                    static_cast<std::size_t>(allocation->depth) * sizeof(void *));
+        event->weight_bytes = snapshot.weight_bytes;
+        event->tick_id = snapshot.tick_id;
+        event->thread_id = snapshot.thread_id;
+        event->os_thread_id = snapshot.os_thread_id;
+        event->window = snapshot.window;
+        event->depth = snapshot.depth;
+        event->thread_observation = snapshot.thread_observation;
+        std::memcpy(static_cast<void *>(event->frames), static_cast<const void *>(snapshot.frames),
+                    static_cast<std::size_t>(snapshot.depth) * sizeof(void *));
         const std::uint64_t ready = ready_event_count.fetch_add(1, std::memory_order_relaxed) + 1;
         std::uint64_t previous_high_water = ready_event_high_water.load(std::memory_order_relaxed);
         while (previous_high_water < ready &&
