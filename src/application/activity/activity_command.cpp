@@ -1,5 +1,6 @@
 #include "application/activity/activity_command.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <string>
@@ -62,6 +63,11 @@ void ActivityCommand::cmdActivity(CommandSender &sender, const Arguments &args)
     const std::int64_t now_ms =
         std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
             .count();
+    std::erase_if(entries, [now_ms](const Activity &activity) { return activity.shouldExpire(now_ms); });
+    if (entries.empty()) {
+        sender.sendMessage("{}There are no entries present in the log.{}", kColorGold, kColorGray);
+        return;
+    }
 
     constexpr std::size_t k_per_page = 4;
     const std::size_t total = entries.size();
