@@ -76,6 +76,13 @@ if (WIN32)
     add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
 endif ()
 
+# --- shared profiling time primitives (no native or core dependencies) ---
+add_library(spark_profiling_time STATIC
+        src/core/util/monotonic_time.cpp
+        src/core/profiler/profiling_window.cpp)
+target_include_directories(spark_profiling_time PUBLIC src)
+set_target_properties(spark_profiling_time PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
 # --- native backend: sampler, symbol guesser, allocation hooks (no Endstone) ---
 add_library(spark_native STATIC
         src/native/alloc/allocation_thread_filter.cpp
@@ -106,7 +113,7 @@ else ()
             src/native/alloc/allocation_sampler_stub.cpp)
 endif ()
 target_include_directories(spark_native PUBLIC src)
-target_link_libraries(spark_native PUBLIC cpptrace::cpptrace concurrentqueue::concurrentqueue
+target_link_libraries(spark_native PUBLIC spark_profiling_time cpptrace::cpptrace concurrentqueue::concurrentqueue
         Threads::Threads)
 set_target_properties(spark_native PROPERTIES POSITION_INDEPENDENT_CODE ON)
 if (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
@@ -131,14 +138,12 @@ add_library(spark_core STATIC
         src/core/recovery/stall_watchdog.cpp
         src/core/util/base64.cpp
         src/core/util/format.cpp
-        src/core/util/monotonic_time.cpp
         src/core/util/world_region.cpp
         src/core/metadata/server_properties.cpp
         src/core/activity/activity_log.cpp
         src/core/command/arguments.cpp
         src/core/profiler/profiler.cpp
         src/core/profiler/profiler_export.cpp
-        src/core/profiler/profiling_window.cpp
         src/core/stats/executable_hash.cpp
         src/core/stats/metrics_history.cpp
         src/core/stats/statistics_service.cpp
