@@ -106,6 +106,11 @@ std::string buildHealthData(const HealthData &data)
         writer.message(2, entry);
     }
 
+    // channel_info (3): SocketChannelInfo, present for live health dashboards.
+    if (data.channel_info.has_value()) {
+        writer.message(3, encodeSocketChannelInfo(*data.channel_info));
+    }
+
     return out;
 }
 

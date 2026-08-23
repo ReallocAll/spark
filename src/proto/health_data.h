@@ -3,11 +3,13 @@
 
 #include <cstdint>
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "core/stats/statistics_service.h"
 #include "core/stats/system_stats.h"
+#include "core/ws/ws_proto.h"
 
 namespace spark {
 
@@ -26,6 +28,7 @@ struct HealthData {
     std::map<std::string, std::string> server_configurations;
     std::map<std::string, std::string> extra_platform_metadata;
     std::map<std::int32_t, WindowStats> window_stats;
+    std::optional<SocketChannelInfo> channel_info;
 };
 
 // Serialize a spark `HealthData` protobuf message (uncompressed bytes).

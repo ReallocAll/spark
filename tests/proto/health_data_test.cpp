@@ -1,5 +1,6 @@
 #include <cstdio>
 #include <string>
+#include <string_view>
 
 #include "proto/health_data.h"
 #include "proto_test_utils.h"
@@ -28,6 +29,7 @@ int main()
     data.plugins.push_back({.name = "Example", .version = "1.0"});
     data.platform_stats.present = true;
     data.platform_stats.uptime_ms = 100;
+    data.channel_info = spark::SocketChannelInfo{.channel_id = "health-channel", .public_key = {1, 2, 3}};
 
     spark::WindowStats window;
     window.ticks_present = true;
@@ -58,7 +60,14 @@ int main()
                                   return spark::proto_test::hasVarint(window_reader, 1, 12);
                               });
                    }),
-               "health window statistics were not encoded")) {
+               "health window statistics were not encoded") ||
+        !check(spark::proto_test::findMessage(
+                   bytes, 3,
+                   [](spark::ProtoReader channel_reader) {
+                       return spark::proto_test::hasString(channel_reader, 1, "health-channel") &&
+                              spark::proto_test::hasString(channel_reader, 2, std::string_view("\x01\x02\x03", 3));
+                   }),
+               "health channel information was not encoded")) {
         return 1;
     }
     return 0;
