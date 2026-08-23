@@ -138,6 +138,7 @@ add_library(spark_core STATIC
         src/core/recovery/stall_watchdog.cpp
         src/core/util/base64.cpp
         src/core/util/format.cpp
+        src/core/util/state_file.cpp
         src/core/util/world_region.cpp
         src/core/metadata/server_properties.cpp
         src/core/activity/activity_log.cpp

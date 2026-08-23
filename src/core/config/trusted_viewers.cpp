@@ -2,12 +2,17 @@
 
 #include <algorithm>
 #include <cstdio>
-#include <fstream>
 #include <sstream>
+
+#include "core/util/state_file.h"
 
 namespace spark {
 
 namespace {
+
+constexpr std::size_t KMaxTrustedViewerFileBytes = 4U * 1024U * 1024U;
+constexpr std::size_t KMaxTrustedViewerKeys = 1024;
+constexpr std::size_t KMaxTrustedViewerKeyBytes = 16U * 1024U;
 
 std::string jsonEscape(std::string_view s)
 {
@@ -67,7 +72,9 @@ bool parseStringArray(const std::string &text, std::vector<std::string> &out)
     ++pos;
     skip_ws();
     if (pos < text.size() && text[pos] == ']') {
-        return true;
+        ++pos;
+        skip_ws();
+        return pos == text.size();
     }
     while (pos < text.size()) {
         skip_ws();
@@ -76,9 +83,11 @@ bool parseStringArray(const std::string &text, std::vector<std::string> &out)
         }
         ++pos;
         std::string str;
+        bool terminated = false;
         while (pos < text.size()) {
             char ch = text[pos++];
             if (ch == '"') {
+                terminated = true;
                 break;
             }
             if (ch == '\\' && pos < text.size()) {
@@ -122,8 +131,16 @@ bool parseStringArray(const std::string &text, std::vector<std::string> &out)
             else {
                 str += ch;
             }
+            if (str.size() > KMaxTrustedViewerKeyBytes) {
+                return false;
+            }
         }
-        out.push_back(std::move(str));
+        if (!terminated || str.size() > KMaxTrustedViewerKeyBytes) {
+            return false;
+        }
+        if (out.size() < KMaxTrustedViewerKeys) {
+            out.push_back(std::move(str));
+        }
         skip_ws();
         if (pos >= text.size()) {
             return false;
@@ -134,7 +151,8 @@ bool parseStringArray(const std::string &text, std::vector<std::string> &out)
         }
         if (text[pos] == ']') {
             ++pos;
-            return true;
+            skip_ws();
+            return pos == text.size();
         }
         return false;
     }
@@ -150,19 +168,10 @@ bool TrustedViewersState::load()
     last_error_.clear();
     keys_.clear();
 
-    if (!std::filesystem::exists(file_)) {
+    std::string text;
+    if (!readStateFile(file_, KMaxTrustedViewerFileBytes, text, last_error_)) {
         return false;
     }
-
-    std::ifstream in(file_);
-    if (!in) {
-        last_error_ = "Unable to open trusted-viewers file for reading";
-        return false;
-    }
-
-    std::ostringstream ss;
-    ss << in.rdbuf();
-    std::string text = ss.str();
 
     if (!parseStringArray(text, keys_)) {
         last_error_ = "Malformed JSON in trusted-viewers file";
@@ -187,26 +196,8 @@ bool TrustedViewersState::save() const
     }
     ss << "]\n";
 
-    std::error_code ec;
-    std::filesystem::create_directories(file_.parent_path(), ec);
-
-    std::filesystem::path tmp = file_;
-    tmp += ".tmp";
-    {
-        std::ofstream out(tmp, std::ios::binary);
-        if (!out) {
-            last_error_ = "Unable to open trusted-viewers file for writing";
-            return false;
-        }
-        out << ss.str();
-        out.close();
-    }
-    std::filesystem::rename(tmp, file_, ec);
-    if (ec) {
-        last_error_ = "Unable to rename trusted-viewers file: " + ec.message();
-        return false;
-    }
-    return true;
+    const std::string text = ss.str();
+    return writeStateFileAtomically(file_, text, last_error_);
 }
 
 bool TrustedViewersState::contains(const std::string &b64_key) const
@@ -216,6 +207,9 @@ bool TrustedViewersState::contains(const std::string &b64_key) const
 
 void TrustedViewersState::add(const std::string &b64_key)
 {
+    if (b64_key.size() > KMaxTrustedViewerKeyBytes || keys_.size() >= KMaxTrustedViewerKeys) {
+        return;
+    }
     if (!contains(b64_key)) {
         keys_.push_back(b64_key);
     }

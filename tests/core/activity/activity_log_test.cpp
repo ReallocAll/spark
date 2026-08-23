@@ -64,6 +64,7 @@ void testDeserializeInvalid()
     assert(!Activity::deserialize("[]", a));
     assert(!Activity::deserialize("{\"user\":{}}", a));
     assert(!Activity::deserialize("not json at all", a));
+    assert(!Activity::deserialize(a.serialize() + " trailing", a));
 
     std::cout << "testDeserializeInvalid: PASS\n";
 }
@@ -162,6 +163,53 @@ void testMaxEntries()
     std::cout << "testMaxEntries: PASS\n";
 }
 
+void testBoundedLoadAndParser()
+{
+    const std::filesystem::path tmp = std::filesystem::temp_directory_path() / "spark_activity_bounds.json";
+    const std::int64_t now = nowMs();
+
+    std::string entries = "[";
+    for (int i = 0; i < 105; ++i) {
+        if (i != 0) {
+            entries += ",";
+        }
+        entries += Activity::url("U", false, now, "T", "https://example.com/" + std::to_string(i)).serialize();
+    }
+    entries += "]";
+    {
+        std::ofstream out(tmp, std::ios::binary);
+        out << entries;
+    }
+    ActivityLog capped(tmp);
+    capped.load();
+    assert(capped.entries().size() == ActivityLog::kMaxEntries);
+    assert(capped.entries().front().data_value == "https://example.com/0");
+
+    std::string deep = "[";
+    deep.append(64, '[');
+    deep += "{}";
+    deep.append(64, ']');
+    deep += "]";
+    {
+        std::ofstream out(tmp, std::ios::binary);
+        out << deep;
+    }
+    ActivityLog too_deep(tmp);
+    too_deep.load();
+    assert(too_deep.entries().empty());
+
+    {
+        std::ofstream out(tmp, std::ios::binary);
+        out << std::string(8U * 1024U * 1024U + 1U, 'x');
+    }
+    ActivityLog oversized(tmp);
+    oversized.load();
+    assert(oversized.entries().empty());
+
+    std::filesystem::remove(tmp);
+    std::cout << "testBoundedLoadAndParser: PASS\n";
+}
+
 }  // namespace
 
 int main()
@@ -173,6 +221,7 @@ int main()
     testLogLoadSave();
     testLogCorruptionSafe();
     testMaxEntries();
+    testBoundedLoadAndParser();
     std::cout << "All activity log tests passed.\n";
     return 0;
 }
