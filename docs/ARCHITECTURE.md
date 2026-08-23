@@ -43,11 +43,15 @@ src/
 
 ## CMake Structure
 
-Four layered targets enforce dependency direction:
+Layered targets enforce dependency direction:
 
 ```
+spark_profiling_time (static) <- monotonic clock and profiling-window alignment
+                                NO Endstone dependency
+
 spark_native (static)        <- native/sampler, native/symbol, native/alloc
-                               links: cpptrace, concurrentqueue, distorm, funchook (Windows)
+                               links: spark_profiling_time, cpptrace, concurrentqueue,
+                                      distorm, funchook (Windows)
                                NO Endstone dependency
 
 spark_core (static)          <- core/, proto/, net/
@@ -69,7 +73,7 @@ spark (endstone_add_plugin)  <- platform/endstone/, plugin.cpp
 Dependency direction (enforced by CMake target structure):
 
 ```
-platform/endstone -> application -> core -> native -> (external libs)
+platform/endstone -> application -> core -> native -> profiling_time
 ```
 
 ## Key Components
