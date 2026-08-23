@@ -413,16 +413,16 @@ bool ProfilerService::armProfilerTimeout(std::int64_t timeout_seconds) noexcept
     }
 
     using MillisecondsRep = std::chrono::milliseconds::rep;
-    constexpr std::int64_t kMillisecondsPerSecond = 1000;
-    constexpr std::int64_t kMaximumSeconds =
-        static_cast<std::int64_t>((std::numeric_limits<MillisecondsRep>::max)() / kMillisecondsPerSecond);
-    if (timeout_seconds > kMaximumSeconds) {
+    constexpr std::int64_t k_milliseconds_per_second = 1000;
+    constexpr auto k_maximum_seconds =
+        static_cast<std::int64_t>(std::numeric_limits<MillisecondsRep>::max() / k_milliseconds_per_second);
+    if (timeout_seconds > k_maximum_seconds) {
         return false;
     }
 
     timeout_completion_pending_.store(false, std::memory_order_release);
     const auto delay = std::chrono::milliseconds(static_cast<MillisecondsRep>(timeout_seconds) *
-                                                 static_cast<MillisecondsRep>(kMillisecondsPerSecond));
+                                                 static_cast<MillisecondsRep>(k_milliseconds_per_second));
     return profiler_timeout_.arm(delay, [this]() noexcept {
         profiler_.requestStop();
         timeout_completion_pending_.store(true, std::memory_order_release);

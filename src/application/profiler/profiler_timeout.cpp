@@ -42,10 +42,10 @@ bool ProfilerTimeout::arm(std::chrono::milliseconds delay, std::function<void()>
                 try {
                     callback();
                 }
-                catch (...) {
+                catch (...) {  // NOLINT(bugprone-empty-catch): callbacks cannot escape the worker thread.
                 }
             }
-            catch (...) {
+            catch (...) {  // NOLINT(bugprone-empty-catch): worker exceptions cannot escape the thread.
             }
         });
     }

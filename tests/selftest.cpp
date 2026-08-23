@@ -243,7 +243,7 @@ struct SamplerTestAccess {
         Sample sample;
         sample.weight = 1;
         for (std::int32_t offset = 0; offset <= 120; ++offset) {
-            const std::int32_t window = static_cast<std::int32_t>(static_cast<std::int64_t>(base_window) + offset);
+            const auto window = static_cast<std::int32_t>(static_cast<std::int64_t>(base_window) + offset);
             sample.thread_id = static_cast<std::uint64_t>(window) + 1;
             sample.thread_name = "Rotating thread";
             sample.frames = {{.module = 0,
@@ -297,7 +297,7 @@ struct SamplerTestAccess {
         Sampler foreground;
         foreground.config_.continuous = false;
         for (std::int32_t offset = 0; offset <= 120; ++offset) {
-            const std::int32_t window = static_cast<std::int32_t>(static_cast<std::int64_t>(base_window) + offset);
+            const auto window = static_cast<std::int32_t>(static_cast<std::int64_t>(base_window) + offset);
             sample.thread_id = static_cast<std::uint64_t>(window) + 1;
             sample.frames = {{.module = 0,
                               .rva = static_cast<std::uint64_t>(window) + 1,
@@ -2305,9 +2305,9 @@ bool verifyStatisticsService()
         window_profile_start + spark::profiling_window::kSizeMs, window_adjustment);
     auto first_window = windows.find(first_window_id);
     auto second_window = windows.find(second_window_id);
-    const std::int64_t first_window_start =
-        spark::profiling_window::windowStartTime(first_window_id, window_adjustment);
-    const std::int64_t first_window_end = spark::profiling_window::windowEndTime(first_window_id, window_adjustment);
+    const std::int32_t adjustment_ms = window_adjustment;
+    const std::int64_t first_window_start = spark::profiling_window::windowStartTime(first_window_id, adjustment_ms);
+    const std::int64_t first_window_end = spark::profiling_window::windowEndTime(first_window_id, adjustment_ms);
     if (windows.size() != 2 || first_window == windows.end() || second_window == windows.end() ||
         first_window->second.ticks != 2 || !close(first_window->second.tps, 2.0 / 60.0) ||
         !close(first_window->second.mspt_median, 5.0) || !close(first_window->second.mspt_max, 9.0) ||

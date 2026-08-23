@@ -31,13 +31,14 @@ void testFiringAndSteadyElapsed()
     Probe probe;
     const auto start = std::chrono::steady_clock::now();
     spark::ProfilerTimeout timeout;
-    assert(timeout.arm(60ms, [&probe, start] {
+    const bool armed = timeout.arm(60ms, [&probe, start] {
         const auto elapsed = std::chrono::steady_clock::now() - start;
         std::scoped_lock lock(probe.mutex);
         ++probe.calls;
         probe.elapsed = elapsed;
         probe.cv.notify_all();
-    }));
+    });
+    assert(armed);
     assert(waitFor(probe, [&probe] { return probe.calls == 1; }));
     timeout.cancel();
 
@@ -49,11 +50,12 @@ void testCancelBeforeDeadline()
 {
     Probe probe;
     spark::ProfilerTimeout timeout;
-    assert(timeout.arm(250ms, [&probe] {
+    const bool armed = timeout.arm(250ms, [&probe] {
         std::scoped_lock lock(probe.mutex);
         ++probe.calls;
         probe.cv.notify_all();
-    }));
+    });
+    assert(armed);
     std::this_thread::sleep_for(20ms);
     timeout.cancel();
 
@@ -67,17 +69,19 @@ void testRearmSuppressesOldCallback()
     bool old_called = false;
     bool new_called = false;
     spark::ProfilerTimeout timeout;
-    assert(timeout.arm(250ms, [&probe, &old_called] {
+    const bool first_armed = timeout.arm(250ms, [&probe, &old_called] {
         std::scoped_lock lock(probe.mutex);
         old_called = true;
         probe.cv.notify_all();
-    }));
-    assert(timeout.arm(0ms, [&probe, &new_called] {
+    });
+    assert(first_armed);
+    const bool second_armed = timeout.arm(0ms, [&probe, &new_called] {
         std::scoped_lock lock(probe.mutex);
         new_called = true;
         ++probe.calls;
         probe.cv.notify_all();
-    }));
+    });
+    assert(second_armed);
     assert(waitFor(probe, [&probe] { return probe.calls == 1; }));
     timeout.cancel();
 
@@ -90,19 +94,21 @@ void testCallbackExceptionIsContained()
 {
     Probe probe;
     spark::ProfilerTimeout timeout;
-    assert(timeout.arm(0ms, [&probe] {
+    const bool first_armed = timeout.arm(0ms, [&probe] {
         std::scoped_lock lock(probe.mutex);
         ++probe.calls;
         probe.cv.notify_all();
         throw std::runtime_error("timeout callback failure");
-    }));
+    });
+    assert(first_armed);
     assert(waitFor(probe, [&probe] { return probe.calls == 1; }));
 
-    assert(timeout.arm(0ms, [&probe] {
+    const bool second_armed = timeout.arm(0ms, [&probe] {
         std::scoped_lock lock(probe.mutex);
         ++probe.calls;
         probe.cv.notify_all();
-    }));
+    });
+    assert(second_armed);
     assert(waitFor(probe, [&probe] { return probe.calls == 2; }));
     timeout.cancel();
 }
@@ -112,11 +118,12 @@ void testDestructorCancels()
     Probe probe;
     {
         spark::ProfilerTimeout timeout;
-        assert(timeout.arm(250ms, [&probe] {
+        const bool armed = timeout.arm(250ms, [&probe] {
             std::scoped_lock lock(probe.mutex);
             ++probe.calls;
             probe.cv.notify_all();
-        }));
+        });
+        assert(armed);
     }
     std::this_thread::sleep_for(300ms);
 
@@ -128,10 +135,11 @@ void testMaximumDelayCanBeCancelled()
 {
     Probe probe;
     spark::ProfilerTimeout timeout;
-    assert(timeout.arm(std::chrono::milliseconds::max(), [&probe] {
+    const bool armed = timeout.arm(std::chrono::milliseconds::max(), [&probe] {
         std::scoped_lock lock(probe.mutex);
         ++probe.calls;
-    }));
+    });
+    assert(armed);
     timeout.cancel();
 
     std::scoped_lock lock(probe.mutex);
@@ -142,12 +150,13 @@ void testSelfCancelDoesNotTerminate()
 {
     Probe probe;
     spark::ProfilerTimeout timeout;
-    assert(timeout.arm(0ms, [&probe, &timeout] {
+    const bool armed = timeout.arm(0ms, [&probe, &timeout] {
         timeout.cancel();
         std::scoped_lock lock(probe.mutex);
         ++probe.calls;
         probe.cv.notify_all();
-    }));
+    });
+    assert(armed);
     assert(waitFor(probe, [&probe] { return probe.calls == 1; }));
     timeout.cancel();
 }

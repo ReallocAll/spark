@@ -1,5 +1,6 @@
 #include <cassert>
 #include <cstdint>
+#include <ranges>
 #include <string>
 #include <vector>
 
@@ -9,17 +10,13 @@ namespace {
 
 class Sender final : public spark::CommandSender {
 public:
-    std::string getName() const override { return "Console"; }
-    bool isPlayer() const override { return false; }
+    [[nodiscard]] std::string getName() const override { return "Console"; }
+    [[nodiscard]] bool isPlayer() const override { return false; }
 
-    bool contains(const std::string &text) const
+    [[nodiscard]] bool contains(const std::string &text) const
     {
-        for (const std::string &message : messages) {
-            if (message.find(text) != std::string::npos) {
-                return true;
-            }
-        }
-        return false;
+        return std::ranges::any_of(
+            messages, [&text](const std::string &message) { return message.find(text) != std::string::npos; });
     }
 
     std::vector<std::string> messages;

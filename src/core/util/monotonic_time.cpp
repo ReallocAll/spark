@@ -11,26 +11,26 @@ using Milliseconds = std::chrono::milliseconds;
 
 std::int64_t saturatingAdd(std::int64_t left, std::int64_t right) noexcept
 {
-    constexpr std::int64_t kMin = (std::numeric_limits<std::int64_t>::min)();
-    constexpr std::int64_t kMax = (std::numeric_limits<std::int64_t>::max)();
-    if (right > 0 && left > kMax - right) {
-        return kMax;
+    constexpr std::int64_t k_min = std::numeric_limits<std::int64_t>::min();
+    constexpr std::int64_t k_max = std::numeric_limits<std::int64_t>::max();
+    if (right > 0 && left > k_max - right) {
+        return k_max;
     }
-    if (right < 0 && left < kMin - right) {
-        return kMin;
+    if (right < 0 && left < k_min - right) {
+        return k_min;
     }
     return left + right;
 }
 
 std::int64_t saturatingSubtract(std::int64_t left, std::int64_t right) noexcept
 {
-    constexpr std::int64_t kMin = (std::numeric_limits<std::int64_t>::min)();
-    constexpr std::int64_t kMax = (std::numeric_limits<std::int64_t>::max)();
-    if (right > 0 && left < kMin + right) {
-        return kMin;
+    constexpr std::int64_t k_min = std::numeric_limits<std::int64_t>::min();
+    constexpr std::int64_t k_max = std::numeric_limits<std::int64_t>::max();
+    if (right > 0 && left < k_min + right) {
+        return k_min;
     }
-    if (right < 0 && left > kMax + right) {
-        return kMax;
+    if (right < 0 && left > k_max + right) {
+        return k_max;
     }
     return left - right;
 }
@@ -53,7 +53,7 @@ ClockAnchors captureAnchors() noexcept
             .steady_ms = std::chrono::duration_cast<Milliseconds>(steady.time_since_epoch()).count()};
 }
 
-const ClockAnchors kClockAnchors = captureAnchors();
+const ClockAnchors KClockAnchors = captureAnchors();
 
 }  // namespace
 
@@ -67,7 +67,7 @@ std::int64_t monotonicUnixMillis() noexcept
 {
     const auto steady_now =
         std::chrono::duration_cast<Milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
-    return unixMillisFromAnchors(kClockAnchors.system_ms, kClockAnchors.steady_ms, steady_now);
+    return unixMillisFromAnchors(KClockAnchors.system_ms, KClockAnchors.steady_ms, steady_now);
 }
 
 }  // namespace spark

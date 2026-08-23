@@ -9,9 +9,9 @@ namespace {
 
 class Sender final : public spark::CommandSender {
 public:
-    std::string getName() const override { return "Test"; }
-    bool isPlayer() const override { return false; }
-    bool hasPermission(const std::string &permission) const override
+    [[nodiscard]] std::string getName() const override { return "Test"; }
+    [[nodiscard]] bool isPlayer() const override { return false; }
+    [[nodiscard]] bool hasPermission(const std::string &permission) const override
     {
         const auto it = permissions.find(permission);
         return it != permissions.end() && it->second;

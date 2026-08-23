@@ -111,7 +111,7 @@ private:
     void acceptSample(const Sample &sample);
     void flushOrDrop(std::uint64_t tick_id, bool keep);
     void resetSession();
-    std::int32_t currentWindow() const;
+    static std::int32_t currentWindow();
     void maybePruneHistory(std::int32_t current_window);
     void maybePruneTickHistory(std::int32_t current_window);
     void recordTickDecision(std::uint64_t tick_id, bool keep);

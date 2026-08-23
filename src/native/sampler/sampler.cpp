@@ -32,13 +32,13 @@ constexpr std::size_t KLeadingDrop = 2;
 
 std::int32_t clampWindow(std::int64_t window) noexcept
 {
-    constexpr std::int64_t kMin = (std::numeric_limits<std::int32_t>::min)();
-    constexpr std::int64_t kMax = (std::numeric_limits<std::int32_t>::max)();
-    if (window < kMin) {
-        return (std::numeric_limits<std::int32_t>::min)();
+    constexpr std::int64_t k_min = std::numeric_limits<std::int32_t>::min();
+    constexpr std::int64_t k_max = std::numeric_limits<std::int32_t>::max();
+    if (window < k_min) {
+        return std::numeric_limits<std::int32_t>::min();
     }
-    if (window > kMax) {
-        return (std::numeric_limits<std::int32_t>::max)();
+    if (window > k_max) {
+        return std::numeric_limits<std::int32_t>::max();
     }
     return static_cast<std::int32_t>(window);
 }
@@ -220,7 +220,7 @@ void Sampler::resetSession()
     journaled_threads_.clear();
 }
 
-std::int32_t Sampler::currentWindow() const
+std::int32_t Sampler::currentWindow()
 {
     return profiling_window::windowNow();
 }

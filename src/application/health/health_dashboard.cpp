@@ -29,7 +29,7 @@ HealthDashboard::~HealthDashboard()
     shutdown();
 }
 
-HealthDashboard::OpenResult HealthDashboard::open(HealthData initial, std::string sender_name)
+HealthDashboard::OpenResult HealthDashboard::open(HealthData initial, const std::string &sender_name)
 {
     OpenResult result;
     result.sender_name = sender_name;
@@ -100,7 +100,11 @@ HealthDashboard::OpenResult HealthDashboard::open(HealthData initial, std::strin
             result.accepted = true;
             result.generation = generation_;
             connection_ = connection;
-            work_ = WorkItem{WorkType::Open, std::move(initial), std::move(connection), generation_, sender_name};
+            work_ = WorkItem{.type = WorkType::Open,
+                             .data = std::move(initial),
+                             .connection = connection,
+                             .generation = generation_,
+                             .sender_name = sender_name};
             open_pending_ = true;
         }
     }
@@ -154,7 +158,11 @@ bool HealthDashboard::enqueueUpdate(HealthData snapshot, std::int64_t now_ms)
             now_ms < last_update_ms_ || now_ms - last_update_ms_ < 10000) {
             return false;
         }
-        work_ = WorkItem{WorkType::Update, std::move(snapshot), connection, generation, {}};
+        work_ = WorkItem{.type = WorkType::Update,
+                         .data = std::move(snapshot),
+                         .connection = connection,
+                         .generation = generation,
+                         .sender_name = {}};
         last_update_ms_ = now_ms;
     }
     cv_.notify_one();
@@ -207,7 +215,7 @@ void HealthDashboard::shutdown()
         try {
             connection->close();
         }
-        catch (...) {
+        catch (...) {  // NOLINT(bugprone-empty-catch): connection close is best effort during shutdown.
         }
     }
     if (worker_.joinable() && worker_.get_id() != std::this_thread::get_id()) {
@@ -336,7 +344,7 @@ void HealthDashboard::markFailure(const std::shared_ptr<HealthDashboardConnectio
         try {
             connection->close();
         }
-        catch (...) {
+        catch (...) {  // NOLINT(bugprone-empty-catch): connection close is best effort after failure.
         }
     }
     cv_.notify_all();
@@ -365,7 +373,7 @@ void HealthDashboard::completeOpen(OpenResult result, const std::shared_ptr<Heal
         try {
             connection->close();
         }
-        catch (...) {
+        catch (...) {  // NOLINT(bugprone-empty-catch): connection close is best effort after an unsuccessful open.
         }
     }
     result.completed = true;
@@ -400,7 +408,10 @@ void HealthDashboard::run() noexcept
                 if (!running_.load(std::memory_order_acquire)) {
                     break;
                 }
-                work = std::move(work_).value();
+                if (!work_) {
+                    continue;
+                }
+                work = std::move(*work_);
                 work_.reset();
                 work_active_ = true;
             }

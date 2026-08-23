@@ -8,6 +8,8 @@
 
 namespace {
 
+namespace profiling_window = spark::profiling_window;
+
 void testAnchorConversion()
 {
     assert(spark::unixMillisFromAnchors(1'700'000'000'000, 10'000, 10'123) == 1'700'000'000'123);
@@ -35,42 +37,38 @@ void testMonotonicUnixMillis()
 
 void testProfilingWindows()
 {
-    using namespace spark::profiling_window;
+    constexpr std::int64_t k_time = 1'700'000'012'345;
+    constexpr std::int32_t k_adjustment = 12'345;
+    const std::int32_t window = profiling_window::timeToWindow(k_time, k_adjustment);
+    assert(profiling_window::timeToWindow(k_time + profiling_window::kSizeMs, k_adjustment) == window + 1);
 
-    constexpr std::int64_t kTime = 1'700'000'012'345;
-    constexpr std::int32_t kAdjustment = 12'345;
-    const std::int32_t window = timeToWindow(kTime, kAdjustment);
-    assert(timeToWindow(kTime + kSizeMs, kAdjustment) == window + 1);
-
-    const std::int64_t start = windowStartTime(window, kAdjustment);
-    const std::int64_t end = windowEndTime(window, kAdjustment);
-    assert(start <= kTime && kTime < end);
-    assert(timeToWindow(start, kAdjustment) == window);
-    assert(timeToWindow(end - 1, kAdjustment) == window);
-    assert(timeToWindow(end, kAdjustment) == window + 1);
+    const std::int64_t start = profiling_window::windowStartTime(window, k_adjustment);
+    const std::int64_t end = profiling_window::windowEndTime(window, k_adjustment);
+    assert(start <= k_time && k_time < end);
+    assert(profiling_window::timeToWindow(start, k_adjustment) == window);
+    assert(profiling_window::timeToWindow(end - 1, k_adjustment) == window);
+    assert(profiling_window::timeToWindow(end, k_adjustment) == window + 1);
 }
 
 void testAdjustmentAndPruning()
 {
-    using namespace spark::profiling_window;
-
-    const std::int32_t adjustment = windowAdjustmentMs();
-    assert(adjustment >= kAdjustmentMinMs && adjustment <= kAdjustmentMaxMs);
+    const std::int32_t adjustment = profiling_window::windowAdjustmentMs();
+    assert(adjustment >= profiling_window::kAdjustmentMinMs && adjustment <= profiling_window::kAdjustmentMaxMs);
     for (int i = 0; i < 100; ++i) {
-        assert(windowAdjustmentMs() == adjustment);
+        assert(profiling_window::windowAdjustmentMs() == adjustment);
     }
-    assert(!shouldPrune(40, 100));
-    assert(!shouldPrune(41, 100));
-    assert(shouldPrune(39, 100));
+    assert(!profiling_window::shouldPrune(40, 100));
+    assert(!profiling_window::shouldPrune(41, 100));
+    assert(profiling_window::shouldPrune(39, 100));
 }
 
 void testOverflowHandling()
 {
-    using namespace spark::profiling_window;
-
-    assert(timeToWindow((std::numeric_limits<std::int64_t>::max)(), kAdjustmentMaxMs) ==
+    assert(profiling_window::timeToWindow((std::numeric_limits<std::int64_t>::max)(),
+                                          profiling_window::kAdjustmentMaxMs) ==
            (std::numeric_limits<std::int32_t>::max)());
-    assert(timeToWindow((std::numeric_limits<std::int64_t>::min)(), kAdjustmentMinMs) ==
+    assert(profiling_window::timeToWindow((std::numeric_limits<std::int64_t>::min)(),
+                                          profiling_window::kAdjustmentMinMs) ==
            (std::numeric_limits<std::int32_t>::min)());
 }
 
