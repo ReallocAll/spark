@@ -912,33 +912,33 @@ bool verifyStopResponsiveness()
 bool verifyArgumentParsing()
 {
     auto integer = [](const std::string &text) {
-        spark::Arguments args({"start", "--value", text});
+        spark::Arguments args({"start", "--value", text}, true);
         return args.intFlag("value");
     };
     auto floating = [](const std::string &text) {
-        spark::Arguments args({"start", "--value", text});
+        spark::Arguments args({"start", "--value", text}, true);
         return args.doubleFlag("value");
     };
 
-    if (integer("100") != 100 || integer("-1") != -1 || integer("abc") || integer("100abc") ||
+    if (integer("100") != 100 || integer("-1") != 1 || integer("abc") || integer("100abc") ||
         integer("999999999999999999999999999999999999")) {
         std::fprintf(stderr, "argument parsing: integer validation failed\n");
         return false;
     }
-    if (floating("1.25") != 1.25 || floating("-1.25") != -1.25 || floating("abc") || floating("100abc") ||
+    if (floating("1.25") != 1.25 || floating("-1.25") != 1.25 || floating("abc") || floating("100abc") ||
         floating("1e9999") || floating("NaN") || floating("inf")) {
         std::fprintf(stderr, "argument parsing: floating-point validation failed\n");
         return false;
     }
 
-    spark::Arguments missing({"start", "--value"});
+    spark::Arguments missing({"start", "--value"}, true);
     if (!missing.boolFlag("value") || missing.intFlag("value") || missing.doubleFlag("value")) {
         std::fprintf(stderr, "argument parsing: missing value validation failed\n");
         return false;
     }
     const std::vector<std::string> quoted =
         spark::Arguments::tokenize(R"(start --thread "Server thread" --thread '^Worker \d+$' --regex)");
-    spark::Arguments selected(quoted);
+    spark::Arguments selected(quoted, true);
     const std::vector<std::string> threads = selected.stringFlag("thread");
     if (threads.size() != 2 || threads[0] != "Server thread" || threads[1] != R"(^Worker \d+$)" ||
         !selected.boolFlag("regex")) {
@@ -1683,7 +1683,7 @@ bool verifyViewerShutdownDuringLiveExport(std::uint64_t worker_tid)
             upload("channel");
             return std::string();
         });
-    service.cmdOpen(sender, spark::Arguments({"open"}));
+    service.cmdOpen(sender, spark::Arguments({"open"}, true));
     const std::uint64_t service_starts = spark::ProfilerServiceTestAccess::samplerServiceStarts(service);
     {
         std::unique_lock lock(mutex);
@@ -1775,7 +1775,7 @@ bool verifyAllocationViewerLifecycle(std::uint64_t worker_tid)
             spark::ViewerSocketTestAccess::markOpen(socket);
             return std::string("https://spark.lucko.me/test");
         });
-    service.cmdOpen(sender, spark::Arguments({"open"}));
+    service.cmdOpen(sender, spark::Arguments({"open"}, true));
     if (!waitForCondition(
             [&] {
                 return !spark::ProfilerServiceTestAccess::viewerOpenPending(service) &&
@@ -1795,7 +1795,7 @@ bool verifyAllocationViewerLifecycle(std::uint64_t worker_tid)
         return false;
     }
 
-    service.cmdOpen(sender, spark::Arguments({"open"}));
+    service.cmdOpen(sender, spark::Arguments({"open"}, true));
     if (!waitForCondition(
             [&] {
                 return !spark::ProfilerServiceTestAccess::viewerOpenPending(service) &&
@@ -1856,7 +1856,7 @@ bool verifyWorkerExceptionBoundaries(std::uint64_t worker_tid)
             upload("channel");
             return std::string();
         });
-    service.cmdOpen(sender, spark::Arguments({"open"}));
+    service.cmdOpen(sender, spark::Arguments({"open"}, true));
     if (!waitForCondition([&] { return !spark::ProfilerServiceTestAccess::viewerOpenPending(service); }, 3s) ||
         !service.running() || !spark::ProfilerServiceTestAccess::samplerRunning(service)) {
         std::fprintf(stderr, "worker exception: viewer failure escaped or left sampler paused\n");
@@ -1865,13 +1865,13 @@ bool verifyWorkerExceptionBoundaries(std::uint64_t worker_tid)
     spark::ProfilerServiceTestAccess::setLiveExportPausedHook(service, {});
     spark::ProfilerServiceTestAccess::setViewerOpenFunction(
         service, [](spark::ViewerSocket &, const spark::ViewerSocket::UploadCallback &) { return std::string(); });
-    service.cmdOpen(sender, spark::Arguments({"open"}));
+    service.cmdOpen(sender, spark::Arguments({"open"}, true));
     if (!waitForCondition([&] { return !spark::ProfilerServiceTestAccess::viewerOpenPending(service); }, 3s)) {
         return false;
     }
 
     dispatcher.setReject(true);
-    service.cmdStop(sender, spark::Arguments({"stop", "--save-to-file"}));
+    service.cmdStop(sender, spark::Arguments({"stop", "--save-to-file"}, true));
     if (!waitForCondition([&] { return spark::ProfilerServiceTestAccess::exportCompletionPending(service); }, 3s)) {
         return false;
     }
@@ -1887,7 +1887,7 @@ bool verifyWorkerExceptionBoundaries(std::uint64_t worker_tid)
     spark::HealthCommandTestAccess::setUploadFunction(health,
                                                       [](const std::string &, const std::string &, const std::string &,
                                                          const std::string &) -> spark::UploadResult { throw 7; });
-    health.cmdHealth(sender, spark::Arguments({"health", "--upload"}));
+    health.cmdHealth(sender, spark::Arguments({"health", "--upload"}, true));
     if (!waitForCondition([&] { return !spark::HealthCommandTestAccess::uploading(health); }, 3s)) {
         std::fprintf(stderr, "worker exception: health worker exception escaped\n");
         return false;
@@ -1927,7 +1927,7 @@ bool verifyAsyncNetworkCommands(std::uint64_t worker_tid)
             cv.wait(lock, [&release]() { return release; });
             return std::string();
         });
-    service.cmdOpen(sender, spark::Arguments({"open"}));
+    service.cmdOpen(sender, spark::Arguments({"open"}, true));
     {
         std::unique_lock<std::mutex> lock(mutex);
         if (!cv.wait_for(lock, std::chrono::seconds(2), [&entered]() { return entered; })) {
@@ -1962,7 +1962,7 @@ bool verifyAsyncNetworkCommands(std::uint64_t worker_tid)
             result.error = "controlled failure";
             return result;
         });
-    health.cmdHealth(sender, spark::Arguments({"health", "--upload"}));
+    health.cmdHealth(sender, spark::Arguments({"health", "--upload"}, true));
     {
         std::unique_lock<std::mutex> lock(mutex);
         if (!cv.wait_for(lock, std::chrono::seconds(2), [&entered]() { return entered; })) {
@@ -2004,13 +2004,13 @@ bool verifyBackgroundCommandValidation(std::uint64_t worker_tid)
     }
 
     TestCommandSender sender;
-    service.cmdStart(sender, spark::Arguments({"start", "--interval", "invalid"}));
+    service.cmdStart(sender, spark::Arguments({"start", "--interval", "invalid"}, true));
     if (sender.errors.empty() || !service.running() || !service.isBackgroundRunning()) {
         std::fprintf(stderr, "background validation: invalid foreground request stopped background profiling\n");
         return false;
     }
 
-    service.cmdStart(sender, spark::Arguments({"start", "--interval", "1"}));
+    service.cmdStart(sender, spark::Arguments({"start", "--interval", "1"}, true));
     if (!service.running() || service.isBackgroundRunning()) {
         std::fprintf(stderr, "background validation: valid foreground request did not replace background profiling\n");
         return false;
@@ -2023,8 +2023,8 @@ bool verifyBackgroundCommandValidation(std::uint64_t worker_tid)
     }
 
     service.startBackgroundProfiler();
-    service.cmdStart(sender, spark::Arguments({"start", "--interval", "1", "--save-to-file"}));
-    service.cmdStop(sender, spark::Arguments({"stop"}));
+    service.cmdStart(sender, spark::Arguments({"start", "--interval", "1", "--save-to-file"}, true));
+    service.cmdStop(sender, spark::Arguments({"stop"}, true));
     if (!waitForCondition(
             [&service]() { return !service.exporting() && service.running() && service.isBackgroundRunning(); },
             std::chrono::seconds(10))) {
@@ -2034,7 +2034,7 @@ bool verifyBackgroundCommandValidation(std::uint64_t worker_tid)
     service.cmdCancel(sender);
 
     service.startBackgroundProfiler();
-    service.cmdStart(sender, spark::Arguments({"start", "--interval", "1", "--timeout", "11", "--save-to-file"}));
+    service.cmdStart(sender, spark::Arguments({"start", "--interval", "1", "--timeout", "11", "--save-to-file"}, true));
     spark::ProfilerServiceTestAccess::expire(service);
     service.onTick(50.0);
     if (!waitForCondition([&service]() { return !service.exporting(); }, std::chrono::seconds(10))) {

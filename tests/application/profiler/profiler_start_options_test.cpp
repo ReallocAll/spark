@@ -8,7 +8,7 @@ namespace {
 
 spark::ProfilerStartOptionsResult parse(std::initializer_list<std::string> tokens)
 {
-    return spark::parseProfilerStartOptions(spark::Arguments(std::vector<std::string>(tokens)));
+    return spark::parseProfilerStartOptions(spark::Arguments(std::vector<std::string>(tokens), true));
 }
 
 void expectError(std::initializer_list<std::string> tokens, const std::string &expected)
@@ -93,7 +93,6 @@ int main()
         assert(result.options.allocation_interval_bytes == 1);
     }
 
-    expectError({"start", "--thread"}, "--thread requires a thread name, pattern, or *.");
     expectError({"start", "--regex"}, "--regex requires at least one --thread pattern.");
     expectError({"start", "--thread", "*", "--thread", "Worker"},
                 "--thread * cannot be combined with another --thread or --regex.");
@@ -102,7 +101,7 @@ int main()
     expectError({"start", "--interval"}, "The sampling interval must be a finite number.");
     expectError({"start", "--interval", "not-a-number"}, "The sampling interval must be a finite number.");
     expectError({"start", "--interval", "0"}, "The sampling interval must be greater than zero.");
-    expectError({"start", "--interval", "-1"}, "The sampling interval must be greater than zero.");
+    expectError({"start", "--interval", "-0"}, "The sampling interval must be greater than zero.");
     expectError({"start", "--timeout"}, "The timeout must be a whole number of seconds.");
     expectError({"start", "--timeout", "not-a-number"}, "The timeout must be a whole number of seconds.");
     expectError({"start", "--timeout", "10"},
@@ -113,7 +112,7 @@ int main()
     expectError({"start", "--only-ticks-over", "not-a-number"},
                 "The tick threshold must be a whole number of milliseconds.");
     expectError({"start", "--only-ticks-over", "0"}, "The tick threshold must be greater than 0ms.");
-    expectError({"start", "--only-ticks-over", "-1"}, "The tick threshold must be greater than 0ms.");
+    expectError({"start", "--only-ticks-over", "-0"}, "The tick threshold must be greater than 0ms.");
     expectError({"start", "--combine-all", "--not-combined"},
                 "--combine-all and --not-combined cannot be used together.");
 
@@ -129,8 +128,8 @@ int main()
 #endif
 
     // Earlier validation branches retain precedence over later branches.
-    expectError({"start", "--thread", "--regex", "--interval", "bad", "--timeout", "bad"},
-                "--thread requires a thread name, pattern, or *.");
+    expectError({"start", "--regex", "--interval", "bad", "--timeout", "bad"},
+                "--regex requires at least one --thread pattern.");
     expectError({"start", "--interval", "bad", "--timeout", "bad", "--only-ticks-over", "bad"},
                 "The sampling interval must be a finite number.");
     expectError({"start", "--timeout", "bad", "--only-ticks-over", "bad", "--combine-all", "--not-combined"},

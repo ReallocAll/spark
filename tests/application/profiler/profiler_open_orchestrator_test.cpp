@@ -100,7 +100,7 @@ void testOpenWithoutCompletedProfile()
                                          metadata_provider, notifier);
     TestSender sender;
 
-    open.cmdOpen(sender, spark::Arguments({"open"}));
+    open.cmdOpen(sender, spark::Arguments({"open"}, true));
     assert(sender.messages.size() == 1);
     assert(sender.messages.front().find("The profiler isn't running!") != std::string::npos);
     assert(!open.viewerSocket());
@@ -139,7 +139,7 @@ void testOpenCommentReachesLiveMetadata()
         });
 
     TestSender sender;
-    open.cmdOpen(sender, spark::Arguments({"open", "--comment", "open comment"}));
+    open.cmdOpen(sender, spark::Arguments({"open", "--comment", "open comment"}, true));
     {
         std::unique_lock lock(mutex);
         assert(cv.wait_for(lock, std::chrono::seconds(3), [&entered] { return entered; }));
