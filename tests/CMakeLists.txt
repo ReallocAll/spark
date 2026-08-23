@@ -96,6 +96,12 @@ set_target_properties(spark_health_dashboard_test PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME spark_health_dashboard_test COMMAND spark_health_dashboard_test)
 
+add_executable(spark_health_command_routing_test application/health/health_command_routing_test.cpp)
+target_link_libraries(spark_health_command_routing_test PRIVATE spark_application)
+set_target_properties(spark_health_command_routing_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME spark_health_command_routing_test COMMAND spark_health_command_routing_test)
+
 add_executable(spark_profiler_start_options_test application/profiler/profiler_start_options_test.cpp)
 target_link_libraries(spark_profiler_start_options_test PRIVATE spark_application)
 set_target_properties(spark_profiler_start_options_test PROPERTIES

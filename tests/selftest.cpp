@@ -503,7 +503,8 @@ bool verifyHealthServerConfigurations()
     TestDispatcher dispatcher;
     TestNotifier notifier;
     TestCommandSender sender;
-    spark::HealthCommand health(statistics, metadata_provider, {}, {}, dispatcher, notifier);
+    spark::TrustedViewersState trusted_viewers(std::filesystem::temp_directory_path() / "spark-health-viewers.json");
+    spark::HealthCommand health(statistics, metadata_provider, {}, {}, {}, trusted_viewers, dispatcher, notifier);
     const spark::HealthData data = spark::HealthCommandTestAccess::capture(health, sender, 1234);
     const std::string payload = spark::buildHealthData(data);
 
@@ -1882,7 +1883,7 @@ bool verifyWorkerExceptionBoundaries(std::uint64_t worker_tid)
     }
     service.shutdown();
 
-    spark::HealthCommand health(statistics, metadata_provider, {}, {}, dispatcher, notifier);
+    spark::HealthCommand health(statistics, metadata_provider, {}, {}, {}, trusted_viewers, dispatcher, notifier);
     spark::HealthCommandTestAccess::setUploadFunction(health,
                                                       [](const std::string &, const std::string &, const std::string &,
                                                          const std::string &) -> spark::UploadResult { throw 7; });
@@ -1947,7 +1948,7 @@ bool verifyAsyncNetworkCommands(std::uint64_t worker_tid)
         return false;
     }
 
-    spark::HealthCommand health(statistics, metadata_provider, {}, {}, dispatcher, notifier);
+    spark::HealthCommand health(statistics, metadata_provider, {}, {}, {}, trusted_viewers, dispatcher, notifier);
     entered = false;
     release = false;
     spark::HealthCommandTestAccess::setUploadFunction(

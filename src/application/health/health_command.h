@@ -9,9 +9,11 @@
 #include <thread>
 
 #include "application/command/command_sender.h"
+#include "application/health/health_dashboard.h"
 #include "application/platform_capabilities.h"
 #include "core/activity/activity_log.h"
 #include "core/command/arguments.h"
+#include "core/config/trusted_viewers.h"
 #include "core/stats/network_monitor.h"
 #include "core/stats/ping_statistics.h"
 #include "core/stats/statistics_service.h"
@@ -26,13 +28,19 @@ struct HealthCommandTestAccess;
 // Platform-independent: uses CommandSender and ProfileMetadataProvider.
 class HealthCommand {
 public:
+    using UploadFunction =
+        std::function<UploadResult(const std::string &, const std::string &, const std::string &, const std::string &)>;
+
     HealthCommand(StatisticsService &statistics, ProfileMetadataProvider &metadata_provider, std::string bytebin_url,
-                  std::string viewer_url, MainThreadDispatcher &dispatcher, ResultNotifier &notifier);
+                  std::string viewer_url, std::string bytesocks_host, TrustedViewersState &trusted_viewers,
+                  MainThreadDispatcher &dispatcher, ResultNotifier &notifier,
+                  HealthDashboard::ConnectionFactory dashboard_factory = {}, UploadFunction upload_function = {});
     ~HealthCommand();
 
     void cmdTps(CommandSender &sender);
     void cmdPing(CommandSender &sender, const Arguments &args);
     void cmdHealth(CommandSender &sender, const Arguments &args);
+    void onTick();
 
     // Called periodically (every ~10 seconds) to poll ping data.
     void pollPing();
@@ -57,14 +65,21 @@ public:
 private:
     friend struct HealthCommandTestAccess;
 
-    static void sendPerformanceReport(CommandSender &sender, const StatisticsSnapshot &stats);
+    void showHealth(CommandSender &sender);
+    void openHealthDashboard(CommandSender &sender);
+    void trustViewer(CommandSender &sender, const Arguments &args);
     void uploadHealthReport(CommandSender &sender);
     HealthData captureHealthData(const CommandSender &sender, std::int64_t now_ms);
+    HealthData captureHealthDataForSender(const std::string &sender_name, bool sender_is_player, std::int64_t now_ms);
+    void onTickAt(std::int64_t now_ms);
+    UploadResult uploadHealthData(const HealthData &data);
     void runHealthUpload(const HealthData &data, std::string sender_name, bool sender_is_player, std::int64_t now_ms);
     void announceHealthUpload();
+    void completeHealthDashboard(HealthDashboard::OpenResult result);
 
     StatisticsService &statistics_;
     ProfileMetadataProvider &metadata_provider_;
+    TrustedViewersState &trusted_viewers_;
     MainThreadDispatcher &dispatcher_;
     ResultNotifier &notifier_;
     std::unique_ptr<PingStatistics> ping_statistics_;
@@ -72,6 +87,11 @@ private:
     std::function<ActivityLog *()> activity_log_provider_;
     std::string bytebin_url_;
     std::string viewer_url_;
+    std::string bytesocks_host_;
+    std::unique_ptr<HealthDashboard> dashboard_;
+    std::string dashboard_sender_;
+    bool dashboard_sender_is_player_ = false;
+    std::int64_t dashboard_open_time_ms_ = 0;
     std::thread upload_thread_;
     std::atomic<bool> uploading_{false};
     std::mutex upload_mutex_;
@@ -79,8 +99,7 @@ private:
     std::string upload_sender_;
     bool upload_sender_is_player_ = false;
     std::int64_t upload_time_ms_ = 0;
-    std::function<UploadResult(const std::string &, const std::string &, const std::string &, const std::string &)>
-        upload_fn_;
+    UploadFunction upload_fn_;
     std::shared_ptr<int> lifetime_ = std::make_shared<int>(0);
 };
 

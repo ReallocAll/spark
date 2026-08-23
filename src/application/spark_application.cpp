@@ -31,7 +31,8 @@ SparkApplication::SparkApplication(std::string bds_executable_sha256, const std:
                 config_.background_profiler_interval, config_.background_profiler_thread_grouper,
                 config_.background_profiler_thread_dumper, trusted_viewers_, dispatcher_, metadata_provider_,
                 notifier_),
-      health_(statistics_, metadata_provider_, config_.bytebin_url, config_.viewer_url, dispatcher_, notifier_),
+      health_(statistics_, metadata_provider_, config_.bytebin_url, config_.viewer_url, config_.bytesocks_host,
+              trusted_viewers_, dispatcher_, notifier_),
       activity_log_(std::move(activity_log_file)), activity_command_(activity_log_), tick_monitor_(notifier_),
       watchdog_(server_heartbeat_)
 {
@@ -91,7 +92,7 @@ void SparkApplication::registerCommands()
     registry_.registerCommand({"ping"}, "player ping RTT statistics", "spark.ping",
                               [this](CommandSender &sender, const Arguments &args) { health_.cmdPing(sender, args); });
     registry_.registerCommand(
-        {"health", "healthreport", "ht"}, "performance and host resource report", "spark.health",
+        {"health", "healthreport", "ht"}, "show, upload, or open the health dashboard", "spark.health",
         [this](CommandSender &sender, const Arguments &args) { health_.cmdHealth(sender, args); });
     registry_.registerCommand(
         {"activity", "activitylog", "log"}, "show recent profiler and health report activity", "spark.activity",
@@ -122,6 +123,7 @@ void SparkApplication::onTick(double mspt)
     if (tick_counter_ % 1200 == 0) {
         health_.pollNetwork();
     }
+    health_.onTick();
     tick_monitor_.onTick(mspt);
     profiler_.onTick(mspt);
 }
@@ -135,8 +137,8 @@ void SparkApplication::enable()
 
 void SparkApplication::shutdown()
 {
-    profiler_.shutdown();
     health_.shutdown();
+    profiler_.shutdown();
     watchdog_.stop();
 }
 
