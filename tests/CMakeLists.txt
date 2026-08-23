@@ -228,6 +228,12 @@ set_target_properties(spark_journal_test PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME spark_journal_test COMMAND spark_journal_test)
 
+add_executable(spark_journal_format_bounds_test core/recovery/journal_format_bounds_test.cpp)
+target_link_libraries(spark_journal_format_bounds_test PRIVATE spark_core)
+set_target_properties(spark_journal_format_bounds_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME spark_journal_format_bounds_test COMMAND spark_journal_format_bounds_test)
+
 add_executable(spark_recovery_save_failure_test application/recovery/recovery_save_failure_test.cpp)
 target_link_libraries(spark_recovery_save_failure_test PRIVATE spark_application)
 set_target_properties(spark_recovery_save_failure_test PROPERTIES
