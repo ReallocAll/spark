@@ -143,7 +143,9 @@ add_library(spark_core STATIC
         src/core/stats/system_stats.cpp
         src/core/ws/ws_proto.cpp
         src/core/ws/viewer_socket.cpp
+        src/proto/health_data.cpp
         src/proto/sampler_data.cpp
+        src/proto/statistics_proto.cpp
         src/net/gzip.cpp
         src/net/bytebin.cpp
         src/net/profile_file.cpp
