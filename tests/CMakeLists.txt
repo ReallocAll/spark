@@ -36,6 +36,12 @@ set_target_properties(spark_network_monitor_test PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME spark_network_monitor_test COMMAND spark_network_monitor_test)
 
+add_executable(spark_arguments_test core/command/arguments_test.cpp)
+target_link_libraries(spark_arguments_test PRIVATE spark_core)
+set_target_properties(spark_arguments_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME spark_arguments_test COMMAND spark_arguments_test)
+
 add_executable(spark_placeholder_statistics_test core/stats/placeholder_statistics_test.cpp)
 target_link_libraries(spark_placeholder_statistics_test PRIVATE spark_core)
 set_target_properties(spark_placeholder_statistics_test PROPERTIES
@@ -209,6 +215,12 @@ target_link_libraries(spark_profiler_upload_alias_test PRIVATE spark_application
 set_target_properties(spark_profiler_upload_alias_test PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME spark_profiler_upload_alias_test COMMAND spark_profiler_upload_alias_test)
+
+add_executable(spark_command_registry_test application/command/command_registry_test.cpp)
+target_link_libraries(spark_command_registry_test PRIVATE spark_application)
+set_target_properties(spark_command_registry_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME spark_command_registry_test COMMAND spark_command_registry_test)
 
 add_executable(spark_world_region_test core/util/world_region_test.cpp)
 target_link_libraries(spark_world_region_test PRIVATE spark_core)

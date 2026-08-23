@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Align command argument parsing with Java spark and hide inaccessible commands from help output.
 - Add Java-compatible health report commands and a live health dashboard with
   background uploads, rolling statistics updates, and trusted viewer clients.
 - Allow `/spark profiler open --comment <text>` to override live profile comments.

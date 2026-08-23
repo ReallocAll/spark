@@ -24,7 +24,7 @@ private:
 
 void runPage(spark::ActivityCommand &command, const std::string &value, TestSender &sender)
 {
-    command.cmdActivity(sender, spark::Arguments({"activity", "--page", value}));
+    command.cmdActivity(sender, spark::Arguments({"activity", "--page", value}, true));
 }
 
 }  // namespace
@@ -45,10 +45,10 @@ int main()
     spark::ActivityCommand command(log);
     TestSender sender;
 
-    runPage(command, "0", sender);
+    runPage(command, "-0", sender);
     assert(sender.errors.size() == 1);
     sender = {};
-    runPage(command, "-1", sender);
+    runPage(command, "0", sender);
     assert(sender.errors.size() == 1);
     sender = {};
     runPage(command, "1", sender);

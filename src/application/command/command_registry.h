@@ -18,7 +18,7 @@ public:
     using Handler = std::function<void(CommandSender &, const Arguments &)>;
 
     void registerCommand(std::vector<std::string> aliases, std::string description, std::string permission,
-                         Handler handler);
+                         bool allow_subcommand, Handler handler);
 
     // Returns true if a command matched and was executed.
     bool dispatch(CommandSender &sender, const std::vector<std::string> &tokens) const;
@@ -30,6 +30,7 @@ private:
         std::vector<std::string> aliases;
         std::string description;
         std::string permission;
+        bool allow_subcommand;
         Handler handler;
     };
     std::vector<Entry> commands_;

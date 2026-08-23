@@ -20,7 +20,7 @@ std::string lowerCase(std::string value)
 }  // namespace
 
 void CommandRegistry::registerCommand(std::vector<std::string> aliases, std::string description, std::string permission,
-                                      Handler handler)
+                                      bool allow_subcommand, Handler handler)
 {
     for (std::string &alias : aliases) {
         alias = lowerCase(std::move(alias));
@@ -28,6 +28,7 @@ void CommandRegistry::registerCommand(std::vector<std::string> aliases, std::str
     commands_.push_back({.aliases = std::move(aliases),
                          .description = std::move(description),
                          .permission = std::move(permission),
+                         .allow_subcommand = allow_subcommand,
                          .handler = std::move(handler)});
 }
 
@@ -47,7 +48,10 @@ bool CommandRegistry::dispatch(CommandSender &sender, const std::vector<std::str
                 }
                 std::vector<std::string> rest(tokens.begin() + 1, tokens.end());
                 try {
-                    cmd.handler(sender, Arguments(rest));
+                    cmd.handler(sender, Arguments(rest, cmd.allow_subcommand));
+                }
+                catch (const Arguments::ParseError &e) {
+                    sender.sendErrorMessage(e.what());
                 }
                 catch (const std::exception &e) {
                     sender.sendErrorMessage("Internal error: {}", e.what());
@@ -65,21 +69,41 @@ bool CommandRegistry::dispatch(CommandSender &sender, const std::vector<std::str
 
 void CommandRegistry::sendHelp(CommandSender &sender) const
 {
+    const auto can_use = [this, &sender](const std::string &alias) {
+        for (const auto &command : commands_) {
+            if (std::ranges::find(command.aliases, alias) != command.aliases.end()) {
+                return command.permission.empty() || sender.hasPermission(command.permission);
+            }
+        }
+        return false;
+    };
+
     sender.sendMessage(kColorGold + "endstone-spark " + kColorGray + "v" + spark::kVersion);
     for (const auto &cmd : commands_) {
+        if (!cmd.permission.empty() && !sender.hasPermission(cmd.permission)) {
+            continue;
+        }
         std::string message = kColorYellow + "/spark ";
         message += cmd.aliases[0] + " " + kColorGray + "- " + cmd.description;
         sender.sendMessage(message);
     }
-    sender.sendMessage(kColorGray + "Modes: --alloc, --alloc-live-only");
-    sender.sendMessage(kColorGray + "Thread selection: --thread <name|*>, --regex");
-    sender.sendMessage(kColorGray + "Thread grouping: --not-combined (separate), --combine-all (merge all)");
-    sender.sendMessage(kColorGray + "Execution only: --ignore-sleeping");
-    sender.sendMessage(kColorGray + "Flags: --interval <ms|bytes>, --timeout <seconds>, --only-ticks-over <ms>");
-    sender.sendMessage(kColorGray + "       --save-to-file (plugins/spark/profiles), --comment <text>");
-    sender.sendMessage(kColorGray + "Ping: --player <username>");
-    sender.sendMessage(kColorGray + "Health: show/upload/dashboard/trust-viewer [--id <client id>]");
-    sender.sendMessage(kColorGray + "Activity: --page <number>");
+    if (can_use("profiler")) {
+        sender.sendMessage(kColorGray + "Modes: --alloc, --alloc-live-only");
+        sender.sendMessage(kColorGray + "Thread selection: --thread <name|*>, --regex");
+        sender.sendMessage(kColorGray + "Thread grouping: --not-combined (separate), --combine-all (merge all)");
+        sender.sendMessage(kColorGray + "Execution only: --ignore-sleeping");
+        sender.sendMessage(kColorGray + "Flags: --interval <ms|bytes>, --timeout <seconds>, --only-ticks-over <ms>");
+        sender.sendMessage(kColorGray + "       --save-to-file (plugins/spark/profiles), --comment <text>");
+    }
+    if (can_use("ping")) {
+        sender.sendMessage(kColorGray + "Ping: --player <username>");
+    }
+    if (can_use("health")) {
+        sender.sendMessage(kColorGray + "Health: show/upload/dashboard/trust-viewer [--id <client id>]");
+    }
+    if (can_use("activity")) {
+        sender.sendMessage(kColorGray + "Activity: --page <number>");
+    }
 }
 
 }  // namespace spark

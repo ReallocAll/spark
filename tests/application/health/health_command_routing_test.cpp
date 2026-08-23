@@ -184,12 +184,12 @@ int main()
     {
         auto health = makeCommand(fixture, {}, upload);
         Sender sender;
-        health.cmdHealth(sender, Arguments({"show"}));
+        health.cmdHealth(sender, Arguments({"show"}, true));
         assert(uploads == 0);
         assert(sender.errors.empty());
-        health.cmdHealth(sender, Arguments({"upload"}));
+        health.cmdHealth(sender, Arguments({"upload"}, true));
         assert(fixture.notifier.waitForMessageCount(1));
-        health.cmdHealth(sender, Arguments({"health", "--upload"}));
+        health.cmdHealth(sender, Arguments({"health", "--upload"}, true));
         assert(fixture.notifier.waitForMessageCount(2));
     }
 
@@ -201,8 +201,8 @@ int main()
         auto health = makeCommand(fixture, HealthDashboard::ConnectionFactory(std::move(factory)), upload);
         health.setActivityLogProvider([&fixture]() { return &fixture.activity_log; });
         Sender sender;
-        health.cmdHealth(sender, Arguments({}));
-        health.cmdHealth(sender, Arguments({"unknown"}));
+        health.cmdHealth(sender, Arguments({}, true));
+        health.cmdHealth(sender, Arguments({"unknown"}, true));
         assert(sender.messages.back().find("already open") != std::string::npos);
         assert(fixture.notifier.waitForMessageCount(3));
         assert(fixture.notifier.messages.back().find("https://viewer/initial") != std::string::npos ||
@@ -222,7 +222,7 @@ int main()
             assert(fixture.connection_probe.cv.wait_for(lock, std::chrono::seconds(2),
                                                         [&] { return fixture.connection_probe.send_count == 1; }));
         }
-        health.cmdHealth(sender, Arguments({"trust-viewer", "--id", "pending"}));
+        health.cmdHealth(sender, Arguments({"trust-viewer", "--id", "pending"}, true));
         const std::vector<std::uint8_t> trusted_key{9, 8, 7};
         assert(fixture.trusted_viewers.contains(base64Encode(trusted_key.data(), trusted_key.size())));
         assert(sender.messages.back().find("now trusted") != std::string::npos);
