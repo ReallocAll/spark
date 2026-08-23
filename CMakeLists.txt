@@ -176,6 +176,7 @@ add_library(spark_application STATIC
         src/application/placeholder/spark_placeholder_resolver.cpp
         src/application/profiler/profile_exporter.cpp
         src/application/profiler/profiler_service.cpp
+        src/application/profiler/profiler_start_options.cpp
         src/application/profiler/viewer_update_worker.cpp
         src/application/spark_application.cpp
         src/application/tick_monitor/tick_monitor_command.cpp)
