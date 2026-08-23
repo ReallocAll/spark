@@ -241,8 +241,12 @@ int main()
     assert(probe.completions[0].completed);
     assert(probe.completions[0].url == "https://viewer/initial-key");
     assert(probe.completions[0].payload_key == "initial-key");
-    assert(probe.uploaded_channel && probe.uploaded_channel->channel_id == "fake-channel");
-    assert(probe.uploaded_channel->public_key == std::vector<std::uint8_t>({1, 2, 3}));
+    const auto uploaded_channel = probe.uploaded_channel;
+    assert(uploaded_channel && uploaded_channel->channel_id == "fake-channel");
+    if (!uploaded_channel) {
+        return 1;
+    }
+    assert(uploaded_channel->public_key == std::vector<std::uint8_t>({1, 2, 3}));
     assert(dashboard->isOpen());
 
     probe.latest->setClient(false);
