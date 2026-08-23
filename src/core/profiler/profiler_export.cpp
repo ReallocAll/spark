@@ -421,6 +421,13 @@ std::string Profiler::exportData(const ExportContext &ctx, const AllocationSnaps
         meta.extra_platform_metadata["Allocation hook aliases"] = std::to_string(aliases);
         meta.extra_platform_metadata["Allocation hook capabilities"] = jsonString(allocationHookSummary(capabilities));
     }
+    else {
+        meta.extra_platform_metadata["Execution samples dropped"] = std::to_string(sampler_.droppedSamples());
+        meta.extra_platform_metadata["Execution tick events dropped"] = std::to_string(sampler_.droppedTickEvents());
+        meta.extra_platform_metadata["Execution sample queue capacity"] =
+            std::to_string(Sampler::sampleQueueCapacity());
+        meta.extra_platform_metadata["Execution tick event capacity"] = std::to_string(Sampler::tickQueueCapacity());
+    }
 
     meta.platform_stats.present = true;
     meta.platform_stats.player_count = ctx.player_count;

@@ -210,6 +210,8 @@ void Sampler::resetSession()
     next_tick_history_prune_window_ = current_window;
     current_tick_.store(0);
     sample_count_.store(0, std::memory_order_relaxed);
+    dropped_samples_.store(0, std::memory_order_relaxed);
+    dropped_tick_events_.store(0, std::memory_order_relaxed);
     sampler_tid_.store(0, std::memory_order_relaxed);
     aggregator_tid_.store(0, std::memory_order_relaxed);
     worker_failed_.store(false, std::memory_order_relaxed);
@@ -228,7 +230,9 @@ std::int32_t Sampler::currentWindow()
 void Sampler::onTick(double mspt_ms)
 {
     std::uint64_t finished = current_tick_.load();
-    ticks_.enqueue(TickEvent{.tick_id = finished, .mspt_ms = mspt_ms});
+    if (!ticks_.try_enqueue(tick_producer_, TickEvent{.tick_id = finished, .mspt_ms = mspt_ms})) {
+        dropped_tick_events_.fetch_add(1, std::memory_order_relaxed);
+    }
     current_tick_.store(finished + 1);
 
     const std::int32_t window = currentWindow();
@@ -237,6 +241,15 @@ void Sampler::onTick(double mspt_ms)
     w.mspt_sum += mspt_ms;
     w.mspt_max = std::max(mspt_ms, w.mspt_max);
     maybePruneTickHistory(window);
+}
+
+bool Sampler::enqueueSample(Sample sample) noexcept
+{
+    if (samples_.try_enqueue(sample_producer_, std::move(sample))) {
+        return true;
+    }
+    dropped_samples_.fetch_add(1, std::memory_order_relaxed);
+    return false;
 }
 
 void Sampler::samplerLoop()
@@ -385,7 +398,7 @@ void Sampler::samplerLoop()
             if (config_.ignore_sleeping && isSleepFrame(sample.frames.front().raw_address)) {
                 break;
             }
-            samples_.enqueue(std::move(sample));
+            enqueueSample(std::move(sample));
             break;
         }
         sampler_heartbeat_.beat();

@@ -308,6 +308,9 @@ void ProfilerService::cmdInfo(CommandSender &sender)
     else {
         sender.sendMessage("So far it has profiled for {} ({} samples).", spark::formatDuration(ran),
                            profiler_.sampleCount());
+        if (profiler_.droppedSamples() != 0) {
+            sender.sendMessage("Dropped execution samples: {}", profiler_.droppedSamples());
+        }
     }
     std::int64_t auto_end = profiler_.autoEndTimeMs();
     if (auto_end <= 0) {

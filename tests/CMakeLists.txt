@@ -24,6 +24,12 @@ set_target_properties(spark_symbol_guess_evidence_test PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME spark_symbol_guess_evidence_test COMMAND spark_symbol_guess_evidence_test)
 
+add_executable(spark_sampler_bounded_queue_test native/sampler/bounded_queue_test.cpp)
+target_link_libraries(spark_sampler_bounded_queue_test PRIVATE spark_core)
+set_target_properties(spark_sampler_bounded_queue_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME spark_sampler_bounded_queue_test COMMAND spark_sampler_bounded_queue_test)
+
 add_executable(spark_ping_statistics_test core/stats/ping_statistics_test.cpp)
 target_link_libraries(spark_ping_statistics_test PRIVATE spark_core)
 set_target_properties(spark_ping_statistics_test PROPERTIES
