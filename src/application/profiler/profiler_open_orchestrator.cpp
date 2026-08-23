@@ -1,12 +1,12 @@
 #include "application/profiler/profiler_open_orchestrator.h"
 
-#include <chrono>
 #include <string>
 #include <utility>
 
 #include "core/stats/system_stats.h"
 #include "core/util/base64.h"
 #include "core/util/format.h"
+#include "core/util/monotonic_time.h"
 #include "net/bytebin.h"
 #include "net/gzip.h"
 #include "spark_constants.h"
@@ -17,8 +17,7 @@ namespace {
 
 std::int64_t nowMs()
 {
-    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
-        .count();
+    return monotonicUnixMillis();
 }
 
 }  // namespace

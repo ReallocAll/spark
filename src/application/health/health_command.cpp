@@ -1,6 +1,5 @@
 #include "application/health/health_command.h"
 
-#include <chrono>
 #include <cstdint>
 #include <string>
 #include <utility>
@@ -10,6 +9,7 @@
 #include "core/stats/ping_statistics.h"
 #include "core/util/base64.h"
 #include "core/util/format.h"
+#include "core/util/monotonic_time.h"
 #include "core/ws/crypto.h"
 #include "net/bytebin.h"
 #include "net/gzip.h"
@@ -78,10 +78,7 @@ void HealthCommand::shutdown()
 
 void HealthCommand::onTick()
 {
-    const auto now =
-        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
-            .count();
-    onTickAt(now);
+    onTickAt(monotonicUnixMillis());
 }
 
 void HealthCommand::onTickAt(std::int64_t now_ms)
@@ -217,9 +214,7 @@ void HealthCommand::openHealthDashboard(CommandSender &sender)
         return;
     }
 
-    const std::int64_t now_ms =
-        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
-            .count();
+    const std::int64_t now_ms = monotonicUnixMillis();
     HealthData initial;
     try {
         initial = captureHealthData(sender, now_ms);
@@ -285,9 +280,7 @@ void HealthCommand::uploadHealthReport(CommandSender &sender)
         upload_thread_.join();
     }
 
-    const std::int64_t now_ms =
-        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
-            .count();
+    const std::int64_t now_ms = monotonicUnixMillis();
     try {
         HealthData data = captureHealthData(sender, now_ms);
         const std::string sender_name = sender.getName();

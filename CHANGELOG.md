@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Record upstream-compatible rolling TPS, tick-duration, CPU, world, and ping metric series in health and sampler data.
+- Use globally aligned profiling windows and stop timed profiles on a monotonic deadline even while server ticks are stalled.
 - Align command argument parsing with Java spark and hide inaccessible commands from help output.
 - Add Java-compatible health report commands and a live health dashboard with
   background uploads, rolling statistics updates, and trusted viewer clients.

@@ -111,7 +111,7 @@ public:
     // once sampling has stopped.
     bool stopSampling(std::string &error);
     void stopSampling();  // compatibility helper that discards the error
-    void requestStop() { sampling_stop_requested_.store(true, std::memory_order_release); }
+    void requestStop() noexcept;
     std::string exportData(const ExportContext &ctx) const;
 
     // Export while the profiler is still running.

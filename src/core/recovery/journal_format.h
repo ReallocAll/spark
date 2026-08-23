@@ -15,7 +15,8 @@ namespace spark {
 
 // Journal format constants.
 inline constexpr char kJournalMagic[8] = {'S', 'P', 'R', 'K', 'J', 'N', 'R', 'L'};
-inline constexpr std::uint16_t kJournalVersion = 2;
+inline constexpr std::uint16_t kLegacyJournalVersion = 2;
+inline constexpr std::uint16_t kJournalVersion = 3;
 
 // Metadata snapshot constants.  The snapshot is a sidecar file that preserves
 // SessionConfig, all ModuleDefs, and all ThreadDefs so a rolling journal can
@@ -95,11 +96,12 @@ inline std::vector<std::uint8_t> serializeRecord(RecordType type, std::uint32_t 
 
 // Serialize the file header.
 inline std::vector<std::uint8_t> serializeFileHeader(std::uint64_t session_id, std::uint64_t created_ns,
-                                                     std::uint32_t segment_number)
+                                                     std::uint32_t segment_number,
+                                                     std::uint16_t version = kJournalVersion)
 {
     JournalBuffer h;
     h.bytes(kJournalMagic, 8);
-    h.u16(kJournalVersion);
+    h.u16(version);
     h.u16(0);  // reserved
     h.u64(session_id);
     h.u64(created_ns);
@@ -179,7 +181,8 @@ inline JournalBuffer buildSessionConfigPayload(std::uint32_t interval_us, std::i
                                                std::uint8_t thread_grouper, std::uint8_t profile_type, bool live_only,
                                                std::string_view creator_name, bool creator_is_player,
                                                std::string_view comment,
-                                               const std::vector<std::string> &thread_patterns)
+                                               const std::vector<std::string> &thread_patterns,
+                                               std::int32_t window_adjustment_ms)
 {
     JournalBuffer p;
     p.u32(interval_us);
@@ -197,6 +200,7 @@ inline JournalBuffer buildSessionConfigPayload(std::uint32_t interval_us, std::i
     for (const auto &pat : thread_patterns) {
         p.str(pat);
     }
+    p.i32(window_adjustment_ms);
     return p;
 }
 

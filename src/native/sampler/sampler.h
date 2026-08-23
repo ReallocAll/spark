@@ -2,7 +2,6 @@
 #define ENDSTONE_SPARK_SAMPLER_H
 
 #include <atomic>
-#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
@@ -60,6 +59,7 @@ public:
 
     bool start(const SamplerConfig &config);  // arms capture + spawns threads
     bool stop();                              // stops + joins; safe to call once
+    void requestStop() noexcept;              // stops the producer without joining or disarming
 
     // Temporarily stop both service threads without clearing accumulated data
     // or disarming the capture backend. Allows safe concurrent reads from
@@ -131,7 +131,6 @@ private:
     std::atomic<bool> worker_failed_{false};
     std::atomic<std::uint64_t> service_start_count_{0};
     std::string target_name_ = "Server thread";
-    std::chrono::steady_clock::time_point start_time_{};
 
     std::thread sampler_thread_;
     std::thread aggregator_thread_;
@@ -148,14 +147,14 @@ private:
     std::deque<std::uint8_t> tick_decisions_;  // 0 pending, 1 drop, 2 keep
     std::uint64_t tick_decision_base_ = 0;
     std::map<std::int32_t, std::uint64_t> window_sample_counts_;
-    std::int32_t next_history_prune_window_ = 60;
+    std::int64_t next_history_prune_window_ = profiling_window::kHistorySize;
 
     // sampler-thread state
     ModuleTable modules_;
 
     // main-thread state (written by onTick, read at export after join)
     std::map<std::int32_t, WindowTickStats> window_ticks_;
-    std::int32_t next_tick_history_prune_window_ = 60;
+    std::int64_t next_tick_history_prune_window_ = profiling_window::kHistorySize;
 
     // Heartbeats for stall-watchdog diagnostics (updated by service threads).
     Heartbeat sampler_heartbeat_;
