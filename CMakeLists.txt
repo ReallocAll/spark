@@ -190,6 +190,7 @@ add_library(spark_application STATIC
         src/application/profiler/profile_exporter.cpp
         src/application/profiler/profiler_open_orchestrator.cpp
         src/application/profiler/profiler_service.cpp
+        src/application/profiler/profiler_service_commands.cpp
         src/application/profiler/profiler_start_options.cpp
         src/application/profiler/profiler_timeout.cpp
         src/application/profiler/viewer_update_worker.cpp
