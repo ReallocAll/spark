@@ -90,6 +90,12 @@ set_target_properties(spark_viewer_update_worker_test PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME spark_viewer_update_worker_test COMMAND spark_viewer_update_worker_test)
 
+add_executable(spark_health_dashboard_test application/health/health_dashboard_test.cpp)
+target_link_libraries(spark_health_dashboard_test PRIVATE spark_application)
+set_target_properties(spark_health_dashboard_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME spark_health_dashboard_test COMMAND spark_health_dashboard_test)
+
 add_executable(spark_profiler_start_options_test application/profiler/profiler_start_options_test.cpp)
 target_link_libraries(spark_profiler_start_options_test PRIVATE spark_application)
 set_target_properties(spark_profiler_start_options_test PROPERTIES
