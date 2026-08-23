@@ -1351,138 +1351,6 @@ bool verifyMultiThreadSerialization()
     return true;
 }
 
-bool verifyStatisticsSerialization()
-{
-    spark::ModuleTable modules;
-    const spark::ModuleId module = modules.intern("statistics-module");
-    const spark::FrameKey frame{.module = module, .rva = 0x10, .raw_address = 0x10};
-    spark::CallTree tree;
-    tree.log({frame}, 0);
-
-    spark::ProfileMetadata metadata;
-    metadata.start_time_ms = 1'000;
-    metadata.end_time_ms = 1'800;
-    metadata.platform_stats.present = true;
-    metadata.system_stats.present = true;
-    metadata.system_stats.cpu_threads = 8;
-
-    metadata.statistics.tps.last_1m = {.present = true, .value = 19.0, .span_ms = 60'000, .samples = 1140};
-    metadata.statistics.tps.last_5m = {.present = true, .value = 18.0, .span_ms = 300'000, .samples = 5400};
-    metadata.statistics.tps.last_15m = {.present = true, .value = 17.0, .span_ms = 900'000, .samples = 15300};
-    metadata.statistics.mspt.last_1m = {.present = true,
-                                        .mean = 10.0,
-                                        .min = 1.0,
-                                        .median = 9.0,
-                                        .percentile95 = 20.0,
-                                        .max = 30.0,
-                                        .span_ms = 60'000,
-                                        .samples = 1140};
-    metadata.statistics.mspt.last_5m = {.present = true,
-                                        .mean = 11.0,
-                                        .min = 2.0,
-                                        .median = 10.0,
-                                        .percentile95 = 22.0,
-                                        .max = 35.0,
-                                        .span_ms = 300'000,
-                                        .samples = 5400};
-    metadata.statistics.cpu.process_last_1m = {.present = true, .value = 0.25, .span_ms = 60'000, .samples = 60};
-    metadata.statistics.cpu.process_last_15m = {.present = true, .value = 0.20, .span_ms = 900'000, .samples = 900};
-    metadata.statistics.cpu.system_last_1m = {.present = true, .value = 0.50, .span_ms = 60'000, .samples = 60};
-    metadata.statistics.cpu.system_last_15m = {.present = true, .value = 0.40, .span_ms = 900'000, .samples = 900};
-
-    spark::WindowStats window;
-    window.ticks_present = true;
-    window.ticks = 17;
-    window.cpu_process_present = true;
-    window.cpu_process = 0.25;
-    window.cpu_system_present = true;
-    window.cpu_system = 0.50;
-    window.tps_present = true;
-    window.tps = 17.0;
-    window.mspt_present = true;
-    window.mspt_median = 9.0;
-    window.mspt_max = 30.0;
-    window.players_present = true;
-    window.players = 4;
-    window.start_time_ms = 1'000;
-    window.end_time_ms = 1'800;
-    window.duration_ms = 800;
-    metadata.window_stats[0] = window;
-
-    std::unordered_map<spark::FrameKey, spark::ResolvedFrame, spark::FrameKeyHash> resolved;
-    resolved[frame] = {.class_name = "statistics", .method_name = "sample"};
-    const std::string profile = spark::buildSamplerData(metadata, tree, resolved);
-
-    if (!protoRealEquals(profile, {1, 8, 4, 1}, 19.0) || !protoRealEquals(profile, {1, 8, 4, 2}, 18.0) ||
-        !protoRealEquals(profile, {1, 8, 4, 3}, 17.0) || !protoRealEquals(profile, {1, 8, 5, 1, 1}, 10.0) ||
-        !protoRealEquals(profile, {1, 8, 5, 1, 3}, 1.0) || !protoRealEquals(profile, {1, 8, 5, 1, 4}, 9.0) ||
-        !protoRealEquals(profile, {1, 8, 5, 1, 5}, 20.0) || !protoRealEquals(profile, {1, 9, 1, 2, 1}, 0.25) ||
-        !protoRealEquals(profile, {1, 9, 1, 2, 2}, 0.20)) {
-        std::fprintf(stderr, "statistics serialization: rolling metadata did not "
-                             "round-trip through the current protocol\n");
-        return false;
-    }
-
-    ProtoField statistics;
-    ProtoField omitted;
-    if (!protoVarintEquals(profile, {7, 1}, 0) || !protoVarintEquals(profile, {7, 2, 1}, 17) ||
-        !protoRealEquals(profile, {7, 2, 4}, 17.0) || !protoRealEquals(profile, {7, 2, 5}, 9.0) ||
-        !protoRealEquals(profile, {7, 2, 6}, 30.0) || !protoVarintEquals(profile, {7, 2, 7}, 4) ||
-        !protoVarintEquals(profile, {7, 2, 11}, 1'000) || !protoVarintEquals(profile, {7, 2, 12}, 1'800) ||
-        !protoVarintEquals(profile, {7, 2, 13}, 800) || !findProtoPath(profile, {7, 2}, statistics) ||
-        findProtoField(statistics.bytes, 8, omitted) || findProtoField(statistics.bytes, 10, omitted)) {
-        std::fprintf(stderr, "statistics serialization: per-second fields or omitted "
-                             "gauges were incorrect\n");
-        return false;
-    }
-
-    ProtoField platform;
-    ProtoField system;
-    if (!findProtoPath(profile, {1, 8}, platform) || findProtoField(platform.bytes, 1, omitted) ||
-        !findProtoPath(profile, {1, 9}, system) || findProtoField(system.bytes, 2, omitted) ||
-        findProtoField(system.bytes, 4, omitted) || findProtoField(system.bytes, 5, omitted)) {
-        std::fprintf(stderr, "statistics serialization: unavailable resource fields "
-                             "were serialized as real observations\n");
-        return false;
-    }
-    return true;
-}
-
-bool verifyGameRuleSerialization()
-{
-    spark::ModuleTable modules;
-    const spark::ModuleId module = modules.intern("game-rule-module");
-    const spark::FrameKey frame{.module = module, .rva = 0x10, .raw_address = 0x10};
-    spark::CallTree tree;
-    tree.log({frame}, 0);
-
-    spark::ProfileMetadata metadata;
-    metadata.platform_stats.present = true;
-    metadata.world.present = true;
-    metadata.world.game_rules.push_back({.name = "dodaylightcycle", .world_values = {{"level", "false"}}});
-
-    std::unordered_map<spark::FrameKey, spark::ResolvedFrame, spark::FrameKeyHash> resolved;
-    const std::string profile = spark::buildSamplerData(metadata, tree, resolved);
-
-    ProtoField world_statistics;
-    ProtoField game_rule;
-    ProtoField name;
-    ProtoField default_value;
-    ProtoField world_value;
-    ProtoField world_name;
-    ProtoField current_value;
-    if (!findProtoPath(profile, {1, 8, 8}, world_statistics) ||
-        !findProtoPath(world_statistics.bytes, {4}, game_rule) || !findProtoField(game_rule.bytes, 1, name) ||
-        name.bytes != "dodaylightcycle" || findProtoField(game_rule.bytes, 2, default_value) ||
-        !findProtoPath(game_rule.bytes, {3}, world_value) || !findProtoField(world_value.bytes, 1, world_name) ||
-        world_name.bytes != "level" || !findProtoField(world_value.bytes, 2, current_value) ||
-        current_value.bytes != "false") {
-        std::fprintf(stderr, "game rule serialization: name/current mapping or absent default was incorrect\n");
-        return false;
-    }
-    return true;
-}
-
 bool verifyLiveProfilerWindowStatistics(std::uint64_t worker_tid)
 {
     spark::StatisticsService statistics;
@@ -3797,7 +3665,7 @@ int main(int argc, char **argv)
 
     if (argc > 1 && std::string(argv[1]) == "--statistics-only") {
         return verifyStatisticsService() && verifySystemResourceStats() && verifyWorldGaugeStatistics() &&
-                       verifyWorldGaugeAbsentWhenNotRecorded() && verifyGameRuleSerialization()
+                       verifyWorldGaugeAbsentWhenNotRecorded()
                  ? 0
                  : 1;
     }
@@ -3827,8 +3695,7 @@ int main(int argc, char **argv)
     if (!verifyArgumentParsing() || !spark::SamplerTestAccess::verifyContinuousHistory() ||
         !verifyThreadSelectorSemantics() || !verifyTickMonitor() || !verifyStatisticsService() ||
         !verifySystemResourceStats() || !verifyWorldGaugeStatistics() || !verifyWorldGaugeAbsentWhenNotRecorded() ||
-        !verifyThreadDiscovery() || !verifyMultiThreadSerialization() || !verifyStatisticsSerialization() ||
-        !verifyGameRuleSerialization() || !verifyHealthServerConfigurations() ||
+        !verifyThreadDiscovery() || !verifyMultiThreadSerialization() || !verifyHealthServerConfigurations() ||
         !verifyLiveProfilerWindowStatistics(GWorkerTid.load()) || !verifyLiveExportStopCancel(GWorkerTid.load()) ||
         !verifyLiveExportTimeout(GWorkerTid.load()) || !verifyViewerShutdownDuringLiveExport(GWorkerTid.load()) ||
         !verifyViewerDisconnectKeepsProfilerRunning(GWorkerTid.load()) ||
