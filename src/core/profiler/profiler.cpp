@@ -37,7 +37,7 @@ std::uint64_t Profiler::observedAllocationBytes() const
 
 std::uint64_t Profiler::droppedSamples() const
 {
-    return mode_ == ProfileMode::Allocation ? allocation_sampler_.droppedSamples() : 0;
+    return mode_ == ProfileMode::Allocation ? allocation_sampler_.droppedSamples() : sampler_.droppedSamples();
 }
 
 std::uint64_t Profiler::filteredAllocationSamples() const

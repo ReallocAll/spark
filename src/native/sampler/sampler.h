@@ -91,6 +91,10 @@ public:
     const std::map<std::int32_t, WindowTickStats> &windowTicks() const { return window_ticks_; }
     std::uint64_t numberOfTicks() const { return current_tick_.load(); }
     std::uint64_t sampleCount() const { return sample_count_.load(std::memory_order_relaxed); }
+    std::uint64_t droppedSamples() const { return dropped_samples_.load(std::memory_order_relaxed); }
+    std::uint64_t droppedTickEvents() const { return dropped_tick_events_.load(std::memory_order_relaxed); }
+    static constexpr std::size_t sampleQueueCapacity() { return kSampleQueueCapacity; }
+    static constexpr std::size_t tickQueueCapacity() { return kTickQueueCapacity; }
     const std::string &lastError() const { return last_error_; }
 
     // Heartbeats updated by the sampler and aggregator threads.
@@ -100,6 +104,13 @@ public:
 private:
     friend struct SamplerTestAccess;
     friend struct ProfilerTestAccess;
+
+    static constexpr std::size_t kSampleQueueCapacity = 4096;
+    static constexpr std::size_t kTickQueueCapacity = 4096;
+
+    struct QueueTraits : moodycamel::ConcurrentQueueDefaultTraits {
+        static constexpr std::size_t MAX_SUBQUEUE_SIZE = kSampleQueueCapacity;
+    };
 
     struct TickEvent {
         std::uint64_t tick_id;
@@ -115,6 +126,7 @@ private:
     void maybePruneHistory(std::int32_t current_window);
     void maybePruneTickHistory(std::int32_t current_window);
     void recordTickDecision(std::uint64_t tick_id, bool keep);
+    bool enqueueSample(Sample sample) noexcept;
     void markWorkerFailure() noexcept;
     bool startServiceThreads();
 
@@ -126,6 +138,8 @@ private:
     std::atomic<std::uint64_t> target_tid_{0};
     std::atomic<std::uint64_t> current_tick_{0};
     std::atomic<std::uint64_t> sample_count_{0};
+    std::atomic<std::uint64_t> dropped_samples_{0};
+    std::atomic<std::uint64_t> dropped_tick_events_{0};
     std::atomic<std::uint64_t> sampler_tid_{0};
     std::atomic<std::uint64_t> aggregator_tid_{0};
     std::atomic<bool> worker_failed_{false};
@@ -137,8 +151,10 @@ private:
     std::condition_variable wait_cv_;
     std::mutex wait_mutex_;
 
-    moodycamel::ConcurrentQueue<Sample> samples_;
-    moodycamel::ConcurrentQueue<TickEvent> ticks_;
+    moodycamel::ConcurrentQueue<Sample, QueueTraits> samples_{kSampleQueueCapacity};
+    moodycamel::ProducerToken sample_producer_{samples_};
+    moodycamel::ConcurrentQueue<TickEvent, QueueTraits> ticks_{kTickQueueCapacity};
+    moodycamel::ProducerToken tick_producer_{ticks_};
 
     // aggregator-thread state
     CallTree tree_;
