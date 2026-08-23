@@ -1,3 +1,4 @@
+#include <atomic>
 #include <cassert>
 #include <chrono>
 #include <condition_variable>
@@ -12,6 +13,18 @@
 
 #include "application/health/health_dashboard.h"
 
+namespace spark {
+
+struct HealthDashboardTestAccess {
+    static bool stopping(const HealthDashboard &dashboard)
+    {
+        std::scoped_lock lock(dashboard.mutex_);
+        return dashboard.stopping_;
+    }
+};
+
+}  // namespace spark
+
 namespace {
 
 using namespace std::chrono_literals;
@@ -23,6 +36,7 @@ struct Probe {
     std::vector<spark::HealthDashboard::OpenResult> completions;
     std::optional<spark::SocketChannelInfo> uploaded_channel;
     bool next_open_success = true;
+    std::atomic<bool> close_during_work{false};
 };
 
 class FakeConnection final : public spark::HealthDashboardConnection {
@@ -33,12 +47,14 @@ public:
     {
         {
             std::unique_lock lock(mutex_);
+            work_active_ = true;
             open_entered_ = true;
             cv_.notify_all();
             cv_.wait(lock, [this] { return !block_open_ || release_open_; });
         }
         const spark::UploadResult result = upload();
         std::scoped_lock lock(mutex_);
+        work_active_ = false;
         if (!open_success_) {
             return {};
         }
@@ -67,6 +83,9 @@ public:
     void close() override
     {
         std::scoped_lock lock(mutex_);
+        if (work_active_) {
+            probe_.close_during_work.store(true, std::memory_order_release);
+        }
         open_state_ = false;
         ++close_count_;
         cv_.notify_all();
@@ -80,10 +99,12 @@ public:
     bool sendStatistics(const std::string &, const std::string &, const std::string &) override
     {
         std::unique_lock lock(mutex_);
+        work_active_ = true;
         send_entered_ = true;
         cv_.notify_all();
         cv_.wait(lock, [this] { return !block_send_ || release_send_; });
         ++send_count_;
+        work_active_ = false;
         probe_.cv.notify_all();
         return !fail_send_ && open_state_ && client_;
     }
@@ -173,6 +194,7 @@ private:
     bool block_send_ = false;
     bool release_send_ = true;
     bool send_entered_ = false;
+    bool work_active_ = false;
     int send_count_ = 0;
     int close_count_ = 0;
     std::string trusted_client_;
@@ -285,9 +307,13 @@ int main()
     assert(probe.latest->waitSendEntered());
     const std::size_t completions_before_shutdown = probe.completions.size();
     std::thread shutdown_thread([&] { dashboard->shutdown(); });
+    while (!spark::HealthDashboardTestAccess::stopping(*dashboard)) {
+        std::this_thread::yield();
+    }
     probe.latest->releaseSend();
     shutdown_thread.join();
     assert(probe.completions.size() == completions_before_shutdown);
+    assert(!probe.close_during_work.load(std::memory_order_acquire));
 
     probe.next_open_success = false;
     const auto failed = dashboard->open(dataAt(0), "Failure");

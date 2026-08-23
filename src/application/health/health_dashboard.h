@@ -18,6 +18,8 @@
 
 namespace spark {
 
+struct HealthDashboardTestAccess;
+
 // Small connection boundary used by HealthDashboard and its offline tests.
 class HealthDashboardConnection {
 public:
@@ -86,6 +88,8 @@ public:
     bool consumeFailure() { return failed_.exchange(false, std::memory_order_acq_rel); }
 
 private:
+    friend struct HealthDashboardTestAccess;
+
     enum class WorkType {
         Open,
         Update,
