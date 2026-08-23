@@ -5,6 +5,7 @@
 #include <unordered_set>
 
 #include "profiling_window.h"
+#include "proto/metrics_proto.h"
 #include "proto/proto_writer.h"
 #include "proto/statistics_proto.h"
 #include "spark_constants.h"
@@ -211,6 +212,9 @@ std::string buildMetadata(const ProfileMetadata &m)
         ew.string(1, key);
         ew.string(2, value);
         w.message(10, entry);
+    }
+    if (!m.metrics.empty()) {
+        w.message(18, proto_detail::buildMetrics(m.metrics));
     }
     return out;
 }

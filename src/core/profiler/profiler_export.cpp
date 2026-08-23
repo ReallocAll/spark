@@ -433,6 +433,7 @@ std::string Profiler::exportData(const ExportContext &ctx, const AllocationSnaps
     meta.platform_stats.process_virtual_bytes = process.virtual_bytes;
 
     meta.statistics = ctx.statistics;
+    meta.metrics = ctx.metrics;
     meta.system_stats = ctx.system_stats;
     meta.system_stats.uptime_present = true;
     meta.system_stats.uptime_ms = ctx.uptime_ms;

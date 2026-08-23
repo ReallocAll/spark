@@ -47,6 +47,7 @@ struct ProfileMetadata {
     PlatformStats platform_stats;
     SystemStats system_stats;
     StatisticsSnapshot statistics;
+    MetricsSnapshot metrics;
     std::map<std::int32_t, WindowStats> window_stats;
     std::map<std::string, std::string> extra_platform_metadata;
     std::map<std::string, std::string> server_configurations;

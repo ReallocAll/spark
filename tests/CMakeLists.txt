@@ -42,6 +42,12 @@ set_target_properties(spark_placeholder_statistics_test PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME spark_placeholder_statistics_test COMMAND spark_placeholder_statistics_test)
 
+add_executable(spark_metrics_history_test core/stats/metrics_history_test.cpp)
+target_link_libraries(spark_metrics_history_test PRIVATE spark_core)
+set_target_properties(spark_metrics_history_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME spark_metrics_history_test COMMAND spark_metrics_history_test)
+
 add_executable(spark_proto_statistics_test proto/statistics_proto_test.cpp)
 target_link_libraries(spark_proto_statistics_test PRIVATE spark_core)
 set_target_properties(spark_proto_statistics_test PROPERTIES
@@ -59,6 +65,12 @@ target_link_libraries(spark_proto_health_data_test PRIVATE spark_core)
 set_target_properties(spark_proto_health_data_test PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME spark_proto_health_data_test COMMAND spark_proto_health_data_test)
+
+add_executable(spark_proto_metrics_test proto/metrics_proto_test.cpp)
+target_link_libraries(spark_proto_metrics_test PRIVATE spark_core)
+set_target_properties(spark_proto_metrics_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME spark_proto_metrics_test COMMAND spark_proto_metrics_test)
 
 add_executable(spark_activity_log_test core/activity/activity_log_test.cpp)
 target_link_libraries(spark_activity_log_test PRIVATE spark_core)

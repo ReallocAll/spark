@@ -483,6 +483,7 @@ ExportContext ProfilerService::captureLiveContext(std::int64_t now_ms)
     metadata_provider_.gatherServerMetadata(context, now_ms);
     context.native_plugin_sources = session_native_plugin_sources_;
     context.statistics = statistics_.snapshot();
+    context.metrics = statistics_.metricsSnapshot();
     context.window_stats = statistics_.profileWindows(profiler_.startTimeMs(), now_ms);
     context.system_stats = spark::gatherSystemStats(".");
     metadata_provider_.gatherWorldMetadata(context);
@@ -600,6 +601,7 @@ void ProfilerService::finishProfiler(const std::string &sender_name, bool sender
     pending_ctx_.native_plugin_sources = session_native_plugin_sources_;
     pending_ctx_.comment = comment;
     pending_ctx_.statistics = statistics_.snapshot();
+    pending_ctx_.metrics = statistics_.metricsSnapshot();
     pending_ctx_.window_stats = statistics_.profileWindows(profiler_.startTimeMs(), profiler_.endTimeMs());
     pending_ctx_.system_stats = spark::gatherSystemStats(".");
     metadata_provider_.gatherWorldMetadata(pending_ctx_);
