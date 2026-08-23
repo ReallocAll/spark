@@ -26,6 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Require a valid signature before accepting a trusted live-viewer client,
+  reject malformed WebSocket protobuf/base64 input, and bound live-viewer
+  receive and send queues.
 - Encode sampler tick-length thresholds in the upstream protocol's microsecond unit.
 - Match Java spark's tick-duration placeholder windows and percentile ranks, and
   avoid rebuilding unrelated rolling statistics for each placeholder value.

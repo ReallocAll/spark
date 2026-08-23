@@ -1,5 +1,7 @@
 #include "core/util/base64.h"
 
+#include <limits>
+
 namespace spark {
 
 namespace {
@@ -31,30 +33,41 @@ int decodeChar(char c)
 std::string base64Encode(const std::uint8_t *data, std::size_t length)
 {
     std::string out;
-    out.reserve(((length + 2) / 3) * 4);
-    for (std::size_t i = 0; i < length; i += 3) {
+    if (length > std::numeric_limits<std::size_t>::max() - 2) {
+        return {};
+    }
+    const std::size_t groups = (length + 2) / 3;
+    if (groups > out.max_size() / 4) {
+        return {};
+    }
+    out.reserve(groups * 4);
+    for (std::size_t i = 0; i < length;) {
         std::uint32_t triple = data[i] << 16;
-        if (i + 1 < length) {
+        if (length - i > 1) {
             triple |= data[i + 1] << 8;
         }
-        if (i + 2 < length) {
+        if (length - i > 2) {
             triple |= data[i + 2];
         }
 
         out.push_back(KEncodeTable[(triple >> 18) & 0x3f]);
         out.push_back(KEncodeTable[(triple >> 12) & 0x3f]);
-        if (i + 1 < length) {
+        if (length - i > 1) {
             out.push_back(KEncodeTable[(triple >> 6) & 0x3f]);
         }
         else {
             out.push_back('=');
         }
-        if (i + 2 < length) {
+        if (length - i > 2) {
             out.push_back(KEncodeTable[triple & 0x3f]);
         }
         else {
             out.push_back('=');
         }
+        if (length - i <= 3) {
+            break;
+        }
+        i += 3;
     }
     return out;
 }
@@ -66,24 +79,52 @@ std::string base64Encode(std::string_view data)
 
 std::vector<std::uint8_t> base64Decode(std::string_view input)
 {
-    std::vector<std::uint8_t> out;
-    out.reserve(input.size() / 4 * 3);
+    if (input.empty() || input.size() % 4 != 0) {
+        return {};
+    }
 
-    std::uint32_t triple = 0;
-    int bits = 0;
-    for (char c : input) {
-        if (c == '=' || c == '\r' || c == '\n') {
-            continue;
+    std::vector<std::uint8_t> out;
+    const std::size_t groups = input.size() / 4;
+    if (groups > out.max_size() / 3) {
+        return {};
+    }
+    out.reserve(groups * 3);
+
+    for (std::size_t group = 0; group < groups; ++group) {
+        const std::size_t offset = group * 4;
+        const bool last = group + 1 == groups;
+        const char c0 = input[offset];
+        const char c1 = input[offset + 1];
+        const char c2 = input[offset + 2];
+        const char c3 = input[offset + 3];
+        const int v0 = decodeChar(c0);
+        const int v1 = decodeChar(c1);
+        if (v0 < 0 || v1 < 0) {
+            return {};
         }
-        int val = decodeChar(c);
-        if (val < 0) {
-            continue;
+
+        const bool pad2 = c2 == '=';
+        const bool pad3 = c3 == '=';
+        if ((!last && (pad2 || pad3)) || (pad2 && !pad3)) {
+            return {};
         }
-        triple = (triple << 6) | static_cast<std::uint32_t>(val);
-        bits += 6;
-        if (bits >= 8) {
-            bits -= 8;
-            out.push_back(static_cast<std::uint8_t>((triple >> bits) & 0xff));
+        const int v2 = pad2 ? 0 : decodeChar(c2);
+        const int v3 = pad3 ? 0 : decodeChar(c3);
+        if (v2 < 0 || v3 < 0) {
+            return {};
+        }
+        if ((pad2 && (v1 & 0x0f) != 0) || (pad3 && !pad2 && (v2 & 0x03) != 0)) {
+            return {};
+        }
+
+        const std::uint32_t triple = (static_cast<std::uint32_t>(v0) << 18) | (static_cast<std::uint32_t>(v1) << 12) |
+                                     (static_cast<std::uint32_t>(v2) << 6) | static_cast<std::uint32_t>(v3);
+        out.push_back(static_cast<std::uint8_t>((triple >> 16) & 0xff));
+        if (!pad2) {
+            out.push_back(static_cast<std::uint8_t>((triple >> 8) & 0xff));
+        }
+        if (!pad3) {
+            out.push_back(static_cast<std::uint8_t>(triple & 0xff));
         }
     }
     return out;
