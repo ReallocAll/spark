@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add Java-compatible health report commands and a live health dashboard with
   background uploads, rolling statistics updates, and trusted viewer clients.
 - Allow `/spark profiler open --comment <text>` to override live profile comments.
+- Report the number of ticks included by `--only-ticks-over` in sampler metadata.
 - Include current Endstone game-rule values in exported Spark world metadata.
 - Register Spark's native backend with bStats using service ID 33350.
 - Register an optional `spark` expansion with Endstone PlaceholderAPI, exposing
@@ -21,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Encode sampler tick-length thresholds in the upstream protocol's microsecond unit.
 - Match Java spark's tick-duration placeholder windows and percentile ranks, and
   avoid rebuilding unrelated rolling statistics for each placeholder value.
 

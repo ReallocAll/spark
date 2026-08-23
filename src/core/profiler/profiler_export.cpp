@@ -284,7 +284,8 @@ std::string Profiler::exportData(const ExportContext &ctx, const AllocationSnaps
         meta.thread_patterns = options_.threads;
     }
     meta.ticked = options_.only_ticks_over_ms > 0;
-    meta.tick_threshold_ms = options_.only_ticks_over_ms > 0 ? options_.only_ticks_over_ms : 0;
+    meta.tick_threshold_us = options_.only_ticks_over_ms > 0 ? options_.only_ticks_over_ms * 1000 : 0;
+    meta.number_of_included_ticks = meta.ticked ? included_ticks_.load(std::memory_order_relaxed) : 0;
 
     if (!ctx.bds_executable_sha256.empty()) {
         meta.extra_platform_metadata["BDS executable SHA-256"] = jsonString(ctx.bds_executable_sha256);
