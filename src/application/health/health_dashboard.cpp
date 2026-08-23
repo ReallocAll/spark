@@ -204,13 +204,15 @@ void HealthDashboard::shutdown()
         stopping_ = true;
         ++generation_;
         work_.reset();
-        work_active_ = false;
         open_pending_ = false;
         open_ = false;
         connection = std::move(connection_);
     }
     running_.store(false, std::memory_order_release);
     cv_.notify_all();
+    if (worker_.joinable() && worker_.get_id() != std::this_thread::get_id()) {
+        worker_.join();
+    }
     if (connection) {
         try {
             connection->close();
@@ -218,11 +220,9 @@ void HealthDashboard::shutdown()
         catch (...) {  // NOLINT(bugprone-empty-catch): connection close is best effort during shutdown.
         }
     }
-    if (worker_.joinable() && worker_.get_id() != std::this_thread::get_id()) {
-        worker_.join();
-    }
     {
         std::scoped_lock lock(mutex_);
+        work_active_ = false;
         stopping_ = false;
     }
 }
