@@ -1,5 +1,4 @@
 #include <algorithm>
-#include <chrono>
 #include <deque>
 #include <limits>
 #include <map>
@@ -11,6 +10,7 @@
 
 #include "core/profiler/profiler.h"
 #include "core/profiler/thread_grouper.h"
+#include "core/util/monotonic_time.h"
 #include "proto/sampler_data.h"
 #include "spark_constants.h"
 #ifdef _WIN32
@@ -24,8 +24,7 @@ namespace {
 
 std::int64_t nowMs()
 {
-    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
-        .count();
+    return monotonicUnixMillis();
 }
 
 // spark-viewer parses every extra_platform_metadata value with JSON.parse().

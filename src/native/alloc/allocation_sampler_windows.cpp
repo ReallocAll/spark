@@ -37,7 +37,6 @@
 // clang-format off: Windows SDK headers require windows.h first
 #include <windows.h>
 #include <psapi.h>
-#include <tlhelp32.h>
 #include <winternl.h>
 // clang-format on
 
@@ -46,6 +45,7 @@
 #include "native/alloc/allocation_thread_filter.h"
 #include "native/alloc/bounded_event_queue.h"
 #include "native/alloc/byte_sampler.h"
+#include "native/alloc/windows_thread_suspension.h"
 #include "native/sampler/thread_info.h"
 #include "profiling_window.h"
 
@@ -65,8 +65,6 @@ constexpr std::size_t KMaxProfileNodes = 131072;
 constexpr std::size_t KMaxPendingSamples = 32768;
 constexpr std::size_t KMaxTickDecisions = 100000;
 constexpr std::size_t KTickEventCapacity = 4096;
-constexpr std::int32_t KMaxProfileWindows = 86400;
-constexpr std::size_t KMaxPatchThreads = 2048;
 constexpr std::size_t KHookPatchSize = 5;  // funchook 1.1.3 x86/x64 entry jump
 constexpr std::uint32_t KFramesToSkip = 2;
 
@@ -75,11 +73,6 @@ void *tombstonePointer() noexcept
     // NOLINTNEXTLINE(performance-no-int-to-ptr)
     return reinterpret_cast<void *>(static_cast<std::uintptr_t>(1));
 }
-
-struct CodeRange {
-    std::uintptr_t begin = 0;
-    std::uintptr_t end = 0;
-};
 
 struct PreparedTarget {
     void *address = nullptr;
@@ -129,237 +122,6 @@ bool isLeadingAllocatorRuntime(const std::string &path)
            equalsIgnoreCase(name, "vcruntime140.dll") || equalsIgnoreCase(name, "vcruntime140_1.dll") ||
            equalsIgnoreCase(name, "msvcp140.dll");
 }
-
-class SuspendedProcessThreads {
-public:
-    SuspendedProcessThreads() { threads_.reserve(KMaxPatchThreads); }
-
-    SuspendedProcessThreads(const SuspendedProcessThreads &) = delete;
-    SuspendedProcessThreads &operator=(const SuspendedProcessThreads &) = delete;
-
-    ~SuspendedProcessThreads()
-    {
-        std::string ignored;
-        resume(ignored);
-        closeHandles();
-    }
-
-    // Re-snapshot after each pass to catch threads appearing mid-patch.
-    // No allocation is permitted after the first thread is suspended.
-    bool suspendStable(std::string &error)
-    {
-        DWORD failure = ERROR_SUCCESS;
-        const char *operation = nullptr;
-
-        for (int pass = 0; pass < 4; ++pass) {
-            bool added = false;
-            HANDLE snapshot = ::CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
-            if (snapshot == INVALID_HANDLE_VALUE) {
-                failure = ::GetLastError();
-                operation = "CreateToolhelp32Snapshot";
-                break;
-            }
-
-            THREADENTRY32 entry{};
-            entry.dwSize = sizeof(entry);
-            if (::Thread32First(snapshot, &entry) == FALSE) {
-                failure = ::GetLastError();
-                operation = "Thread32First";
-                ::CloseHandle(snapshot);
-                break;
-            }
-
-            const DWORD process_id = ::GetCurrentProcessId();
-            const DWORD current_thread_id = ::GetCurrentThreadId();
-            do {
-                if (entry.th32OwnerProcessID != process_id || entry.th32ThreadID == current_thread_id ||
-                    contains(entry.th32ThreadID)) {
-                    continue;
-                }
-                if (threads_.size() == threads_.capacity()) {
-                    failure = ERROR_NOT_ENOUGH_MEMORY;
-                    operation = "thread suspension capacity";
-                    break;
-                }
-
-                HANDLE thread =
-                    ::OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_LIMITED_INFORMATION, FALSE,
-                                 entry.th32ThreadID);
-                if (thread == nullptr) {
-                    const DWORD code = ::GetLastError();
-                    if (code == ERROR_INVALID_PARAMETER) {
-                        continue;  // thread exited after the snapshot
-                    }
-                    failure = code;
-                    operation = "OpenThread";
-                    break;
-                }
-
-                const DWORD previous_count = ::SuspendThread(thread);
-                if (previous_count == std::numeric_limits<DWORD>::max()) {
-                    DWORD exit_code = STILL_ACTIVE;
-                    const DWORD code = ::GetLastError();
-                    if (::GetExitCodeThread(thread, &exit_code) != FALSE && exit_code != STILL_ACTIVE) {
-                        ::CloseHandle(thread);
-                        continue;
-                    }
-                    ::CloseHandle(thread);
-                    failure = code;
-                    operation = "SuspendThread";
-                    break;
-                }
-
-                threads_.push_back({.handle = thread,
-                                    .thread_id = entry.th32ThreadID,
-                                    .previous_suspend_count = previous_count,
-                                    .suspended = true});
-                added = true;
-            } while (failure == ERROR_SUCCESS && ::Thread32Next(snapshot, &entry) != FALSE);
-
-            if (failure == ERROR_SUCCESS) {
-                const DWORD iteration_error = ::GetLastError();
-                if (iteration_error != ERROR_NO_MORE_FILES) {
-                    failure = iteration_error;
-                    operation = "Thread32Next";
-                }
-            }
-
-            ::CloseHandle(snapshot);
-            if (failure != ERROR_SUCCESS) {
-                break;
-            }
-            if (!added) {
-                return true;
-            }
-        }
-
-        if (failure == ERROR_SUCCESS) {
-            failure = ERROR_BUSY;
-            operation = "thread set did not stabilize";
-        }
-
-        std::string resume_error;
-        resume(resume_error);
-        error =
-            std::string(operation != nullptr ? operation : "thread suspension") + " failed: " + std::to_string(failure);
-        if (!resume_error.empty()) {
-            error += "; " + resume_error;
-        }
-        return false;
-    }
-
-    bool resume(std::string &error) noexcept
-    {
-        DWORD first_failure = ERROR_SUCCESS;
-        DWORD first_thread = 0;
-        for (auto &thread : std::views::reverse(threads_)) {
-            if (!thread.suspended) {
-                continue;
-            }
-            bool resumed = false;
-            DWORD last_error = ERROR_SUCCESS;
-            for (int attempt = 0; attempt < 100; ++attempt) {
-                if (::ResumeThread(thread.handle) != static_cast<DWORD>(-1)) {
-                    resumed = true;
-                    break;
-                }
-                last_error = ::GetLastError();
-                DWORD exit_code = STILL_ACTIVE;
-                if (::GetExitCodeThread(thread.handle, &exit_code) != FALSE && exit_code != STILL_ACTIVE) {
-                    resumed = true;  // exited threads no longer need resuming
-                    break;
-                }
-                ::Sleep(1);
-            }
-            if (!resumed && first_failure == ERROR_SUCCESS) {
-                first_failure = last_error != ERROR_SUCCESS ? last_error : ::GetLastError();
-                first_thread = thread.thread_id;
-            }
-            else if (resumed) {
-                thread.suspended = false;
-            }
-        }
-
-        if (first_failure != ERROR_SUCCESS) {
-            try {
-                error = "ResumeThread failed for thread " + std::to_string(first_thread) + ": " +
-                        std::to_string(first_failure);
-            }
-            catch (...) {
-                error.clear();
-            }
-            // Leaving a thread suspended can deadlock unrelated subsystems; terminate.
-            ::TerminateProcess(::GetCurrentProcess(), first_failure);
-            std::abort();  // defensive fallback if TerminateProcess unexpectedly returns
-        }
-        return true;
-    }
-
-    bool anyInstructionPointerInRanges(const std::vector<CodeRange> &ranges, bool &found, DWORD &failure,
-                                       DWORD &failed_thread) const noexcept
-    {
-        found = false;
-        failure = ERROR_SUCCESS;
-        failed_thread = 0;
-        for (const ThreadRecord &thread : threads_) {
-            if (!thread.suspended) {
-                continue;
-            }
-            CONTEXT context{};
-            context.ContextFlags = CONTEXT_CONTROL;
-            if (::GetThreadContext(thread.handle, &context) == FALSE) {
-                DWORD exit_code = STILL_ACTIVE;
-                if (::GetExitCodeThread(thread.handle, &exit_code) != FALSE && exit_code != STILL_ACTIVE) {
-                    continue;
-                }
-                failure = ::GetLastError();
-                failed_thread = thread.thread_id;
-                return false;
-            }
-#ifdef _M_X64
-            const auto instruction = static_cast<std::uintptr_t>(context.Rip);
-#elif defined(_M_ARM64)
-            const std::uintptr_t instruction = static_cast<std::uintptr_t>(context.Pc);
-#else
-#error "Windows allocation profiler requires a supported 64-bit CONTEXT"
-#endif
-            for (const CodeRange &range : ranges) {
-                if (instruction >= range.begin && instruction < range.end) {
-                    found = true;
-                    return true;
-                }
-            }
-        }
-        return true;
-    }
-
-private:
-    struct ThreadRecord {
-        HANDLE handle = nullptr;
-        DWORD thread_id = 0;
-        DWORD previous_suspend_count = 0;
-        bool suspended = false;
-    };
-
-    [[nodiscard]] bool contains(DWORD thread_id) const noexcept
-    {
-        return std::ranges::any_of(threads_,
-                                   [thread_id](const ThreadRecord &record) { return record.thread_id == thread_id; });
-    }
-
-    void closeHandles() noexcept
-    {
-        for (ThreadRecord &thread : threads_) {
-            if (thread.handle != nullptr) {
-                ::CloseHandle(thread.handle);
-                thread.handle = nullptr;
-            }
-        }
-        threads_.clear();
-    }
-
-    std::vector<ThreadRecord> threads_;
-};
 
 }  // namespace
 
@@ -573,14 +335,13 @@ struct AllocationSampler::Impl {
     std::mutex lifecycle_mutex;
     std::timed_mutex aggregate_mutex;
     std::vector<PreparedTarget> prepared_targets;
-    std::vector<CodeRange> protected_code_ranges;
+    std::vector<WindowsCodeRange> protected_code_ranges;
     std::vector<AllocationHookCapability> hook_capabilities;
     AllocationSamplerConfig config{};
     std::atomic<std::uint64_t> current_tick{0};
     std::atomic<std::uint64_t> generation{0};
     std::atomic<std::uint64_t> interval_bytes{kDefaultAllocationIntervalBytes};
     std::atomic<std::uint64_t> sampling_seed{0};
-    std::atomic<std::uint64_t> started_tick_ms{0};
     std::atomic<std::uint64_t> hook_calls{0};
     std::atomic<std::uint64_t> successful_allocation_calls{0};
     std::atomic<std::uint64_t> sample_count{0};
@@ -1503,12 +1264,7 @@ struct AllocationSampler::Impl {
         allocation->tick_id = current_tick.load(std::memory_order_relaxed);
         allocation->thread_id = thread.session_thread_id;
         allocation->os_thread_id = thread.os_thread_id;
-        const std::uint64_t started = started_tick_ms.load(std::memory_order_relaxed);
-        allocation->window = static_cast<std::int32_t>((
-            std::min)(static_cast<std::uint64_t>(KMaxProfileWindows - 1),
-                      started > 0 && allocation->allocated_ms >= started
-                          ? (allocation->allocated_ms - started) / static_cast<std::uint64_t>(profiling_window::kSizeMs)
-                          : 0));
+        allocation->window = profiling_window::windowNow();
         allocation->depth = static_cast<std::uint16_t>(
             ::RtlCaptureStackBackTrace(KFramesToSkip, static_cast<ULONG>(KStackDepth), allocation->frames, nullptr));
         if (allocation->depth == 0 || !insertLiveAllocation(allocation)) {
@@ -1702,10 +1458,10 @@ struct AllocationSampler::Impl {
         if (::VirtualQuery(address, &memory, sizeof(memory)) == 0) {
             return;
         }
-        CodeRange range;
+        WindowsCodeRange range;
         range.begin = reinterpret_cast<std::uintptr_t>(memory.BaseAddress);
         range.end = range.begin + memory.RegionSize;
-        if (std::ranges::none_of(protected_code_ranges, [&range](const CodeRange &existing) {
+        if (std::ranges::none_of(protected_code_ranges, [&range](const WindowsCodeRange &existing) {
                 return existing.begin == range.begin && existing.end == range.end;
             })) {
             protected_code_ranges.push_back(range);
@@ -1931,8 +1687,8 @@ struct AllocationSampler::Impl {
         }
 
         bool instruction_in_protected_code = false;
-        DWORD inspect_failure = ERROR_SUCCESS;
-        DWORD inspect_thread = 0;
+        std::uint32_t inspect_failure = 0;
+        std::uint32_t inspect_thread = 0;
         const bool inspected = suspended.anyInstructionPointerInRanges(
             protected_code_ranges, instruction_in_protected_code, inspect_failure, inspect_thread);
         const bool active_calls = anyActiveHookCalls();
@@ -1994,8 +1750,8 @@ struct AllocationSampler::Impl {
                 return false;
             }
             bool instruction_in_protected_code = false;
-            DWORD inspect_failure = ERROR_SUCCESS;
-            DWORD inspect_thread = 0;
+            std::uint32_t inspect_failure = 0;
+            std::uint32_t inspect_thread = 0;
             const bool inspected = suspended.anyInstructionPointerInRanges(
                 protected_code_ranges, instruction_in_protected_code, inspect_failure, inspect_thread);
             const bool active_calls = anyActiveHookCalls();
@@ -2621,7 +2377,6 @@ struct AllocationSampler::Impl {
             return false;
         }
         interval_bytes.store(static_cast<std::uint64_t>(new_config.interval_bytes), std::memory_order_relaxed);
-        started_tick_ms.store(monotonicMs(), std::memory_order_relaxed);
         const std::uint64_t new_generation = generation.fetch_add(1, std::memory_order_relaxed) + 1;
         sampling_seed.store(new_generation ^ monotonicMs() ^ new_config.session_seed, std::memory_order_relaxed);
 
@@ -2747,13 +2502,8 @@ struct AllocationSampler::Impl {
             dropped_tick_events.fetch_add(1, std::memory_order_relaxed);
         }
 
-        const std::uint64_t started = started_tick_ms.load(std::memory_order_relaxed);
         const std::uint64_t now = monotonicMs();
-        const std::int32_t window = static_cast<std::int32_t>(
-            (std::min)(static_cast<std::uint64_t>(KMaxProfileWindows - 1),
-                       started > 0 && now >= started
-                           ? (now - started) / static_cast<std::uint64_t>(profiling_window::kSizeMs)
-                           : 0));
+        const std::int32_t window = profiling_window::windowNow();
         WindowTickStats &stats = window_ticks[window];
         stats.ticks += 1;
         stats.mspt_sum += mspt_ms;
@@ -2797,6 +2547,12 @@ void AllocationSampler::setRecoverySink(RecoverySink *sink)
 bool AllocationSampler::stop(std::string &error)
 {
     return impl_->stopSession(error);
+}
+
+void AllocationSampler::requestStop() noexcept
+{
+    impl_->tracking.store(false, std::memory_order_release);
+    impl_->running.store(false, std::memory_order_release);
 }
 
 bool AllocationSampler::shutdown(std::string &error)

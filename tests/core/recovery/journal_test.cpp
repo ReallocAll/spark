@@ -13,6 +13,7 @@
 #include "core/recovery/recovery_player.h"
 #include "core/recovery/recovery_writer.h"
 #include "native/sampler/types.h"
+#include "proto/proto_reader.h"
 
 using namespace spark;  // NOLINT(google-build-using-namespace)
 
@@ -331,9 +332,10 @@ void testWriterStopJoins()
 }
 
 void writeSegment(const std::filesystem::path &path, std::uint64_t session_id, std::uint32_t segment_number,
-                  std::uint32_t sequence, RecordType type, const JournalBuffer &payload)
+                  std::uint32_t sequence, RecordType type, const JournalBuffer &payload,
+                  std::uint16_t version = kJournalVersion)
 {
-    auto header = serializeFileHeader(session_id, session_id, segment_number);
+    auto header = serializeFileHeader(session_id, session_id, segment_number, version);
     auto record = serializeRecord(type, sequence, payload);
     std::FILE *file = std::fopen(path.string().c_str(), "wb");
     assert(file);
@@ -348,10 +350,18 @@ struct RecordSpec {
     JournalBuffer payload;
 };
 
-void writeSegmentMulti(const std::filesystem::path &path, std::uint64_t session_id, std::uint32_t segment_number,
-                       const std::vector<RecordSpec> &records)
+JournalBuffer buildLegacySessionConfigPayload()
 {
-    auto header = serializeFileHeader(session_id, session_id, segment_number);
+    auto extended = buildSessionConfigPayload(4000, 0, false, false, false, 1, 0, false, "Console", false, {}, {}, 0);
+    JournalBuffer legacy;
+    legacy.bytes(extended.data(), extended.size() - sizeof(std::int32_t));
+    return legacy;
+}
+
+void writeSegmentMulti(const std::filesystem::path &path, std::uint64_t session_id, std::uint32_t segment_number,
+                       const std::vector<RecordSpec> &records, std::uint16_t version = kJournalVersion)
+{
+    auto header = serializeFileHeader(session_id, session_id, segment_number, version);
     std::FILE *file = std::fopen(path.string().c_str(), "wb");
     assert(file);
     assert(std::fwrite(header.data(), 1, header.size(), file) == header.size());
@@ -397,8 +407,8 @@ void testSessionIsolation()
 void testSessionConfigRoundTrip()
 {
     std::vector<std::string> patterns = {"Server thread", "Worker-*"};
-    JournalBuffer payload =
-        buildSessionConfigPayload(8000, 50, true, false, true, 2, 1, true, "Console", false, "test profile", patterns);
+    JournalBuffer payload = buildSessionConfigPayload(8000, 50, true, false, true, 2, 1, true, "Console", false,
+                                                      "test profile", patterns, 0);
     auto record = serializeRecord(RecordType::SessionConfig, 0, payload);
 
     JournalRecord rec;
@@ -422,7 +432,150 @@ void testSessionConfigRoundTrip()
     assert(sc.thread_patterns.size() == 2);
     assert(sc.thread_patterns[0] == "Server thread");
     assert(sc.thread_patterns[1] == "Worker-*");
+    assert(sc.has_window_adjustment);
+    assert(sc.window_adjustment_ms == 0);
     std::cout << "testSessionConfigRoundTrip: PASS\n";
+}
+
+void testSessionConfigTrailingBytesRejected()
+{
+    auto extended = buildSessionConfigPayload(4000, 0, false, false, false, 1, 0, false, "Console", false, {}, {}, 0);
+    JournalBuffer malformed;
+    malformed.bytes(extended.data(), extended.size() - 3);
+    JournalRecord record{.type = RecordType::SessionConfig, .sequence = 0};
+    record.payload = malformed.take();
+    SessionConfig config;
+    assert(!record.asSessionConfig(config));
+    std::cout << "testSessionConfigTrailingBytesRejected: PASS\n";
+}
+
+void testLegacyV2Replay()
+{
+    auto dir = makeTempDir() / "legacy-v2";
+    std::filesystem::create_directories(dir);
+    Sample sample;
+    sample.thread_id = 1;
+    sample.tick_id = 0;
+    sample.window = 2;
+    sample.weight = 4000;
+    sample.frames.push_back({.module = 0, .rva = 0x1000, .raw_address = 0});
+    writeSegmentMulti(
+        dir / "segment-0.jnl", 1'000'000, 0,
+        {{.type = RecordType::SessionConfig, .sequence = 0, .payload = buildLegacySessionConfigPayload()},
+         {.type = RecordType::ModuleDef, .sequence = 1, .payload = buildModuleDefPayload(0, "bedrock_server")},
+         {.type = RecordType::Sample, .sequence = 2, .payload = buildSamplePayload(sample)},
+         {.type = RecordType::TickEvent, .sequence = 3, .payload = buildTickEventPayload(0, 5.0)}},
+        kLegacyJournalVersion);
+
+    const auto journal = JournalReader::readSession(dir);
+    assert(journal.valid);
+    assert(journal.version == kLegacyJournalVersion);
+    assert(journal.session_config.present);
+    assert(!journal.session_config.has_window_adjustment);
+    const auto result = RecoveryPlayer::replay(dir);
+    assert(result.valid);
+    assert(result.session_start_ms == 1'120'000);
+    std::cout << "testLegacyV2Replay: PASS\n";
+}
+
+void testUnsupportedAndMixedVersionsRejected()
+{
+    auto unsupported = makeTempDir() / "unsupported-version";
+    std::filesystem::create_directories(unsupported);
+    writeSegment(unsupported / "segment-0.jnl", 1, 0, 0, RecordType::TickEvent, buildTickEventPayload(0, 1.0), 1);
+    assert(!JournalReader::readSession(unsupported).valid);
+
+    auto mixed = makeTempDir() / "mixed-version";
+    std::filesystem::create_directories(mixed);
+    writeSegment(mixed / "segment-0.jnl", 2, 0, 0, RecordType::TickEvent, buildTickEventPayload(0, 1.0));
+    writeSegment(mixed / "segment-1.jnl", 2, 1, 1, RecordType::TickEvent, buildTickEventPayload(1, 1.0),
+                 kLegacyJournalVersion);
+    const auto result = JournalReader::readSession(mixed);
+    assert(!result.valid);
+    assert(result.version == kJournalVersion);
+    std::cout << "testUnsupportedAndMixedVersionsRejected: PASS\n";
+}
+
+void testV3GlobalWindowsAndClippedStats()
+{
+    auto dir = makeTempDir() / "v3-global-windows";
+    std::filesystem::create_directories(dir);
+    const std::int32_t adjustment = 1000;
+    Sample sample;
+    sample.thread_id = 1;
+    sample.tick_id = 0;
+    sample.window = 20;
+    sample.weight = 4000;
+    sample.frames.push_back({.module = 0, .rva = 0x1000, .raw_address = 0});
+    auto config =
+        buildSessionConfigPayload(4000, 0, false, false, false, 1, 0, false, "Console", false, {}, {}, adjustment);
+    writeSegmentMulti(
+        dir / "segment-0.jnl", 1'210'000, 0,
+        {{.type = RecordType::SessionConfig, .sequence = 0, .payload = std::move(config)},
+         {.type = RecordType::ModuleDef, .sequence = 1, .payload = buildModuleDefPayload(0, "bedrock_server")},
+         {.type = RecordType::Sample, .sequence = 2, .payload = buildSamplePayload(sample)},
+         {.type = RecordType::TickEvent, .sequence = 3, .payload = buildTickEventPayload(0, 5.0)}});
+
+    const auto result = RecoveryPlayer::replay(dir);
+    assert(result.valid);
+    assert(result.session_start_ms == 1'210'000);
+
+    bool found_global_window = false;
+    bool found_clipped_stats = false;
+    ProtoReader reader(result.serialized_proto);
+    int field = 0;
+    int wire_type = 0;
+    while (reader.nextField(field, wire_type)) {
+        if (field == 6 && wire_type == 2) {
+            ProtoReader windows(reader.readMessage());
+            while (!windows.eof()) {
+                if (windows.readVarint() == 20) {
+                    found_global_window = true;
+                }
+            }
+        }
+        else if (field == 7 && wire_type == 2) {
+            ProtoReader entry(reader.readMessage());
+            std::int32_t window = 0;
+            std::int64_t start = 0;
+            std::int64_t end = 0;
+            std::int32_t duration = 0;
+            while (entry.nextField(field, wire_type)) {
+                if (field == 1 && wire_type == 0) {
+                    window = entry.readInt32();
+                }
+                else if (field == 2 && wire_type == 2) {
+                    ProtoReader stats(entry.readMessage());
+                    while (stats.nextField(field, wire_type)) {
+                        if (field == 11 && wire_type == 0) {
+                            start = stats.readInt64();
+                        }
+                        else if (field == 12 && wire_type == 0) {
+                            end = stats.readInt64();
+                        }
+                        else if (field == 13 && wire_type == 0) {
+                            duration = stats.readInt32();
+                        }
+                        else {
+                            stats.skip(wire_type);
+                        }
+                    }
+                }
+                else {
+                    entry.skip(wire_type);
+                }
+            }
+            if (window == 20 && start == 1'210'000 && end == 1'259'000 && duration == 49'000) {
+                found_clipped_stats = true;
+            }
+        }
+        else {
+            reader.skip(wire_type);
+        }
+    }
+    assert(found_global_window);
+    assert(found_clipped_stats);
+    std::cout << "testV3GlobalWindowsAndClippedStats: PASS\n";
 }
 
 void testRecoveryPlayerReplay()
@@ -441,7 +594,7 @@ void testRecoveryPlayerReplay()
     }
 
     writer.journalSessionConfig(4000, 0, false, false, false, 1, 0, false, "Console", false, "replay test",
-                                {"Server thread"});
+                                {"Server thread"}, 0);
     writer.journalModuleDef(0, "bedrock_server");
     writer.journalThreadDef(100, 200, "Server thread");
 
@@ -502,7 +655,7 @@ void testCleanEndDetected()
     RecoveryWriter writer(cfg);
     assert(writer.start());
 
-    writer.journalSessionConfig(4000, 0, false, false, false, 1, 0, false, "Console", false, "clean stop", {});
+    writer.journalSessionConfig(4000, 0, false, false, false, 1, 0, false, "Console", false, "clean stop", {}, 0);
     writer.journalModuleDef(0, "bedrock_server");
     writer.journalThreadDef(1, 100, "Server thread");
 
@@ -539,7 +692,7 @@ void testNoCleanEndRecovered()
     RecoveryWriter writer(cfg);
     assert(writer.start());
 
-    writer.journalSessionConfig(4000, 0, false, false, false, 1, 0, false, "Console", false, "crashed", {});
+    writer.journalSessionConfig(4000, 0, false, false, false, 1, 0, false, "Console", false, "crashed", {}, 0);
     writer.journalModuleDef(0, "bedrock_server");
     writer.journalThreadDef(1, 100, "Server thread");
 
@@ -574,7 +727,7 @@ void testLiveOnlyRefused()
     RecoveryWriter writer(cfg);
     assert(writer.start());
 
-    writer.journalSessionConfig(524287, 0, true, false, false, 1, 1, true, "Console", false, "live-only", {});
+    writer.journalSessionConfig(524287, 0, true, false, false, 1, 1, true, "Console", false, "live-only", {}, 0);
     writer.journalModuleDef(0, "bedrock_server");
     writer.journalThreadDef(1, 100, "Server thread");
 
@@ -616,7 +769,7 @@ void testCleanEndEarlyExit()
         dir / "segment-0.jnl", 500000, 0,
         {{.type = RecordType::SessionConfig,
           .sequence = 0,
-          .payload = buildSessionConfigPayload(4000, 0, false, false, false, 1, 0, false, "Console", false, {}, {})},
+          .payload = buildSessionConfigPayload(4000, 0, false, false, false, 1, 0, false, "Console", false, {}, {}, 0)},
          {.type = RecordType::Sample, .sequence = 1, .payload = buildSamplePayload(sample)},
          {.type = RecordType::CleanEnd, .sequence = 2, .payload = buildCleanEndPayload(1)}});
 
@@ -677,7 +830,7 @@ void testNonContiguousModuleId()
         dir / "segment-0.jnl", 700000, 0,
         {{.type = RecordType::SessionConfig,
           .sequence = 0,
-          .payload = buildSessionConfigPayload(4000, 0, false, false, false, 1, 0, false, "Console", false, {}, {})},
+          .payload = buildSessionConfigPayload(4000, 0, false, false, false, 1, 0, false, "Console", false, {}, {}, 0)},
          {.type = RecordType::ModuleDef, .sequence = 1, .payload = buildModuleDefPayload(20, "bedrock_server")},
          {.type = RecordType::ThreadDef, .sequence = 2, .payload = buildThreadDefPayload(1, 100, "Server thread")},
          {.type = RecordType::Sample, .sequence = 3, .payload = buildSamplePayload(sample)},
@@ -708,7 +861,7 @@ void testMissingModuleDefReferenced()
         dir / "segment-0.jnl", 800000, 0,
         {{.type = RecordType::SessionConfig,
           .sequence = 0,
-          .payload = buildSessionConfigPayload(4000, 0, false, false, false, 1, 0, false, "Console", false, {}, {})},
+          .payload = buildSessionConfigPayload(4000, 0, false, false, false, 1, 0, false, "Console", false, {}, {}, 0)},
          {.type = RecordType::ModuleDef, .sequence = 1, .payload = buildModuleDefPayload(0, "bedrock_server")},
          {.type = RecordType::ThreadDef, .sequence = 2, .payload = buildThreadDefPayload(1, 100, "Server thread")},
          {.type = RecordType::Sample, .sequence = 3, .payload = buildSamplePayload(sample)}});
@@ -740,7 +893,7 @@ void testRollingJournalRecovery()
         std::exit(1);
     }
 
-    writer.journalSessionConfig(4000, 0, false, false, false, 1, 0, false, "Console", false, "rolling test", {});
+    writer.journalSessionConfig(4000, 0, false, false, false, 1, 0, false, "Console", false, "rolling test", {}, 0);
     writer.journalModuleDef(0, "bedrock_server");
     writer.journalModuleDef(1, "libfoo.so");
     writer.journalThreadDef(100, 200, "Server thread");
@@ -793,7 +946,7 @@ void testRollingJournalRecovery()
     assert(!result.has_clean_end);
     assert(result.sample_count > 0);
     assert(result.thread_count >= 1);
-    assert(result.session_start_ms > 900000);
+    assert(result.session_start_ms == 900000);
     assert(result.tick_count > 0);
     assert(result.tick_count < 200);
     assert(!result.serialized_proto.empty());
@@ -818,7 +971,7 @@ void testCorruptSnapshotWrongSession()
 
     RecoveryWriter writer(cfg);
     assert(writer.start());
-    writer.journalSessionConfig(4000, 0, false, false, false, 1, 0, false, "Console", false, {}, {});
+    writer.journalSessionConfig(4000, 0, false, false, false, 1, 0, false, "Console", false, {}, {}, 0);
     writer.journalModuleDef(0, "bedrock_server");
     writer.journalThreadDef(1, 100, "Server thread");
     for (int i = 0; i < 200; ++i) {
@@ -899,7 +1052,8 @@ void testAllocationSentinelModule0()
         dir / "segment-0.jnl", 930000, 0,
         {{.type = RecordType::SessionConfig,
           .sequence = 0,
-          .payload = buildSessionConfigPayload(524287, 0, true, false, false, 1, 1, false, "Console", false, {}, {})},
+          .payload =
+              buildSessionConfigPayload(524287, 0, true, false, false, 1, 1, false, "Console", false, {}, {}, 0)},
          {.type = RecordType::ModuleDef, .sequence = 1, .payload = buildModuleDefPayload(0, kOtherModulesSentinel)},
          {.type = RecordType::ModuleDef, .sequence = 2, .payload = buildModuleDefPayload(1, "bedrock_server")},
          {.type = RecordType::ThreadDef, .sequence = 3, .payload = buildThreadDefPayload(1, 100, "Server thread")},
@@ -932,7 +1086,7 @@ void testMissingSentinelModule0()
         dir / "segment-0.jnl", 940000, 0,
         {{.type = RecordType::SessionConfig,
           .sequence = 0,
-          .payload = buildSessionConfigPayload(4000, 0, false, false, false, 1, 0, false, "Console", false, {}, {})},
+          .payload = buildSessionConfigPayload(4000, 0, false, false, false, 1, 0, false, "Console", false, {}, {}, 0)},
          {.type = RecordType::ModuleDef, .sequence = 1, .payload = buildModuleDefPayload(1, "bedrock_server")},
          {.type = RecordType::ThreadDef, .sequence = 2, .payload = buildThreadDefPayload(1, 100, "Server thread")},
          {.type = RecordType::Sample, .sequence = 3, .payload = buildSamplePayload(sample)}});
@@ -958,7 +1112,7 @@ void testStopWithoutCleanEndRecoverable()
 
     RecoveryWriter writer(cfg);
     assert(writer.start());
-    writer.journalSessionConfig(4000, 0, false, false, false, 1, 0, false, "Console", false, {}, {});
+    writer.journalSessionConfig(4000, 0, false, false, false, 1, 0, false, "Console", false, {}, {}, 0);
     writer.journalModuleDef(0, "bedrock_server");
     writer.journalThreadDef(1, 100, "Server thread");
     Sample sample;
@@ -1029,13 +1183,16 @@ void testSnapshotOnlyThreadIsNotExported()
     const std::vector<SnapshotModuleDef> modules{{.module_id = 0, .path = "bedrock_server"}};
     const std::vector<SnapshotThreadDef> threads{{.thread_id = 1, .os_thread_id = 100, .name = "Server thread"},
                                                  {.thread_id = 2, .os_thread_id = 200, .name = "Historical worker"}};
-    writeBytes(dir / "metadata.snapshot", serializeMetadataSnapshot(970000, 0, {}, modules, threads));
+    auto session_config =
+        buildSessionConfigPayload(4000, 0, false, false, false, 1, 0, false, "Console", false, {}, {}, 0);
+    writeBytes(dir / "metadata.snapshot",
+               serializeMetadataSnapshot(970000, 0, session_config.take(), modules, threads));
 
     const auto result = RecoveryPlayer::replay(dir);
     assert(result.valid);
     assert(result.thread_count == 1);
     assert(result.tick_count == 1);
-    assert(result.session_start_ms == 1'270'000);
+    assert(result.session_start_ms == 970000);
     std::cout << "testSnapshotOnlyThreadIsNotExported: PASS\n";
 }
 
@@ -1073,6 +1230,10 @@ int main()
     testWriterStopJoins();
     testSessionIsolation();
     testSessionConfigRoundTrip();
+    testSessionConfigTrailingBytesRejected();
+    testLegacyV2Replay();
+    testUnsupportedAndMixedVersionsRejected();
+    testV3GlobalWindowsAndClippedStats();
     testRecoveryPlayerReplay();
     testRecoveryPlayerEmptyJournal();
     testCleanEndDetected();

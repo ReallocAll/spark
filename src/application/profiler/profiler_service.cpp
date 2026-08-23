@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cmath>
 #include <exception>
+#include <limits>
 #include <string>
 #include <utility>
 #include <vector>
@@ -11,6 +12,7 @@
 #include "application/profiler/profiler_start_options.h"
 #include "core/util/base64.h"
 #include "core/util/format.h"
+#include "core/util/monotonic_time.h"
 
 namespace spark {
 
@@ -18,8 +20,7 @@ namespace {
 
 std::int64_t nowMs()
 {
-    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
-        .count();
+    return monotonicUnixMillis();
 }
 
 }  // namespace
@@ -57,6 +58,7 @@ ProfilerService::~ProfilerService()
 
 void ProfilerService::shutdown()
 {
+    resetProfilerTimeout();
     profiler_.requestStop();
     lifetime_.reset();
     if (viewer_open_) {
@@ -93,12 +95,15 @@ void ProfilerService::cmdStart(CommandSender &sender, const Arguments &args)
         return;
     }
 
+    const bool had_background_session = profiler_.running() && session_type_ == SessionType::Background;
+    const bool previous_background_suppressed = background_suppressed_;
     if (profiler_.running()) {
         if (session_type_ != SessionType::Background) {
             cmdInfo(sender);
             return;
         }
         sender.sendMessage("Stopping the background profiler before starting... please wait");
+        resetProfilerTimeout();
         std::string cancel_error;
         if (!profiler_.cancel(cancel_error)) {
             sender.sendErrorMessage("Couldn't stop the background profiler safely: {}", cancel_error);
@@ -108,6 +113,7 @@ void ProfilerService::cmdStart(CommandSender &sender, const Arguments &args)
         background_started_ = false;
     }
 
+    resetProfilerTimeout();
     std::vector<NativePluginSource> native_plugin_sources = metadata_provider_.nativePluginSources();
     std::string error;
     if (!profiler_.start(options, tid, error)) {
@@ -119,6 +125,24 @@ void ProfilerService::cmdStart(CommandSender &sender, const Arguments &args)
     start_sender_is_player_ = sender.isPlayer();
     session_type_ = SessionType::Foreground;
     background_suppressed_ = background_enabled_;
+
+    if (timeout > 0 && !armProfilerTimeout(timeout)) {
+        resetProfilerTimeout();
+        std::string cancel_error;
+        const bool cancelled = profiler_.cancel(cancel_error);
+        session_type_ = SessionType::None;
+        background_started_ = false;
+        background_suppressed_ = had_background_session ? false : previous_background_suppressed;
+        restart_background_after_export_ = false;
+        if (!cancelled && !cancel_error.empty()) {
+            sender.sendErrorMessage("Couldn't start the profiler: timeout setup failed ({}); cleanup failed: {}",
+                                    timeout, cancel_error);
+        }
+        else {
+            sender.sendErrorMessage("Couldn't start the profiler: timeout setup failed");
+        }
+        return;
+    }
 
     if (options.alloc) {
         if (options.alloc_live_only) {
@@ -196,6 +220,7 @@ void ProfilerService::cmdStop(CommandSender &sender, const Arguments &args)
         comment = comments.front();
     }
     sender.sendMessage("{}Stopping the profiler and finalizing results, please wait...", kColorGold);
+    resetProfilerTimeout();
     closeViewerSocket();
     if (background_enabled_) {
         restart_background_after_export_ = true;
@@ -331,6 +356,7 @@ void ProfilerService::cmdCancel(CommandSender &sender)
     }
     std::string backend_error;
     const bool failed = profiler_.backendFailure(backend_error);
+    resetProfilerTimeout();
     std::string error;
     if (!profiler_.cancel(error)) {
         sender.sendMessage("{}Unable to cancel the profiler safely: {}", kColorRed, error);
@@ -373,6 +399,36 @@ void ProfilerService::closeViewerSocket()
     }
 }
 
+void ProfilerService::resetProfilerTimeout() noexcept
+{
+    profiler_timeout_.cancel();
+    timeout_completion_pending_.store(false, std::memory_order_release);
+}
+
+bool ProfilerService::armProfilerTimeout(std::int64_t timeout_seconds) noexcept
+{
+    if (timeout_seconds <= 0) {
+        timeout_completion_pending_.store(false, std::memory_order_release);
+        return true;
+    }
+
+    using MillisecondsRep = std::chrono::milliseconds::rep;
+    constexpr std::int64_t kMillisecondsPerSecond = 1000;
+    constexpr std::int64_t kMaximumSeconds =
+        static_cast<std::int64_t>((std::numeric_limits<MillisecondsRep>::max)() / kMillisecondsPerSecond);
+    if (timeout_seconds > kMaximumSeconds) {
+        return false;
+    }
+
+    timeout_completion_pending_.store(false, std::memory_order_release);
+    const auto delay = std::chrono::milliseconds(static_cast<MillisecondsRep>(timeout_seconds) *
+                                                 static_cast<MillisecondsRep>(kMillisecondsPerSecond));
+    return profiler_timeout_.arm(delay, [this]() noexcept {
+        profiler_.requestStop();
+        timeout_completion_pending_.store(true, std::memory_order_release);
+    });
+}
+
 void ProfilerService::cmdTrustViewer(CommandSender &sender, const Arguments &args)
 {
     auto ids = args.stringFlag("id");
@@ -408,6 +464,7 @@ void ProfilerService::cmdTrustViewer(CommandSender &sender, const Arguments &arg
 void ProfilerService::finishProfiler(const std::string &sender_name, bool sender_is_player, bool save,
                                      const std::string &comment)
 {
+    resetProfilerTimeout();
     std::string stop_error;
     if (!profiler_.stopSampling(stop_error)) {
         std::string backend_error;
@@ -553,6 +610,14 @@ void ProfilerService::onTick(double mspt)
     if (export_completion_pending_.exchange(false, std::memory_order_acq_rel)) {
         announceResult();
     }
+    if (timeout_completion_pending_.exchange(false, std::memory_order_acq_rel)) {
+        resetProfilerTimeout();
+        if (profiler_.running()) {
+            const bool save = profiler_.options().save_to_file;
+            closeViewerSocket();
+            finishProfiler(start_sender_name_, start_sender_is_player_, save, std::string());
+        }
+    }
     if (viewer_open_) {
         viewer_open_->onTick(start_sender_name_);
     }
@@ -618,6 +683,8 @@ bool ProfilerService::startBackgroundSession()
     if (main_tid_ == 0) {
         return false;
     }
+
+    resetProfilerTimeout();
 
     spark::ProfilerOptions options;
     options.is_background = true;

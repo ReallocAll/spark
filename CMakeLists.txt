@@ -93,7 +93,8 @@ if (WIN32)
             src/native/symbol/dbghelp_manager.cpp
             src/native/symbol/symbol_guess_windows.cpp
             src/native/sampler/capture_windows.cpp
-            src/native/alloc/allocation_sampler_windows.cpp)
+            src/native/alloc/allocation_sampler_windows.cpp
+            src/native/alloc/windows_thread_suspension.cpp)
 elseif (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
     target_sources(spark_native PRIVATE
             src/native/sampler/capture_linux.cpp
@@ -130,12 +131,14 @@ add_library(spark_core STATIC
         src/core/recovery/stall_watchdog.cpp
         src/core/util/base64.cpp
         src/core/util/format.cpp
+        src/core/util/monotonic_time.cpp
         src/core/util/world_region.cpp
         src/core/metadata/server_properties.cpp
         src/core/activity/activity_log.cpp
         src/core/command/arguments.cpp
         src/core/profiler/profiler.cpp
         src/core/profiler/profiler_export.cpp
+        src/core/profiler/profiling_window.cpp
         src/core/stats/executable_hash.cpp
         src/core/stats/metrics_history.cpp
         src/core/stats/statistics_service.cpp
@@ -183,6 +186,7 @@ add_library(spark_application STATIC
         src/application/profiler/profiler_open_orchestrator.cpp
         src/application/profiler/profiler_service.cpp
         src/application/profiler/profiler_start_options.cpp
+        src/application/profiler/profiler_timeout.cpp
         src/application/profiler/viewer_update_worker.cpp
         src/application/spark_application.cpp
         src/application/tick_monitor/tick_monitor_command.cpp)

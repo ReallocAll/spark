@@ -1,12 +1,13 @@
 #include "core/profiler/profiler.h"
 
 #include <algorithm>
-#include <chrono>
 #include <cmath>
 #include <limits>
 #include <regex>
 #include <stdexcept>
 
+#include "core/util/monotonic_time.h"
+#include "profiling_window.h"
 #include "spark_constants.h"
 
 namespace spark {
@@ -14,8 +15,7 @@ namespace {
 
 std::int64_t nowMs()
 {
-    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
-        .count();
+    return monotonicUnixMillis();
 }
 
 }  // namespace
@@ -88,6 +88,20 @@ std::size_t Profiler::allocationHookTargetCount() const
     return allocation_sampler_.hookTargetCount();
 }
 
+void Profiler::requestStop() noexcept
+{
+    sampling_stop_requested_.store(true, std::memory_order_release);
+    if (!running_.load(std::memory_order_acquire)) {
+        return;
+    }
+    if (mode_ == ProfileMode::Allocation) {
+        allocation_sampler_.requestStop();
+    }
+    else {
+        sampler_.requestStop();
+    }
+}
+
 bool Profiler::start(const ProfilerOptions &options, std::uint64_t main_tid, std::string &error)
 {
     std::scoped_lock lifecycle_lock(lifecycle_mutex_);
@@ -151,7 +165,7 @@ bool Profiler::start(const ProfilerOptions &options, std::uint64_t main_tid, std
                     options.only_ticks_over_ms > 0 ? static_cast<std::int32_t>(options.only_ticks_over_ms) : 0,
                     config.all_threads, config.regex_threads, false, static_cast<std::uint8_t>(options.thread_grouper),
                     1, config.live_only, options.creator_name, options.creator_is_player, options.comment,
-                    options.threads);
+                    options.threads, profiling_window::windowAdjustmentMs());
                 // The bounded allocation ModuleTable pre-creates a sentinel
                 // module 0 for overflow paths; journal it so recovery can
                 // remap frames that were assigned to it.
@@ -197,7 +211,8 @@ bool Profiler::start(const ProfilerOptions &options, std::uint64_t main_tid, std
                     options.only_ticks_over_ms > 0 ? static_cast<std::int32_t>(options.only_ticks_over_ms) : 0,
                     config.all_threads, config.regex_threads, config.ignore_sleeping,
                     static_cast<std::uint8_t>(options.thread_grouper), 0, false, options.creator_name,
-                    options.creator_is_player, options.comment, options.threads);
+                    options.creator_is_player, options.comment, options.threads,
+                    profiling_window::windowAdjustmentMs());
                 writer->requestFlush();
                 std::scoped_lock lock(recovery_mutex_);
                 recovery_writer_ = std::move(writer);

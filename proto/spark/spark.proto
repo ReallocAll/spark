@@ -111,18 +111,14 @@ message PlatformStatistics {
     MemoryUsage heap = 1;
     MemoryUsage non_heap = 2;
     repeated MemoryPool pools = 3;
+    RollingAverageValues alloc_bps_last1m = 4;
+    RollingAverageValues alloc_bps_last5m = 5;
+    RollingAverageValues alloc_bps_last15m = 6;
 
     message MemoryPool {
       string name = 1;
       MemoryUsage usage = 2;
       MemoryUsage collection_usage = 3;
-    }
-
-    message MemoryUsage {
-      int64 used = 1;
-      int64 committed = 2; // previously called 'total'
-      int64 init = 3; // optional
-      int64 max = 4; // optional
     }
   }
 
@@ -295,6 +291,7 @@ message PluginOrModMetadata {
 message HealthData {
   HealthMetadata metadata = 1;
   map<int32, WindowStatistics> time_window_statistics = 2;
+  SocketChannelInfo channel_info = 3;
 }
 
 message HealthMetadata {
@@ -307,4 +304,9 @@ message HealthMetadata {
   map<string, PluginOrModMetadata> sources = 7;
   map<string, string> extra_platform_metadata = 8;
   Metrics metrics = 9;
+}
+
+message SocketChannelInfo {
+  string channel_id = 1;
+  bytes public_key = 2;
 }

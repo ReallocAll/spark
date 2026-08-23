@@ -92,6 +92,9 @@ public:
     // prologue patching on every start/stop cycle.
     bool stop(std::string &error);
 
+    // Stops tracking and the producer without draining, finalizing, uninstalling hooks, or joining.
+    void requestStop() noexcept;
+
     // Final lifecycle cleanup. This is safe to call even when no session is
     // running and must be called before the plugin module can be unloaded.
     bool shutdown(std::string &error);

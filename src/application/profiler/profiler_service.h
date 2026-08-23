@@ -15,6 +15,7 @@
 #include "application/platform_capabilities.h"
 #include "application/profiler/profile_exporter.h"
 #include "application/profiler/profiler_open_orchestrator.h"
+#include "application/profiler/profiler_timeout.h"
 #include "core/activity/activity_log.h"
 #include "core/command/arguments.h"
 #include "core/config/trusted_viewers.h"
@@ -115,6 +116,8 @@ private:
     void announceResult();
     bool startBackgroundSession();
     void closeViewerSocket();
+    void resetProfilerTimeout() noexcept;
+    bool armProfilerTimeout(std::int64_t timeout_seconds) noexcept;
     ExportContext captureLiveContext(std::int64_t now_ms);
     std::string buildLiveSamplerData(const ExportContext &context);
     bool viewerOpenPending() const { return viewer_open_ && viewer_open_->viewerOpenPending(); }
@@ -147,6 +150,8 @@ private:
 
     std::atomic<bool> exporting_{false};
     std::atomic<bool> export_completion_pending_{false};
+    ProfilerTimeout profiler_timeout_;
+    std::atomic<bool> timeout_completion_pending_{false};
     SessionType session_type_ = SessionType::None;
     bool restart_background_after_export_ = false;
     bool background_enabled_ = true;

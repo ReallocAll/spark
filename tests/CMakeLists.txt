@@ -96,6 +96,18 @@ set_target_properties(spark_viewer_update_worker_test PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME spark_viewer_update_worker_test COMMAND spark_viewer_update_worker_test)
 
+add_executable(spark_profiler_timeout_test application/profiler/profiler_timeout_test.cpp)
+target_link_libraries(spark_profiler_timeout_test PRIVATE spark_application)
+set_target_properties(spark_profiler_timeout_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME spark_profiler_timeout_test COMMAND spark_profiler_timeout_test)
+
+add_executable(spark_profiler_timeout_integration_test application/profiler/profiler_timeout_integration_test.cpp)
+target_link_libraries(spark_profiler_timeout_integration_test PRIVATE spark_application)
+set_target_properties(spark_profiler_timeout_integration_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME spark_profiler_timeout_integration_test COMMAND spark_profiler_timeout_integration_test)
+
 add_executable(spark_health_dashboard_test application/health/health_dashboard_test.cpp)
 target_link_libraries(spark_health_dashboard_test PRIVATE spark_application)
 set_target_properties(spark_health_dashboard_test PROPERTIES
@@ -233,6 +245,12 @@ target_link_libraries(spark_world_region_test PRIVATE spark_core)
 set_target_properties(spark_world_region_test PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME spark_world_region_test COMMAND spark_world_region_test)
+
+add_executable(spark_monotonic_time_test core/util/monotonic_time_test.cpp)
+target_link_libraries(spark_monotonic_time_test PRIVATE spark_core)
+set_target_properties(spark_monotonic_time_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME spark_monotonic_time_test COMMAND spark_monotonic_time_test)
 
 add_executable(spark_server_properties_test core/metadata/server_properties_test.cpp)
 target_link_libraries(spark_server_properties_test PRIVATE spark_core)
