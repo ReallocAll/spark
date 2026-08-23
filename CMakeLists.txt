@@ -135,6 +135,7 @@ add_library(spark_core STATIC
         src/core/activity/activity_log.cpp
         src/core/command/arguments.cpp
         src/core/profiler/profiler.cpp
+        src/core/profiler/profiler_export.cpp
         src/core/stats/executable_hash.cpp
         src/core/stats/statistics_service.cpp
         src/core/stats/ping_statistics.cpp

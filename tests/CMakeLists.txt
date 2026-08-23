@@ -102,6 +102,12 @@ set_target_properties(spark_native_plugin_attribution_test PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME spark_native_plugin_attribution_test COMMAND spark_native_plugin_attribution_test)
 
+add_executable(spark_profiler_export_test core/profiler/profiler_export_test.cpp)
+target_link_libraries(spark_profiler_export_test PRIVATE spark_core)
+set_target_properties(spark_profiler_export_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME spark_profiler_export_test COMMAND spark_profiler_export_test)
+
 add_executable(spark_config_test core/config/spark_config_test.cpp)
 target_link_libraries(spark_config_test PRIVATE spark_core)
 set_target_properties(spark_config_test PROPERTIES
@@ -220,6 +226,7 @@ elseif (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "x
             spark_selftest PRIVATE
             _GNU_SOURCE
             SPARK_ELF_HOOK_FIXTURE_PATH="$<TARGET_FILE:spark_elf_hook_fixture>")
+    target_compile_definitions(spark_profiler_export_test PRIVATE _GNU_SOURCE)
 endif ()
 
 add_test(NAME spark_selftest COMMAND spark_selftest --seconds=1)
