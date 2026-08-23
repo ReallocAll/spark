@@ -134,52 +134,46 @@ std::vector<NativePluginSource> EndstoneMetadataProvider::nativePluginSources()
 void EndstoneMetadataProvider::gatherWorldMetadata(ExportContext &ctx)
 {
     ctx.world = WorldInfo{};
-    if (endstone::Level *level = server_.getLevel()) {
-        for (endstone::Dimension *dimension : level->getDimensions()) {
-            std::map<std::pair<int, int>, WorldChunk> chunks;
-            for (const auto &chunk : dimension->getLoadedChunks()) {
-                if (chunk) {
-                    int x = chunk->getX();
-                    int z = chunk->getZ();
-                    chunks.try_emplace({x, z}, WorldChunk{.x = x, .z = z});
-                }
-            }
-            if (chunks.empty()) {
+    endstone::Level &level = server_.getLevel();
+    for (const auto &dimension : level.getDimensions()) {
+        std::map<std::pair<int, int>, WorldChunk> chunks;
+        for (const auto &chunk : dimension->getLoadedChunks()) {
+            int x = chunk->getX();
+            int z = chunk->getZ();
+            chunks.try_emplace({x, z}, WorldChunk{.x = x, .z = z});
+        }
+        if (chunks.empty()) {
+            continue;
+        }
+
+        for (const auto &actor : dimension->getActors()) {
+            endstone::Location location = actor->getLocation();
+            int chunk_x = floorDiv(location.getBlockX(), 16);
+            int chunk_z = floorDiv(location.getBlockZ(), 16);
+            auto it = chunks.find({chunk_x, chunk_z});
+            if (it == chunks.end()) {
                 continue;
             }
-
-            for (endstone::Actor *actor : dimension->getActors()) {
-                if (!actor) {
-                    continue;
-                }
-                endstone::Location location = actor->getLocation();
-                int chunk_x = floorDiv(location.getBlockX(), 16);
-                int chunk_z = floorDiv(location.getBlockZ(), 16);
-                auto it = chunks.find({chunk_x, chunk_z});
-                if (it == chunks.end()) {
-                    continue;
-                }
-                it->second.total_entities++;
-                it->second.entity_counts[actor->getType()]++;
-            }
-
-            WorldEntry world;
-            world.name = dimension->getName();
-            auto regions = groupChunksIntoRegions(chunks);
-            for (const auto &region : regions) {
-                world.total_entities += region.total_entities;
-                for (const auto &chunk : region.chunks) {
-                    for (const auto &[type, count] : chunk.entity_counts) {
-                        ctx.world.entity_counts[type] += count;
-                    }
-                }
-                world.regions.push_back(region);
-            }
-            ctx.world.total_entities += world.total_entities;
-            ctx.world.worlds.push_back(std::move(world));
+            it->second.total_entities++;
+            it->second.entity_counts[std::string(actor->getType().getId())]++;
         }
-        ctx.world.present = !ctx.world.worlds.empty();
+
+        WorldEntry world;
+        world.name = std::string(dimension->getId());
+        auto regions = groupChunksIntoRegions(chunks);
+        for (const auto &region : regions) {
+            world.total_entities += region.total_entities;
+            for (const auto &chunk : region.chunks) {
+                for (const auto &[type, count] : chunk.entity_counts) {
+                    ctx.world.entity_counts[type] += count;
+                }
+            }
+            world.regions.push_back(region);
+        }
+        ctx.world.total_entities += world.total_entities;
+        ctx.world.worlds.push_back(std::move(world));
     }
+    ctx.world.present = !ctx.world.worlds.empty();
 }
 
 std::int64_t EndstoneMetadataProvider::serverUptimeSeconds()
@@ -216,14 +210,14 @@ void EndstoneNotifier::notify(const std::string &sender_name, const std::string 
 {
     plugin_.getLogger().info("{}", text);
     if (disable_broadcast_) {
-        auto *player = server_.getPlayer(sender_name);
+        auto player = server_.getPlayer(sender_name);
         if (player) {
             player->sendMessage(formatPlayerMessage(text));
         }
     }
     else {
-        for (auto *player : server_.getOnlinePlayers()) {
-            if ((player != nullptr) && player->hasPermission("endstone.command.spark")) {
+        for (const auto &player : server_.getOnlinePlayers()) {
+            if (player->hasPermission("endstone.command.spark")) {
                 player->sendMessage(formatPlayerMessage(text));
             }
         }
@@ -236,9 +230,7 @@ std::map<std::string, int> EndstonePlayerPingProvider::poll()
 {
     std::map<std::string, int> result;
     for (const auto &player : server_.getOnlinePlayers()) {
-        if (player) {
-            result.emplace(player->getName(), static_cast<int>(player->getPing().count()));
-        }
+        result.emplace(player->getName(), static_cast<int>(player->getPing().count()));
     }
     return result;
 }
@@ -266,7 +258,7 @@ void EndstoneWorldGaugeProvider::init()
 
     plugin_.registerEvent<::endstone::ActorSpawnEvent>(
         [this](::endstone::ActorSpawnEvent &event) {
-            if (event.getActor().asPlayer() == nullptr) {
+            if (!event.getActor().is<::endstone::Player>()) {
                 entity_count_.fetch_add(1, std::memory_order_relaxed);
             }
         },
@@ -274,7 +266,7 @@ void EndstoneWorldGaugeProvider::init()
 
     plugin_.registerEvent<::endstone::ActorRemoveEvent>(
         [this](::endstone::ActorRemoveEvent &event) {
-            if (event.getActor().asPlayer() == nullptr) {
+            if (!event.getActor().is<::endstone::Player>()) {
                 entity_count_.fetch_sub(1, std::memory_order_relaxed);
             }
         },
@@ -306,15 +298,14 @@ void EndstoneWorldGaugeProvider::reconcile()
 
     int entities = 0;
     int chunks = 0;
-    if (::endstone::Level *level = server_.getLevel()) {
-        for (::endstone::Dimension *dimension : level->getDimensions()) {
-            for (::endstone::Actor *actor : dimension->getActors()) {
-                if (actor && actor->asPlayer() == nullptr) {
-                    ++entities;
-                }
+    ::endstone::Level &level = server_.getLevel();
+    for (const auto &dimension : level.getDimensions()) {
+        for (const auto &actor : dimension->getActors()) {
+            if (!actor->is<::endstone::Player>()) {
+                ++entities;
             }
-            chunks += static_cast<int>(dimension->getLoadedChunks().size());
         }
+        chunks += static_cast<int>(dimension->getLoadedChunks().size());
     }
     entity_count_.store(entities, std::memory_order_relaxed);
     chunk_count_.store(chunks, std::memory_order_relaxed);

@@ -51,7 +51,7 @@ endif ()
 # pass -DFETCHCONTENT_SOURCE_DIR_ENDSTONE=<path> to reuse an existing checkout.
 FetchContent_Declare(endstone
         GIT_REPOSITORY https://github.com/EndstoneMC/endstone.git
-        GIT_TAG v0.11)
+        GIT_TAG develop)
 FetchContent_MakeAvailable(endstone)
 
 # PAPI is optional at runtime; only its public headers are fetched.
@@ -62,8 +62,7 @@ set(ENDSTONE_SPARK_PAPI_GIT_TAG "main" CACHE STRING
 FetchContent_Declare(endstone_papi_headers
         GIT_REPOSITORY ${ENDSTONE_SPARK_PAPI_GIT_REPOSITORY}
         GIT_TAG ${ENDSTONE_SPARK_PAPI_GIT_TAG}
-        GIT_SHALLOW TRUE
-        SOURCE_SUBDIR cmake/headers-only)
+        GIT_SHALLOW TRUE)
 FetchContent_MakeAvailable(endstone_papi_headers)
 add_library(spark_papi_headers INTERFACE)
 target_include_directories(spark_papi_headers INTERFACE "${endstone_papi_headers_SOURCE_DIR}/include")
