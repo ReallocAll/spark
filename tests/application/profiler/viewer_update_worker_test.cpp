@@ -89,10 +89,14 @@ int main()
     assert(waitFor(*probe, [&] { return probe->completion.has_value(); }));
     {
         std::scoped_lock lock(probe->mutex);
-        assert(probe->completion->type == spark::ViewerUpdateWorker::WorkType::Open);
-        assert(probe->completion->generation == *first_generation);
-        assert(probe->completion->url == "viewer-url");
-        assert(probe->completion->sender_name == "Console");
+        const auto completion = probe->completion;
+        if (!completion) {
+            return 1;
+        }
+        assert(completion->type == spark::ViewerUpdateWorker::WorkType::Open);
+        assert(completion->generation == *first_generation);
+        assert(completion->url == "viewer-url");
+        assert(completion->sender_name == "Console");
     }
     assert(worker.openPending());
     assert(!worker.enqueueOpen({}, {}, "Still pending"));

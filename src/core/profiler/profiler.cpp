@@ -247,7 +247,8 @@ void Profiler::onTick(double mspt_ms)
     if (!running_.load()) {
         return;
     }
-    if (options_.only_ticks_over_ms > 0 && std::isfinite(mspt_ms) && mspt_ms > options_.only_ticks_over_ms) {
+    if (options_.only_ticks_over_ms > 0 && std::isfinite(mspt_ms) &&
+        mspt_ms > static_cast<double>(options_.only_ticks_over_ms)) {
         std::int32_t current = included_ticks_.load(std::memory_order_relaxed);
         while (current < std::numeric_limits<std::int32_t>::max() &&
                !included_ticks_.compare_exchange_weak(current, current + 1, std::memory_order_relaxed)) {

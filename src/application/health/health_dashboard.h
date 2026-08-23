@@ -71,7 +71,7 @@ public:
 
     // Queues one connection open. The returned result describes whether work was accepted;
     // the completion callback receives the eventual URL or error.
-    OpenResult open(HealthData initial, std::string sender_name);
+    OpenResult open(HealthData initial, const std::string &sender_name);
 
     bool updateDue(std::int64_t now_ms) const;
     bool enqueueUpdate(HealthData snapshot, std::int64_t now_ms);

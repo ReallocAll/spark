@@ -23,8 +23,8 @@ namespace {
 
 class Sender final : public CommandSender {
 public:
-    std::string getName() const override { return "Alice"; }
-    bool isPlayer() const override { return true; }
+    [[nodiscard]] std::string getName() const override { return "Alice"; }
+    [[nodiscard]] bool isPlayer() const override { return true; }
 
     std::vector<std::string> messages;
     std::vector<std::string> errors;
@@ -102,10 +102,13 @@ public:
         return result.ok ? "https://viewer/" + result.key : std::string();
     }
     bool tick() override { return open_state_; }
-    bool isOpen() const override { return open_state_; }
-    bool hasClient() const override { return probe_.client; }
+    [[nodiscard]] bool isOpen() const override { return open_state_; }
+    [[nodiscard]] bool hasClient() const override { return probe_.client; }
     void close() override { open_state_ = false; }
-    SocketChannelInfo channelInfo() const override { return {.channel_id = "health-channel", .public_key = {1, 2, 3}}; }
+    [[nodiscard]] SocketChannelInfo channelInfo() const override
+    {
+        return {.channel_id = "health-channel", .public_key = {1, 2, 3}};
+    }
     bool sendStatistics(const std::string &, const std::string &, const std::string &) override
     {
         std::scoped_lock lock(probe_.mutex);
@@ -113,17 +116,18 @@ public:
         probe_.cv.notify_all();
         return open_state_ && probe_.client;
     }
-    std::vector<std::uint8_t> pendingKey(const std::string &id) const override
+    [[nodiscard]] std::vector<std::uint8_t> pendingKey(const std::string &id) const override
     {
         return id == "pending" ? std::vector<std::uint8_t>{9, 8, 7} : std::vector<std::uint8_t>{};
     }
-    void sendClientTrusted(const std::string &id) override { trusted_id = id; }
-    void setIsKeyTrustedCallback(IsKeyTrustedCallback callback) override { trusted = std::move(callback); }
+    void sendClientTrusted(const std::string &id) override { trusted_id_ = id; }
+    void setIsKeyTrustedCallback(IsKeyTrustedCallback callback) override { trusted_ = std::move(callback); }
 
+private:
     ConnectionProbe &probe_;
     bool open_state_ = false;
-    std::string trusted_id;
-    IsKeyTrustedCallback trusted;
+    std::string trusted_id_;
+    IsKeyTrustedCallback trusted_;
 };
 
 struct Fixture {
@@ -131,21 +135,21 @@ struct Fixture {
         : trusted_viewers(std::filesystem::temp_directory_path() / "spark-health-command-routing-test.json"),
           activity_log(std::filesystem::temp_directory_path() / "spark-health-command-routing-test.json.log")
     {
-        std::filesystem::remove(trusted_viewers_file());
-        std::filesystem::remove(activity_log_file());
+        std::filesystem::remove(trustedViewersFile());
+        std::filesystem::remove(activityLogFile());
     }
 
     ~Fixture()
     {
-        std::filesystem::remove(trusted_viewers_file());
-        std::filesystem::remove(activity_log_file());
+        std::filesystem::remove(trustedViewersFile());
+        std::filesystem::remove(activityLogFile());
     }
 
-    std::filesystem::path trusted_viewers_file() const
+    static std::filesystem::path trustedViewersFile()
     {
         return std::filesystem::temp_directory_path() / "spark-health-command-routing-test.json";
     }
-    std::filesystem::path activity_log_file() const
+    static std::filesystem::path activityLogFile()
     {
         return std::filesystem::temp_directory_path() / "spark-health-command-routing-test.json.log";
     }
@@ -163,9 +167,8 @@ struct Fixture {
 HealthCommand makeCommand(Fixture &fixture, HealthDashboard::ConnectionFactory factory = {},
                           HealthCommand::UploadFunction upload = {})
 {
-    return HealthCommand(fixture.statistics, fixture.metadata, "https://bytebin/", "https://viewer/", "bytesocks",
-                         fixture.trusted_viewers, fixture.dispatcher, fixture.notifier, std::move(factory),
-                         std::move(upload));
+    return {fixture.statistics,      fixture.metadata,   "https://bytebin/", "https://viewer/",  "bytesocks",
+            fixture.trusted_viewers, fixture.dispatcher, fixture.notifier,   std::move(factory), std::move(upload)};
 }
 
 }  // namespace
@@ -173,7 +176,15 @@ HealthCommand makeCommand(Fixture &fixture, HealthDashboard::ConnectionFactory f
 
 int main()
 {
-    using namespace spark;
+    using spark::Arguments;
+    using spark::base64Encode;
+    using spark::Connection;
+    using spark::Fixture;
+    using spark::HealthCommandTestAccess;
+    using spark::HealthDashboard;
+    using spark::HealthDashboardConnection;
+    using spark::Sender;
+    using spark::UploadResult;
     Fixture fixture;
 
     int uploads = 0;

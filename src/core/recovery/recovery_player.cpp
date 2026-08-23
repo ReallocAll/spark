@@ -334,9 +334,7 @@ RecoveredProfile RecoveryPlayer::replay(const std::filesystem::path &directory)
             const std::int64_t window_end = profiling_window::windowEndTime(window, sc.window_adjustment_ms);
             ws.start_time_ms = std::max(window_start, result.session_start_ms);
             ws.end_time_ms = std::min(window_end, replay_end_ms);
-            if (ws.end_time_ms < ws.start_time_ms) {
-                ws.end_time_ms = ws.start_time_ms;
-            }
+            ws.end_time_ms = std::max(ws.end_time_ms, ws.start_time_ms);
             ws.duration_ms = static_cast<int>(ws.end_time_ms - ws.start_time_ms);
         }
         ws.tps_present = true;

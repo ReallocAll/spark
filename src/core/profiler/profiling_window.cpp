@@ -26,30 +26,30 @@ std::int32_t chooseAdjustment() noexcept
     return static_cast<std::int32_t>(value % static_cast<std::uint64_t>(kSizeMs)) + kAdjustmentMinMs;
 }
 
-const std::int32_t kWindowAdjustmentMs = chooseAdjustment();
+const std::int32_t KWindowAdjustmentMs = chooseAdjustment();
 
 std::int32_t clampWindow(std::int64_t window) noexcept
 {
-    constexpr std::int64_t kMin = (std::numeric_limits<std::int32_t>::min)();
-    constexpr std::int64_t kMax = (std::numeric_limits<std::int32_t>::max)();
-    if (window < kMin) {
-        return (std::numeric_limits<std::int32_t>::min)();
+    constexpr std::int64_t k_min = std::numeric_limits<std::int32_t>::min();
+    constexpr std::int64_t k_max = std::numeric_limits<std::int32_t>::max();
+    if (window < k_min) {
+        return std::numeric_limits<std::int32_t>::min();
     }
-    if (window > kMax) {
-        return (std::numeric_limits<std::int32_t>::max)();
+    if (window > k_max) {
+        return std::numeric_limits<std::int32_t>::max();
     }
     return static_cast<std::int32_t>(window);
 }
 
 std::int64_t saturatingAdd(std::int64_t left, std::int64_t right) noexcept
 {
-    constexpr std::int64_t kMin = (std::numeric_limits<std::int64_t>::min)();
-    constexpr std::int64_t kMax = (std::numeric_limits<std::int64_t>::max)();
-    if (right > 0 && left > kMax - right) {
-        return kMax;
+    constexpr std::int64_t k_min = std::numeric_limits<std::int64_t>::min();
+    constexpr std::int64_t k_max = std::numeric_limits<std::int64_t>::max();
+    if (right > 0 && left > k_max - right) {
+        return k_max;
     }
-    if (right < 0 && left < kMin - right) {
-        return kMin;
+    if (right < 0 && left < k_min - right) {
+        return k_min;
     }
     return left + right;
 }
@@ -74,12 +74,12 @@ std::int64_t windowEndTime(std::int32_t window, std::int32_t adjustment_ms) noex
 
 std::int32_t windowAdjustmentMs() noexcept
 {
-    return kWindowAdjustmentMs;
+    return KWindowAdjustmentMs;
 }
 
 std::int32_t windowNow() noexcept
 {
-    return timeToWindow(monotonicUnixMillis(), kWindowAdjustmentMs);
+    return timeToWindow(monotonicUnixMillis(), KWindowAdjustmentMs);
 }
 
 bool shouldPrune(std::int32_t window, std::int32_t current_window) noexcept

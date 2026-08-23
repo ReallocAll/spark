@@ -36,7 +36,7 @@ HealthCommand::HealthCommand(StatisticsService &statistics, ProfileMetadataProvi
                              viewer_url_copy]() -> std::unique_ptr<HealthDashboardConnection> {
             Crypto::KeyPair key_pair = Crypto::generateKeyPair();
             if (key_pair.public_key_x509.empty() || key_pair.private_key_pkcs8.empty()) {
-                return std::unique_ptr<HealthDashboardConnection>();
+                return {};
             }
             ViewerSocket::Config config;
             config.bytesocks_host = bytesocks_host_copy;
@@ -92,7 +92,7 @@ void HealthCommand::onTickAt(std::int64_t now_ms)
             HealthData snapshot = captureHealthDataForSender(dashboard_sender_, dashboard_sender_is_player_, now_ms);
             dashboard_->enqueueUpdate(std::move(snapshot), now_ms);
         }
-        catch (...) {
+        catch (...) {  // NOLINT(bugprone-empty-catch): dashboard updates are best effort.
         }
     }
     if (dashboard_->consumeFailure()) {
@@ -382,7 +382,7 @@ void HealthCommand::completeHealthDashboard(HealthDashboard::OpenResult result)
             }
         });
     }
-    catch (...) {
+    catch (...) {  // NOLINT(bugprone-empty-catch): dispatch failure leaves the result unannounced.
     }
 }
 

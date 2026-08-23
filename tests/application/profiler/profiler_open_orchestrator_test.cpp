@@ -49,8 +49,8 @@ namespace {
 
 class TestSender final : public spark::CommandSender {
 public:
-    std::string getName() const override { return "Console"; }
-    bool isPlayer() const override { return false; }
+    [[nodiscard]] std::string getName() const override { return "Console"; }
+    [[nodiscard]] bool isPlayer() const override { return false; }
     std::vector<std::string> messages;
     std::vector<std::string> errors;
 
