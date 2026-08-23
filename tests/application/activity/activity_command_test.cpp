@@ -34,12 +34,12 @@ int main()
     const auto path = std::filesystem::temp_directory_path() / "spark_activity_command_test.json";
     std::filesystem::remove(path);
     spark::ActivityLog log(path);
+    const auto now_ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
+            .count();
+    log.add(spark::Activity::url("Expired", false, 0, "Profiler", "https://example.com/expired"));
     for (int i = 0; i < 9; ++i) {
-        log.add(spark::Activity::url(
-            "Test", false,
-            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
-                .count(),
-            "Profiler", "https://example.com/" + std::to_string(i)));
+        log.add(spark::Activity::url("Test", false, now_ms, "Profiler", "https://example.com/" + std::to_string(i)));
     }
 
     spark::ActivityCommand command(log);
@@ -53,6 +53,9 @@ int main()
     sender = {};
     runPage(command, "1", sender);
     assert(sender.errors.empty() && sender.messages.size() == 17);
+    for (const std::string &message : sender.messages) {
+        assert(message.find("expired") == std::string::npos);
+    }
     sender = {};
     runPage(command, "3", sender);
     assert(sender.errors.empty() && sender.messages.size() == 5);

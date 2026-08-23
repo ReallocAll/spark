@@ -1,5 +1,7 @@
 #include "application/command/command_registry.h"
 
+#include <algorithm>
+#include <cctype>
 #include <exception>
 #include <utility>
 
@@ -7,10 +9,22 @@
 #include "spark_constants.h"
 
 namespace spark {
+namespace {
+
+std::string lowerCase(std::string value)
+{
+    std::ranges::transform(value, value.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    return value;
+}
+
+}  // namespace
 
 void CommandRegistry::registerCommand(std::vector<std::string> aliases, std::string description, std::string permission,
                                       Handler handler)
 {
+    for (std::string &alias : aliases) {
+        alias = lowerCase(std::move(alias));
+    }
     commands_.push_back({.aliases = std::move(aliases),
                          .description = std::move(description),
                          .permission = std::move(permission),
@@ -23,7 +37,7 @@ bool CommandRegistry::dispatch(CommandSender &sender, const std::vector<std::str
         sendHelp(sender);
         return true;
     }
-    const std::string &alias = tokens[0];
+    const std::string alias = lowerCase(tokens[0]);
     for (const auto &cmd : commands_) {
         for (const auto &a : cmd.aliases) {
             if (a == alias) {
