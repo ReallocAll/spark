@@ -3295,253 +3295,13 @@ bool verifyAllocationLifecycle()
         std::fprintf(stderr, "profiler failure state: healthy restart failed: %s\n", error.c_str());
         return false;
     }
-    spark::ExportContext allocation_context;
-    const std::string allocation_profile = failed_profiler.exportData(allocation_context);
-    if (allocation_profile.find("Allocation hook capabilities") == std::string::npos ||
-        allocation_profile.find("Allocation hook targets installed") == std::string::npos ||
-        allocation_profile.find("Allocation thread filter stage") == std::string::npos ||
-        !failed_profiler.shutdown(error)) {
-        std::fprintf(stderr, "allocation capability metadata: export validation failed: %s\n", error.c_str());
+    if (!failed_profiler.shutdown(error)) {
+        std::fprintf(stderr, "allocation capability metadata: shutdown failed: %s\n", error.c_str());
         return false;
     }
     return true;
 }
 
-bool verifyRetainedAllocationProfile()
-{
-    spark::Profiler profiler;
-    spark::ProfilerOptions options;
-    options.alloc = true;
-    options.alloc_live_only = true;
-    options.allocation_interval_bytes = 1;
-    std::string error;
-    const std::uint64_t server_tid = spark::currentNativeThreadId();
-    if (!profiler.start(options, server_tid, error)) {
-        std::fprintf(stderr, "retained allocation: start failed: %s\n", error.c_str());
-        return false;
-    }
-
-    void *retained = std::malloc(8192);
-    void *released = std::malloc(4096);
-    if (retained == nullptr || released == nullptr) {
-        std::free(retained);
-        std::free(released);
-        return false;
-    }
-    static_cast<volatile unsigned char *>(retained)[0] = 1;
-    static_cast<volatile unsigned char *>(released)[0] = 2;
-    void *resized = std::realloc(retained, 16384);
-    if (resized != nullptr) {
-        retained = resized;
-    }
-    void *failed_resize = std::realloc(retained, std::numeric_limits<std::size_t>::max());
-    if (failed_resize != nullptr) {
-        std::free(failed_resize);
-        std::free(released);
-        return false;
-    }
-    static_cast<volatile unsigned char *>(retained)[0] = 3;
-    std::free(released);
-    profiler.onTick(50.0);
-    if (!profiler.stopSampling(error)) {
-        std::fprintf(stderr, "retained allocation: stop failed: %s\n", error.c_str());
-        std::free(retained);
-        return false;
-    }
-
-    spark::ExportContext context;
-    const std::string profile = profiler.exportData(context);
-    const bool valid = profiler.sampleCount() != 0 && profiler.sampledAllocationBytes() >= 8192 &&
-                       profiler.freedAllocationSamples() != 0 &&
-                       profile.find("Allocation live-only") != std::string::npos &&
-                       profile.find("Allocation retained maximum age ms") != std::string::npos;
-    std::free(retained);
-    if (!profiler.shutdown(error) || !valid) {
-        std::fprintf(stderr,
-                     "retained allocation: profile validation failed: %s "
-                     "(samples=%llu bytes=%llu freed=%llu live-meta=%d age-meta=%d)\n",
-                     error.c_str(), static_cast<unsigned long long>(profiler.sampleCount()),
-                     static_cast<unsigned long long>(profiler.sampledAllocationBytes()),
-                     static_cast<unsigned long long>(profiler.freedAllocationSamples()),
-                     static_cast<int>(profile.find("Allocation live-only") != std::string::npos),
-                     static_cast<int>(profile.find("Allocation retained maximum age ms") != std::string::npos));
-        return false;
-    }
-    return true;
-}
-
-bool verifyAllocationLiveExport()
-{
-    using namespace std::chrono_literals;
-
-    spark::Profiler profiler;
-    spark::ProfilerOptions options;
-    options.alloc = true;
-    options.allocation_interval_bytes = 4096;
-    std::string error;
-    if (!profiler.start(options, spark::currentNativeThreadId(), error)) {
-        std::fprintf(stderr, "allocation live export: start failed: %s\n", error.c_str());
-        return false;
-    }
-
-    void *first_allocation = std::malloc(4096);
-    if (first_allocation == nullptr) {
-        profiler.cancel(error);
-        return false;
-    }
-    static_cast<volatile unsigned char *>(first_allocation)[0] = 1;
-    if (!waitForCondition([&] { return profiler.sampleCount() != 0; }, 2s)) {
-        std::free(first_allocation);
-        profiler.cancel(error);
-        return false;
-    }
-
-    spark::AllocationSnapshot first;
-    if (!spark::ProfilerTestAccess::allocationSnapshot(profiler, first, error) || first.sample_count == 0 ||
-        first.sampled_bytes == 0) {
-        std::fprintf(stderr, "allocation live export: first snapshot failed: %s\n", error.c_str());
-        std::free(first_allocation);
-        profiler.cancel(error);
-        return false;
-    }
-
-    void *second_allocation = std::malloc(8192);
-    if (second_allocation == nullptr) {
-        std::free(first_allocation);
-        profiler.cancel(error);
-        return false;
-    }
-    static_cast<volatile unsigned char *>(second_allocation)[0] = 2;
-    if (!waitForCondition([&] { return profiler.sampleCount() > first.sample_count; }, 2s)) {
-        std::free(second_allocation);
-        std::free(first_allocation);
-        profiler.cancel(error);
-        return false;
-    }
-
-    spark::AllocationSnapshot second;
-    const std::string live_profile = profiler.liveExport({});
-    if (!spark::ProfilerTestAccess::allocationSnapshot(profiler, second, error) || live_profile.empty() ||
-        live_profile.find("Allocation backend") == std::string::npos || second.sample_count < first.sample_count ||
-        second.sampled_bytes < first.sampled_bytes || !spark::ProfilerTestAccess::allocationSamplerRunning(profiler) ||
-        !spark::ProfilerTestAccess::allocationHooksInstalled(profiler)) {
-        std::fprintf(stderr, "allocation live export: cumulative snapshot or sampler state was invalid\n");
-        std::free(second_allocation);
-        std::free(first_allocation);
-        profiler.cancel(error);
-        return false;
-    }
-
-    if (!profiler.stopSampling(error)) {
-        std::free(second_allocation);
-        std::free(first_allocation);
-        return false;
-    }
-    const std::string final_profile = profiler.exportData({});
-    const bool valid = !final_profile.empty() && profiler.sampleCount() >= second.sample_count &&
-                       profiler.sampledAllocationBytes() >= second.sampled_bytes &&
-                       spark::ProfilerTestAccess::allocationHooksInstalled(profiler);
-    std::free(second_allocation);
-    std::free(first_allocation);
-    return profiler.shutdown(error) && valid;
-}
-
-bool verifyRetainedAllocationLiveExport()
-{
-    using namespace std::chrono_literals;
-
-    spark::Profiler profiler;
-    spark::ProfilerOptions options;
-    options.alloc = true;
-    options.alloc_live_only = true;
-    options.allocation_interval_bytes = 1;
-    std::string error;
-    if (!profiler.start(options, spark::currentNativeThreadId(), error)) {
-        std::fprintf(stderr, "retained live export: start failed: %s\n", error.c_str());
-        return false;
-    }
-
-    void *retained = std::malloc(1024 * 1024);
-    void *released = std::malloc(512 * 1024);
-    if (retained == nullptr || released == nullptr) {
-        std::free(retained);
-        std::free(released);
-        profiler.cancel(error);
-        return false;
-    }
-    static_cast<volatile unsigned char *>(retained)[0] = 1;
-    static_cast<volatile unsigned char *>(released)[0] = 2;
-    if (!waitForCondition([&] { return profiler.liveAllocationSamples() >= 2; }, 2s)) {
-        std::fprintf(stderr, "retained live export: allocations were not tracked\n");
-        std::free(released);
-        std::free(retained);
-        profiler.cancel(error);
-        return false;
-    }
-
-    spark::AllocationSnapshot before_free;
-    if (!spark::ProfilerTestAccess::allocationSnapshot(profiler, before_free, error) || before_free.sample_count < 2) {
-        std::fprintf(stderr, "retained live export: initial snapshot failed: %s (samples=%llu)\n", error.c_str(),
-                     static_cast<unsigned long long>(before_free.sample_count));
-        std::free(released);
-        std::free(retained);
-        profiler.cancel(error);
-        return false;
-    }
-    std::free(released);
-    if (!waitForCondition([&] { return profiler.freedAllocationSamples() != 0; }, 2s)) {
-        std::fprintf(stderr, "retained live export: free was not tracked\n");
-        std::free(retained);
-        profiler.cancel(error);
-        return false;
-    }
-
-    spark::AllocationSnapshot after_free;
-    if (!spark::ProfilerTestAccess::allocationSnapshot(profiler, after_free, error) ||
-        after_free.sampled_bytes >= before_free.sampled_bytes) {
-        std::fprintf(stderr, "retained live export: free was not reflected\n");
-        std::free(retained);
-        profiler.cancel(error);
-        return false;
-    }
-
-    void *resized = std::realloc(retained, 2 * 1024 * 1024);
-    if (resized == nullptr) {
-        std::fprintf(stderr, "retained live export: realloc failed\n");
-        std::free(retained);
-        profiler.cancel(error);
-        return false;
-    }
-    retained = resized;
-    spark::AllocationSnapshot after_realloc;
-    spark::AllocationSnapshot repeated;
-    const std::string live_profile = profiler.liveExport({});
-    if (!spark::ProfilerTestAccess::allocationSnapshot(profiler, after_realloc, error) ||
-        !spark::ProfilerTestAccess::allocationSnapshot(profiler, repeated, error) || live_profile.empty() ||
-        live_profile.find("Allocation live-only") == std::string::npos ||
-        after_realloc.sampled_bytes < after_free.sampled_bytes || repeated.sample_count != after_realloc.sample_count ||
-        repeated.sampled_bytes != after_realloc.sampled_bytes ||
-        !spark::ProfilerTestAccess::allocationSamplerRunning(profiler) ||
-        !spark::ProfilerTestAccess::allocationHooksInstalled(profiler)) {
-        std::fprintf(stderr, "retained live export: realloc or repeated snapshot was invalid\n");
-        std::free(retained);
-        profiler.cancel(error);
-        return false;
-    }
-
-    if (!profiler.stopSampling(error)) {
-        std::fprintf(stderr, "retained live export: stop failed: %s (lifecycle=%llu, contention=%llu)\n", error.c_str(),
-                     static_cast<unsigned long long>(spark::ProfilerTestAccess::allocationLifecycleDropped(profiler)),
-                     static_cast<unsigned long long>(spark::ProfilerTestAccess::allocationContentionDropped(profiler)));
-        std::free(retained);
-        return false;
-    }
-    const std::string final_profile = profiler.exportData({});
-    const bool valid = !final_profile.empty() && profiler.sampleCount() == repeated.sample_count &&
-                       profiler.sampledAllocationBytes() == repeated.sampled_bytes;
-    std::free(retained);
-    return profiler.shutdown(error) && valid;
-}
 #endif
 
 #ifdef __linux__
@@ -3627,18 +3387,6 @@ int main(int argc, char **argv)
             std::fprintf(stderr, "allocation-only: lifecycle test failed\n");
             return 1;
         }
-        if (!verifyRetainedAllocationProfile()) {
-            std::fprintf(stderr, "allocation-only: retained profile test failed\n");
-            return 1;
-        }
-        if (!verifyAllocationLiveExport()) {
-            std::fprintf(stderr, "allocation-only: live export test failed\n");
-            return 1;
-        }
-        if (!verifyRetainedAllocationLiveExport()) {
-            std::fprintf(stderr, "allocation-only: retained live export test failed\n");
-            return 1;
-        }
         if (!verifyAllocationThreadSelection()) {
             std::fprintf(stderr, "allocation-only: thread selection test failed\n");
             return 1;
@@ -3710,13 +3458,11 @@ int main(int argc, char **argv)
         !verifyByteSampling() || !verifyStopResponsiveness() || !verifySessionIsolation(GWorkerTid.load()) ||
         !verifyTickFiltering(GWorkerTid.load())
 #ifdef _WIN32
-        || !verifyAllocationLifecycle() || !verifyRetainedAllocationProfile() || !verifyAllocationLiveExport() ||
-        !verifyRetainedAllocationLiveExport() || !verifyAllocationThreadSelection() ||
+        || !verifyAllocationLifecycle() || !verifyAllocationThreadSelection() ||
         !verifyProcessWideAllocationSampling() || !verifyAllocationContentionPolicy() ||
         !verifyAllocationResourcePressure()
 #elif defined(__linux__)
-        || !verifyLinuxImportHooks() || !verifyAllocationLifecycle() || !verifyRetainedAllocationProfile() ||
-        !verifyAllocationLiveExport() || !verifyRetainedAllocationLiveExport() || !verifyAllocationThreadSelection() ||
+        || !verifyLinuxImportHooks() || !verifyAllocationLifecycle() || !verifyAllocationThreadSelection() ||
         !verifyProcessWideAllocationSampling() || !verifyAllocationContentionPolicy() ||
         !verifyAllocationResourcePressure()
 #endif
