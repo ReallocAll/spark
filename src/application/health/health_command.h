@@ -65,7 +65,7 @@ public:
 private:
     friend struct HealthCommandTestAccess;
 
-    void showHealth(CommandSender &sender);
+    void showHealth(CommandSender &sender, const Arguments &args);
     void openHealthDashboard(CommandSender &sender);
     void trustViewer(CommandSender &sender, const Arguments &args);
     void uploadHealthReport(CommandSender &sender);
