@@ -14,7 +14,7 @@
 #include "application/command/command_sender.h"
 #include "application/platform_capabilities.h"
 #include "application/profiler/profile_exporter.h"
-#include "application/profiler/viewer_update_worker.h"
+#include "application/profiler/profiler_open_orchestrator.h"
 #include "core/activity/activity_log.h"
 #include "core/command/arguments.h"
 #include "core/config/trusted_viewers.h"
@@ -46,7 +46,7 @@ public:
     void cmdStop(CommandSender &sender, const Arguments &args);
     void cmdInfo(CommandSender &sender);
     void cmdCancel(CommandSender &sender);
-    void cmdOpen(CommandSender &sender);
+    void cmdOpen(CommandSender &sender, const Arguments &args);
     void cmdTrustViewer(CommandSender &sender, const Arguments &args);
 
     // Called every server tick.
@@ -115,29 +115,24 @@ private:
     void announceResult();
     bool startBackgroundSession();
     void closeViewerSocket();
-    bool startViewerWorker();
-    void stopViewerWorker();
-    std::string executeViewerWork(const ViewerUpdateWorker::WorkItem &work);
-    void completeViewerOpen(ViewerUpdateWorker::Completion completion);
-    void completeViewerWork(ViewerUpdateWorker::Completion completion) noexcept;
     ExportContext captureLiveContext(std::int64_t now_ms);
     std::string buildLiveSamplerData(const ExportContext &context);
-    std::string uploadSamplerData(const ExportContext &context);
-    bool viewerGenerationCurrent(std::uint64_t generation) const;
-    bool viewerOpenPending() const { return viewer_worker_ && viewer_worker_->openPending(); }
+    bool viewerOpenPending() const { return viewer_open_ && viewer_open_->viewerOpenPending(); }
 
     void setViewerOpenFunctionForTesting(
         std::function<std::string(ViewerSocket &, const ViewerSocket::UploadCallback &)> open_function)
     {
-        viewer_open_fn_ = std::move(open_function);
+        viewer_open_->setViewerOpenFunctionForTesting(std::move(open_function));
     }
     void setViewerSocketForTesting(std::shared_ptr<ViewerSocket> socket)
     {
-        viewer_socket_ = std::move(socket);
-        viewer_sender_name_ = "Console";
+        viewer_open_->setViewerSocketForTesting(std::move(socket));
     }
-    bool hasViewerSocketForTesting() const { return viewer_socket_ != nullptr; }
-    std::shared_ptr<ViewerSocket> viewerSocketForTesting() const { return viewer_socket_; }
+    bool hasViewerSocketForTesting() const { return viewer_open_ && viewer_open_->hasViewerSocket(); }
+    std::shared_ptr<ViewerSocket> viewerSocketForTesting() const
+    {
+        return viewer_open_ ? viewer_open_->viewerSocketForTesting() : nullptr;
+    }
 
     StatisticsService &statistics_;
     std::string bds_executable_sha256_;
@@ -174,12 +169,7 @@ private:
     std::function<std::map<std::string, NetworkInterfaceSnapshot>()> network_snapshot_provider_;
     std::function<ActivityLog *()> activity_log_provider_;
 
-    std::shared_ptr<ViewerSocket> viewer_socket_;
-    std::int64_t last_viewer_upload_ms_ = 0;
-    std::string viewer_sender_name_;
-
-    std::unique_ptr<ViewerUpdateWorker> viewer_worker_;
-    std::function<std::string(ViewerSocket &, const ViewerSocket::UploadCallback &)> viewer_open_fn_;
+    std::unique_ptr<ProfilerOpenOrchestrator> viewer_open_;
     std::shared_ptr<int> lifetime_ = std::make_shared<int>(0);
 
     // Background profiler retry backoff.

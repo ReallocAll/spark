@@ -180,6 +180,7 @@ add_library(spark_application STATIC
         src/application/health/health_dashboard_connection.cpp
         src/application/placeholder/spark_placeholder_resolver.cpp
         src/application/profiler/profile_exporter.cpp
+        src/application/profiler/profiler_open_orchestrator.cpp
         src/application/profiler/profiler_service.cpp
         src/application/profiler/profiler_start_options.cpp
         src/application/profiler/viewer_update_worker.cpp
