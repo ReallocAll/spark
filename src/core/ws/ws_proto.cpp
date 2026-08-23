@@ -61,6 +61,10 @@ std::string encodeSocketChannelInfo(const SocketChannelInfo &info)
 
 bool decodeRawPacket(std::string_view base64_data, WsIncomingPacket &out)
 {
+    out = {};
+    if (base64_data.empty() || base64_data.size() > kMaxIncomingWsPacketBytes) {
+        return false;
+    }
     auto raw_bytes = base64Decode(base64_data);
     if (raw_bytes.empty()) {
         return false;
@@ -100,7 +104,7 @@ bool decodeRawPacket(std::string_view base64_data, WsIncomingPacket &out)
         }
     }
 
-    if (version != Crypto::kVersion) {
+    if (!raw.valid() || version != Crypto::kVersion) {
         return false;
     }
     if (message.empty()) {
@@ -136,6 +140,9 @@ bool decodeRawPacket(std::string_view base64_data, WsIncomingPacket &out)
                     sub.skip(wire);
                 }
             }
+            if (!sub.valid()) {
+                return false;
+            }
         }
         else if (field == KFieldClientConnect) {
             out.type = WsPacketType::ClientConnect;
@@ -151,13 +158,17 @@ bool decodeRawPacket(std::string_view base64_data, WsIncomingPacket &out)
                     sub.skip(wire);
                 }
             }
+            if (!sub.valid()) {
+                return false;
+            }
         }
         else {
             wrapper.skip(wire);
         }
     }
 
-    return out.type != WsPacketType::Unknown;
+    return wrapper.valid() && out.type != WsPacketType::Unknown &&
+           (out.type != WsPacketType::ClientConnect || !out.public_key.empty());
 }
 
 std::string encodeServerPong(bool ok, std::int32_t data, const std::vector<std::uint8_t> &private_key_pkcs8)
