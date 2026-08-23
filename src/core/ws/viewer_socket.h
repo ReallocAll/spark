@@ -41,6 +41,8 @@ public:
         std::string bytebin_url;
         std::string viewer_url;
         std::string user_agent = "spark-plugin";
+        int sampler_interval = 10;
+        int statistics_interval = 10;
     };
 
     ViewerSocket(Config config, Crypto::KeyPair key_pair);
@@ -58,6 +60,10 @@ public:
     // upload completes.
     void sendUpdate(const std::string &bytebin_key);
 
+    // Send signed, already serialized platform/system/metrics statistics to
+    // a connected viewer. Thread-safe against tick().
+    bool sendStatistics(const std::string &platform, const std::string &system, const std::string &metrics);
+
     // Close the socket and signal the viewer.
     void close();
 
@@ -71,6 +77,9 @@ public:
     // Called on each tick to check timeouts and process queued messages.
     // Returns false if the socket should be closed due to timeout.
     bool tick();
+
+    // Returns true after the viewer has sent its first ping.
+    bool hasClient() const { return last_ping_ms_.load(std::memory_order_acquire) != 0; }
 
     // Sets the trusted-keys check callback for live viewer authentication.
     using IsKeyTrustedCallback = std::function<bool(const std::vector<std::uint8_t> &)>;

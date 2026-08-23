@@ -45,8 +45,13 @@ void HealthCommand::shutdown()
 
 void HealthCommand::pollPing()
 {
-    if (ping_statistics_) {
-        ping_statistics_->poll();
+    if (ping_statistics_ && ping_statistics_->poll()) {
+        const PingSummary &summary = ping_statistics_->lastPollSummary();
+        statistics_.recordPlayerPing({.mean = summary.mean(),
+                                      .max = static_cast<double>(summary.max()),
+                                      .min = static_cast<double>(summary.min()),
+                                      .median = static_cast<double>(summary.median()),
+                                      .percentile95 = static_cast<double>(summary.percentile95th())});
     }
 }
 
@@ -252,6 +257,7 @@ HealthData HealthCommand::captureHealthData(const CommandSender &sender, std::in
     ExportContext ctx;
     metadata_provider_.gatherServerMetadata(ctx, now_ms);
     ctx.statistics = statistics_.snapshot();
+    ctx.metrics = statistics_.metricsSnapshot();
     ctx.system_stats = gatherSystemStats(".");
     ctx.system_stats.uptime_present = true;
     ctx.system_stats.uptime_ms = ctx.uptime_ms;
@@ -296,6 +302,7 @@ HealthData HealthCommand::captureHealthData(const CommandSender &sender, std::in
     }
 
     data.statistics = ctx.statistics;
+    data.metrics = ctx.metrics;
     data.plugins = ctx.plugins;
     data.server_configurations = ctx.server_configurations;
     data.window_stats = ctx.window_stats;

@@ -50,6 +50,7 @@ void StatisticsService::startAt(std::int64_t steady_ms, std::int64_t unix_ms, co
     last_observation_steady_ms_ = steady_ms;
     next_cpu_sample_steady_ms_ = steady_ms + 1000;
     previous_cpu_ = initial_cpu;
+    metrics_history_.clear();
     started_ = true;
 }
 
@@ -92,6 +93,7 @@ void StatisticsService::recordTickAt(double duration_ms, std::int64_t steady_ms)
     }
     ticks_[index] = sample;
     last_observation_steady_ms_ = steady_ms;
+    recordMetricsAt(steady_ms);
 }
 
 void StatisticsService::recordCpuSnapshot(const CpuSnapshot &current)
@@ -121,6 +123,7 @@ void StatisticsService::recordCpuSnapshot(const CpuSnapshot &current)
     cpu_[index] = sample;
     previous_cpu_ = current;
     last_observation_steady_ms_ = (std::max)(last_observation_steady_ms_, current.wall_ms);
+    recordMetricsAt(current.wall_ms);
 }
 
 void StatisticsService::recordPlayerCount(std::int64_t players)
@@ -133,6 +136,8 @@ void StatisticsService::recordPlayerCountAt(std::int64_t players, std::int64_t s
     if (!started_ || players < 0) {
         return;
     }
+
+    steady_ms = (std::max)(steady_ms, last_observation_steady_ms_);
 
     GaugeSample sample;
     sample.steady_ms = steady_ms;
@@ -154,15 +159,42 @@ void StatisticsService::recordWorldGauges(int entities, int chunks)
     recordWorldGaugesAt(entities, chunks, last_observation_steady_ms_);
 }
 
-void StatisticsService::recordWorldGaugesAt(int entities, int chunks, std::int64_t /*steady_ms*/)
+void StatisticsService::recordWorldGaugesAt(int entities, int chunks, std::int64_t steady_ms)
 {
     if (!started_ || gauge_size_ == 0) {
         return;
     }
+    steady_ms = (std::max)(steady_ms, last_observation_steady_ms_);
     std::size_t index = (gauge_begin_ + gauge_size_ - 1) % gauges_.size();
     gauges_[index].entities = entities;
     gauges_[index].chunks = chunks;
     gauges_[index].world_gauges_set = true;
+    gauges_[index].steady_ms = (std::max)(gauges_[index].steady_ms, steady_ms);
+    last_observation_steady_ms_ = (std::max)(last_observation_steady_ms_, steady_ms);
+
+    if (steady_ms < start_steady_ms_ + MetricsHistory::kIntervalMs) {
+        return;
+    }
+    const GaugeSample &sample = gauges_[index];
+    metrics_history_.recordWorldInfo(unixTimeFor(steady_ms), sample.players, sample.entities, sample.chunks);
+}
+
+void StatisticsService::recordPlayerPing(const MetricsAverages &summary)
+{
+    recordPlayerPingAt(summary, last_observation_steady_ms_);
+}
+
+void StatisticsService::recordPlayerPingAt(const MetricsAverages &summary, std::int64_t steady_ms)
+{
+    if (!started_) {
+        return;
+    }
+    steady_ms = (std::max)(steady_ms, last_observation_steady_ms_);
+    last_observation_steady_ms_ = steady_ms;
+    if (steady_ms < start_steady_ms_ + MetricsHistory::kIntervalMs) {
+        return;
+    }
+    metrics_history_.recordPlayerPing(unixTimeFor(steady_ms), summary);
 }
 
 std::int64_t StatisticsService::effectiveStart(std::int64_t now_ms, std::int64_t window_ms) const
@@ -484,6 +516,37 @@ std::map<std::int32_t, WindowStats> StatisticsService::profileWindows(std::int64
 std::int64_t StatisticsService::unixTimeFor(std::int64_t steady_ms) const
 {
     return start_unix_ms_ + (steady_ms - start_steady_ms_);
+}
+
+void StatisticsService::recordMetricsAt(std::int64_t steady_ms)
+{
+    if (!started_ || steady_ms < start_steady_ms_ + MetricsHistory::kIntervalMs) {
+        return;
+    }
+
+    const std::int64_t timestamp_ms = unixTimeFor(steady_ms);
+    const RollingValue tps = tpsFor(steady_ms, MetricsHistory::kIntervalMs);
+    if (tps.present) {
+        metrics_history_.recordTps(timestamp_ms, tps.value);
+    }
+
+    const DistributionValues tick_duration = msptForRecentSamples(kPlaceholderTickDuration1mSamples);
+    if (tick_duration.present) {
+        metrics_history_.recordTickDuration(timestamp_ms, {.mean = tick_duration.mean,
+                                                           .max = tick_duration.max,
+                                                           .min = tick_duration.min,
+                                                           .median = tick_duration.median,
+                                                           .percentile95 = tick_duration.percentile95});
+    }
+
+    const RollingValue process = cpuFor(steady_ms, MetricsHistory::kIntervalMs, true);
+    if (process.present) {
+        metrics_history_.recordCpuUsageProcess(timestamp_ms, process.value);
+    }
+    const RollingValue system = cpuFor(steady_ms, MetricsHistory::kIntervalMs, false);
+    if (system.present) {
+        metrics_history_.recordCpuUsageSystem(timestamp_ms, system.value);
+    }
 }
 
 }  // namespace spark

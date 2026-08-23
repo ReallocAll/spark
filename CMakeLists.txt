@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.23)
+cmake_minimum_required(VERSION 3.29)
 project(spark VERSION 0.5.3 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -49,9 +49,13 @@ endif ()
 # Endstone's root CMake returns right after its include/ target when consumed as a
 # subproject, so this only pulls the headers, not the server. For local iteration,
 # pass -DFETCHCONTENT_SOURCE_DIR_ENDSTONE=<path> to reuse an existing checkout.
+set(ENDSTONE_SPARK_ENDSTONE_GIT_REPOSITORY "https://github.com/EndstoneMC/endstone.git" CACHE STRING
+        "Repository providing the Endstone public plugin API")
+set(ENDSTONE_SPARK_ENDSTONE_GIT_TAG "develop" CACHE STRING
+        "Git ref providing the Endstone public plugin API")
 FetchContent_Declare(endstone
-        GIT_REPOSITORY https://github.com/EndstoneMC/endstone.git
-        GIT_TAG v0.11)
+        GIT_REPOSITORY ${ENDSTONE_SPARK_ENDSTONE_GIT_REPOSITORY}
+        GIT_TAG ${ENDSTONE_SPARK_ENDSTONE_GIT_TAG})
 FetchContent_MakeAvailable(endstone)
 
 # PAPI is optional at runtime; only its public headers are fetched.
@@ -62,8 +66,7 @@ set(ENDSTONE_SPARK_PAPI_GIT_TAG "main" CACHE STRING
 FetchContent_Declare(endstone_papi_headers
         GIT_REPOSITORY ${ENDSTONE_SPARK_PAPI_GIT_REPOSITORY}
         GIT_TAG ${ENDSTONE_SPARK_PAPI_GIT_TAG}
-        GIT_SHALLOW TRUE
-        SOURCE_SUBDIR cmake/headers-only)
+        GIT_SHALLOW TRUE)
 FetchContent_MakeAvailable(endstone_papi_headers)
 add_library(spark_papi_headers INTERFACE)
 target_include_directories(spark_papi_headers INTERFACE "${endstone_papi_headers_SOURCE_DIR}/include")
@@ -132,7 +135,9 @@ add_library(spark_core STATIC
         src/core/activity/activity_log.cpp
         src/core/command/arguments.cpp
         src/core/profiler/profiler.cpp
+        src/core/profiler/profiler_export.cpp
         src/core/stats/executable_hash.cpp
+        src/core/stats/metrics_history.cpp
         src/core/stats/statistics_service.cpp
         src/core/stats/ping_statistics.cpp
         src/core/stats/network_monitor.cpp
@@ -140,7 +145,10 @@ add_library(spark_core STATIC
         src/core/stats/system_stats.cpp
         src/core/ws/ws_proto.cpp
         src/core/ws/viewer_socket.cpp
+        src/proto/health_data.cpp
+        src/proto/metrics_proto.cpp
         src/proto/sampler_data.cpp
+        src/proto/statistics_proto.cpp
         src/net/gzip.cpp
         src/net/bytebin.cpp
         src/net/profile_file.cpp
@@ -170,6 +178,8 @@ add_library(spark_application STATIC
         src/application/placeholder/spark_placeholder_resolver.cpp
         src/application/profiler/profile_exporter.cpp
         src/application/profiler/profiler_service.cpp
+        src/application/profiler/profiler_start_options.cpp
+        src/application/profiler/viewer_update_worker.cpp
         src/application/spark_application.cpp
         src/application/tick_monitor/tick_monitor_command.cpp)
 target_include_directories(spark_application PUBLIC src)

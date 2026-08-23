@@ -1,6 +1,7 @@
 #include <atomic>
 #include <cstdint>
 #include <cstdlib>
+#include <exception>
 #include <memory>
 #include <string>
 #include <vector>
@@ -72,10 +73,11 @@ public:
         app_->statistics().recordPlayerCount(static_cast<std::int64_t>(getServer().getOnlinePlayers().size()));
         app_->enable();
 
+        enableMetrics();
+
         auto papi_api =
             getServer().getServiceManager().load<papi::PlaceholderAPI>(std::string(papi::PlaceholderAPI::ServiceName));
-        const auto papi_result =
-            papi_integration_.enable(*this, std::move(papi_api), app_->statistics(), spark::kVersion);
+        const auto papi_result = papi_integration_.enable(*this, papi_api.get(), app_->statistics(), spark::kVersion);
         if (papi_result == spark::endstone_adapter::PapiRegistrationResult::Registered) {
             getLogger().info("Registered the spark PlaceholderAPI expansion.");
         }
@@ -83,13 +85,17 @@ public:
             getLogger().warning("PlaceholderAPI rejected the spark expansion; Spark will continue without it.");
         }
 
-        tick_task_ = getServer().getScheduler().runTaskTimer(*this, [this]() { onServerTick(); }, 0, 1);
+        tick_task_ = getServer().getScheduler().runTaskTimer(*this, [this]() { onServerTick(); }, 0, 1).get();
         getLogger().info("endstone-spark v{} enabled. Run {}/spark{} to get started.", spark::kVersion,
                          endstone::ColorFormat::Gold, endstone::ColorFormat::Reset);
     }
 
     void onDisable() override
     {
+        if (metrics_) {
+            metrics_->shutdown();
+            metrics_.reset();
+        }
         papi_integration_.disable(*this);
         if (app_) {
             app_->shutdown();
@@ -104,7 +110,7 @@ public:
         }
     }
 
-    bool onCommand(endstone::CommandSender &sender, const endstone::Command &command,
+    bool onCommand(const endstone::NotNull<endstone::CommandSender> &sender, const endstone::Command &command,
                    const std::vector<std::string> &args) override
     {
         if (command.getName() != "spark") {
@@ -137,6 +143,29 @@ public:
     }
 
 private:
+    void enableMetrics() noexcept
+    {
+        std::unique_ptr<endstone::Metrics> metrics;
+        try {
+            metrics = std::make_unique<endstone::Metrics>(*this, 33350);
+            metrics->addCustomChart(
+                std::make_unique<endstone::SimplePie>("backend", [] { return std::string{"native"}; }));
+            metrics_ = std::move(metrics);
+        }
+        catch (const std::exception &error) {
+            if (metrics) {
+                metrics->shutdown();
+            }
+            getLogger().warning("Unable to register bStats metrics: {}", error.what());
+        }
+        catch (...) {
+            if (metrics) {
+                metrics->shutdown();
+            }
+            getLogger().warning("Unable to register bStats metrics: unknown error");
+        }
+    }
+
     std::string bds_executable_sha256_;
     std::atomic<std::uint64_t> main_tid_{0};
     std::shared_ptr<endstone::Task> tick_task_;
@@ -146,6 +175,7 @@ private:
     std::unique_ptr<spark::endstone_adapter::EndstoneNotifier> notifier_;
     std::unique_ptr<spark::SparkApplication> app_;
     spark::endstone_adapter::PapiIntegration papi_integration_;
+    std::unique_ptr<endstone::Metrics> metrics_;
 };
 
 ENDSTONE_PLUGIN("spark", "0.5.3", SparkPlugin)

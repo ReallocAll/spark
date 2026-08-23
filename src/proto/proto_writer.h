@@ -83,6 +83,19 @@ public:
         message(field, payload);
     }
 
+    void packedUint32(int field, const std::vector<std::uint32_t> &values)
+    {
+        if (values.empty()) {
+            return;
+        }
+        std::string payload;
+        ProtoWriter inner(payload);
+        for (std::uint32_t value : values) {
+            inner.putVarint(value);
+        }
+        message(field, payload);
+    }
+
     void packedDouble(int field, const std::vector<double> &values)
     {
         if (values.empty()) {

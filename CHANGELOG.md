@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Include current Endstone game-rule values in exported Spark world metadata.
+- Register Spark's native backend with bStats using service ID 33350.
 - Register an optional `spark` expansion with Endstone PlaceholderAPI, exposing
   Java spark-compatible TPS, tick-duration, and process/system CPU placeholders
   from Spark's live rolling statistics. Spark continues normally when PAPI is not

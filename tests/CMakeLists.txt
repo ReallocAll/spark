@@ -42,6 +42,36 @@ set_target_properties(spark_placeholder_statistics_test PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME spark_placeholder_statistics_test COMMAND spark_placeholder_statistics_test)
 
+add_executable(spark_metrics_history_test core/stats/metrics_history_test.cpp)
+target_link_libraries(spark_metrics_history_test PRIVATE spark_core)
+set_target_properties(spark_metrics_history_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME spark_metrics_history_test COMMAND spark_metrics_history_test)
+
+add_executable(spark_proto_statistics_test proto/statistics_proto_test.cpp)
+target_link_libraries(spark_proto_statistics_test PRIVATE spark_core)
+set_target_properties(spark_proto_statistics_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME spark_proto_statistics_test COMMAND spark_proto_statistics_test)
+
+add_executable(spark_sampler_statistics_test proto/sampler_statistics_test.cpp)
+target_link_libraries(spark_sampler_statistics_test PRIVATE spark_core)
+set_target_properties(spark_sampler_statistics_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME spark_sampler_statistics_test COMMAND spark_sampler_statistics_test)
+
+add_executable(spark_proto_health_data_test proto/health_data_test.cpp)
+target_link_libraries(spark_proto_health_data_test PRIVATE spark_core)
+set_target_properties(spark_proto_health_data_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME spark_proto_health_data_test COMMAND spark_proto_health_data_test)
+
+add_executable(spark_proto_metrics_test proto/metrics_proto_test.cpp)
+target_link_libraries(spark_proto_metrics_test PRIVATE spark_core)
+set_target_properties(spark_proto_metrics_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME spark_proto_metrics_test COMMAND spark_proto_metrics_test)
+
 add_executable(spark_activity_log_test core/activity/activity_log_test.cpp)
 target_link_libraries(spark_activity_log_test PRIVATE spark_core)
 set_target_properties(spark_activity_log_test PROPERTIES
@@ -53,6 +83,18 @@ target_link_libraries(spark_activity_command_test PRIVATE spark_application)
 set_target_properties(spark_activity_command_test PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME spark_activity_command_test COMMAND spark_activity_command_test)
+
+add_executable(spark_viewer_update_worker_test application/profiler/viewer_update_worker_test.cpp)
+target_link_libraries(spark_viewer_update_worker_test PRIVATE spark_application)
+set_target_properties(spark_viewer_update_worker_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME spark_viewer_update_worker_test COMMAND spark_viewer_update_worker_test)
+
+add_executable(spark_profiler_start_options_test application/profiler/profiler_start_options_test.cpp)
+target_link_libraries(spark_profiler_start_options_test PRIVATE spark_application)
+set_target_properties(spark_profiler_start_options_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME spark_profiler_start_options_test COMMAND spark_profiler_start_options_test)
 
 add_executable(spark_placeholder_resolver_test application/placeholder/spark_placeholder_resolver_test.cpp)
 target_link_libraries(spark_placeholder_resolver_test PRIVATE spark_application)
@@ -78,6 +120,12 @@ set_target_properties(spark_native_plugin_attribution_test PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME spark_native_plugin_attribution_test COMMAND spark_native_plugin_attribution_test)
 
+add_executable(spark_profiler_export_test core/profiler/profiler_export_test.cpp)
+target_link_libraries(spark_profiler_export_test PRIVATE spark_core)
+set_target_properties(spark_profiler_export_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME spark_profiler_export_test COMMAND spark_profiler_export_test)
+
 add_executable(spark_config_test core/config/spark_config_test.cpp)
 target_link_libraries(spark_config_test PRIVATE spark_core)
 set_target_properties(spark_config_test PROPERTIES
@@ -95,6 +143,12 @@ target_link_libraries(spark_crypto_test PRIVATE spark_core)
 set_target_properties(spark_crypto_test PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME spark_crypto_test COMMAND spark_crypto_test)
+
+add_executable(spark_ws_proto_test core/ws/ws_proto_test.cpp)
+target_link_libraries(spark_ws_proto_test PRIVATE spark_core)
+set_target_properties(spark_ws_proto_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME spark_ws_proto_test COMMAND spark_ws_proto_test)
 
 add_executable(spark_websocket_lifecycle_test net/websocket_lifecycle_test.cpp)
 target_link_libraries(spark_websocket_lifecycle_test PRIVATE spark_core)
@@ -196,6 +250,7 @@ elseif (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "x
             spark_selftest PRIVATE
             _GNU_SOURCE
             SPARK_ELF_HOOK_FIXTURE_PATH="$<TARGET_FILE:spark_elf_hook_fixture>")
+    target_compile_definitions(spark_profiler_export_test PRIVATE _GNU_SOURCE)
 endif ()
 
 add_test(NAME spark_selftest COMMAND spark_selftest --seconds=1)

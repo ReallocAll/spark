@@ -64,6 +64,7 @@ struct ExportContext {
     int online_mode = 0;  // 0 unknown, 1 offline, 2 online
     std::int64_t uptime_ms = 0;
     StatisticsSnapshot statistics;
+    MetricsSnapshot metrics;
     SystemStats system_stats;
     std::map<std::int32_t, WindowStats> window_stats;
     std::vector<PluginInfo> plugins;

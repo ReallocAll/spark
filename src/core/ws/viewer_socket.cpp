@@ -141,6 +141,15 @@ void ViewerSocket::sendUpdate(const std::string &bytebin_key)
     ws_->send(msg);
 }
 
+bool ViewerSocket::sendStatistics(const std::string &platform, const std::string &system, const std::string &metrics)
+{
+    if (!open_.load(std::memory_order_acquire) || !hasClient() || !ws_ || !ws_->isOpen()) {
+        return false;
+    }
+    ws_->send(encodeServerUpdateStatistics(platform, system, metrics, key_pair_.private_key_pkcs8));
+    return true;
+}
+
 void ViewerSocket::close()
 {
     const bool was_open = open_.exchange(false);
@@ -198,9 +207,9 @@ bool ViewerSocket::tick()
                 std::scoped_lock lock(payload_mutex_);
                 payload_id = last_payload_id_;
             }
-            ws_->send(encodeServerConnectResponse(packet.connect.client_id, state, 10,
-                                                  10,  // sampler_interval, statistics_interval
-                                                  payload_id, key_pair_.private_key_pkcs8));
+            ws_->send(encodeServerConnectResponse(packet.connect.client_id, state, config_.sampler_interval,
+                                                  config_.statistics_interval, payload_id,
+                                                  key_pair_.private_key_pkcs8));
             break;
         }
         default:
@@ -293,7 +302,8 @@ void ViewerSocket::sendClientTrusted(const std::string &client_id)
         payload_id = last_payload_id_;
     }
     ws_->send(encodeServerConnectResponse(client_id, 0,  // 0=ACCEPTED
-                                          10, 10, payload_id, key_pair_.private_key_pkcs8));
+                                          config_.sampler_interval, config_.statistics_interval, payload_id,
+                                          key_pair_.private_key_pkcs8));
 }
 
 }  // namespace spark
