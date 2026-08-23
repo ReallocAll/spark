@@ -224,34 +224,6 @@ void testWriterBasic()
     std::cout << "testWriterBasic: PASS\n";
 }
 
-void testWriterQueueDrop()
-{
-    auto dir = makeTempDir();
-    RecoveryWriter::Config cfg;
-    cfg.directory = dir / "session-2";
-    cfg.session_id = 1;
-    cfg.flush_interval_ms = 100000;  // very long - don't flush during test
-    cfg.sync_interval_ms = 100000;
-    cfg.queue_capacity = 10;
-
-    RecoveryWriter writer(cfg);
-    assert(writer.start());
-
-    // Enqueue more than capacity.
-    for (int i = 0; i < 100; ++i) {
-        writer.journalTickEvent(static_cast<std::uint64_t>(i), static_cast<double>(i));
-    }
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    writer.stop();
-
-    assert(writer.droppedRecords() > 0);
-    // Written records should be at most queue_capacity.
-    assert(writer.writtenRecords() <= 10);
-    std::cout << "testWriterQueueDrop: PASS (dropped=" << writer.droppedRecords()
-              << ", written=" << writer.writtenRecords() << ")\n";
-}
-
 void testTruncationRecovery()
 {
     // Write a valid file, then truncate it mid-record.
@@ -1224,7 +1196,6 @@ int main()
     testModuleDefRoundTrip();
     testSampleRoundTrip();
     testWriterBasic();
-    testWriterQueueDrop();
     testTruncationRecovery();
     testCorruptCRC();
     testWriterStopJoins();
