@@ -72,6 +72,12 @@ set_target_properties(spark_activity_command_test PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME spark_activity_command_test COMMAND spark_activity_command_test)
 
+add_executable(spark_viewer_update_worker_test application/profiler/viewer_update_worker_test.cpp)
+target_link_libraries(spark_viewer_update_worker_test PRIVATE spark_application)
+set_target_properties(spark_viewer_update_worker_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME spark_viewer_update_worker_test COMMAND spark_viewer_update_worker_test)
+
 add_executable(spark_placeholder_resolver_test application/placeholder/spark_placeholder_resolver_test.cpp)
 target_link_libraries(spark_placeholder_resolver_test PRIVATE spark_application)
 set_target_properties(spark_placeholder_resolver_test PROPERTIES

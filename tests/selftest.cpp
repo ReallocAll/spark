@@ -142,7 +142,7 @@ struct ProfilerServiceTestAccess {
         ProfilerService &service,
         std::function<std::string(ViewerSocket &, const ViewerSocket::UploadCallback &)> open_function)
     {
-        service.viewer_open_fn_ = std::move(open_function);
+        service.setViewerOpenFunctionForTesting(std::move(open_function));
     }
     static void setLiveExportPausedHook(ProfilerService &service, std::function<void()> hook)
     {
@@ -168,22 +168,20 @@ struct ProfilerServiceTestAccess {
     {
         return ProfilerTestAccess::stopRequested(service.profiler_);
     }
-    static bool viewerOpenPending(const ProfilerService &service)
-    {
-        std::scoped_lock lock(service.viewer_update_mutex_);
-        return service.viewer_open_pending_;
-    }
+    static bool viewerOpenPending(const ProfilerService &service) { return service.viewerOpenPending(); }
     static bool exportCompletionPending(const ProfilerService &service)
     {
         return service.export_completion_pending_.load();
     }
     static void setViewerSocket(ProfilerService &service, std::shared_ptr<ViewerSocket> socket)
     {
-        service.viewer_socket_ = std::move(socket);
-        service.viewer_sender_name_ = "Console";
+        service.setViewerSocketForTesting(std::move(socket));
     }
-    static bool hasViewerSocket(const ProfilerService &service) { return service.viewer_socket_ != nullptr; }
-    static std::shared_ptr<ViewerSocket> viewerSocket(const ProfilerService &service) { return service.viewer_socket_; }
+    static bool hasViewerSocket(const ProfilerService &service) { return service.hasViewerSocketForTesting(); }
+    static std::shared_ptr<ViewerSocket> viewerSocket(const ProfilerService &service)
+    {
+        return service.viewerSocketForTesting();
+    }
 };
 
 struct ViewerSocketTestAccess {
