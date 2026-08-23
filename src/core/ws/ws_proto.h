@@ -64,6 +64,12 @@ std::string encodeServerConnectResponse(const std::string &client_id,
 std::string encodeServerUpdateSamplerData(const std::string &payload_id,
                                           const std::vector<std::uint8_t> &private_key_pkcs8);
 
+// Encode a signed ServerUpdateStatistics packet. Each argument is the
+// serialized spark PlatformStatistics, SystemStatistics, or Metrics message.
+std::string encodeServerUpdateStatistics(const std::string &platform, const std::string &system,
+                                         const std::string &metrics,
+                                         const std::vector<std::uint8_t> &private_key_pkcs8);
+
 // Encode a "close" pong (ok=false, data=0) to signal shutdown.
 std::string encodeServerClose(const std::vector<std::uint8_t> &private_key_pkcs8);
 

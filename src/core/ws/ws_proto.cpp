@@ -13,6 +13,7 @@ namespace {
 constexpr int KFieldServerPong = 1;
 constexpr int KFieldServerConnectResponse = 2;
 constexpr int KFieldServerUpdateSampler = 3;
+constexpr int KFieldServerUpdateStatistics = 4;
 constexpr int KFieldClientPing = 10;
 constexpr int KFieldClientConnect = 11;
 
@@ -217,6 +218,24 @@ std::string encodeServerUpdateSamplerData(const std::string &payload_id,
     ProtoWriter ww(wrapper);
     ww.message(KFieldServerUpdateSampler, update);
 
+    return wrapAndEncode(wrapper, private_key_pkcs8);
+}
+
+std::string encodeServerUpdateStatistics(const std::string &platform, const std::string &system,
+                                         const std::string &metrics, const std::vector<std::uint8_t> &private_key_pkcs8)
+{
+    // ServerUpdateStatistics { PlatformStatistics platform = 1;
+    // SystemStatistics system = 2; Metrics metrics = 3; }
+    std::string update;
+    ProtoWriter wu(update);
+    wu.message(1, platform);
+    wu.message(2, system);
+    wu.message(3, metrics);
+
+    // PacketWrapper { ServerUpdateStatistics server_update_statistics = 4; }
+    std::string wrapper;
+    ProtoWriter ww(wrapper);
+    ww.message(KFieldServerUpdateStatistics, update);
     return wrapAndEncode(wrapper, private_key_pkcs8);
 }
 
