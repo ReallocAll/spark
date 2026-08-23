@@ -2,17 +2,19 @@
 
 #include <algorithm>
 #include <cstdio>
-#include <fstream>
 #include <sstream>
 #include <string>
 
 #include "core/util/monotonic_time.h"
+#include "core/util/state_file.h"
 
 namespace spark {
 
 namespace {
 
 constexpr std::int64_t KUrlExpiryMs = 60LL * 24 * 3600 * 1000;  // 60 days
+constexpr std::size_t KMaxActivityFileBytes = 8U * 1024U * 1024U;
+constexpr std::size_t KMaxJsonDepth = 64;
 
 std::int64_t nowMs()
 {
@@ -96,7 +98,11 @@ public:
     bool parse(JsonValue &out)
     {
         skipWs();
-        return parseValue(out);
+        if (!parseValue(out)) {
+            return false;
+        }
+        skipWs();
+        return pos_ == text_.size();
     }
 
 private:
@@ -140,6 +146,10 @@ private:
 
     bool parseObject(JsonValue &out)  // NOLINT(misc-no-recursion)
     {
+        DepthGuard depth(depth_);
+        if (!depth) {
+            return false;
+        }
         out.type = JsonValue::Type::Object;
         ++pos_;
         skipWs();
@@ -185,6 +195,10 @@ private:
 
     bool parseArray(JsonValue &out)  // NOLINT(misc-no-recursion)
     {
+        DepthGuard depth(depth_);
+        if (!depth) {
+            return false;
+        }
         out.type = JsonValue::Type::Array;
         ++pos_;
         skipWs();
@@ -331,6 +345,30 @@ private:
 
     const std::string &text_;
     std::size_t pos_ = 0;
+    std::size_t depth_ = 0;
+
+    class DepthGuard {
+    public:
+        explicit DepthGuard(std::size_t &depth) : depth_(depth), entered_(depth_ < KMaxJsonDepth)
+        {
+            if (entered_) {
+                ++depth_;
+            }
+        }
+
+        ~DepthGuard()
+        {
+            if (entered_) {
+                --depth_;
+            }
+        }
+
+        explicit operator bool() const { return entered_; }
+
+    private:
+        std::size_t &depth_;
+        bool entered_;
+    };
 };
 
 bool parseActivity(const JsonValue &elem, Activity &out)
@@ -460,16 +498,11 @@ std::vector<Activity> ActivityLog::entries() const
 void ActivityLog::load()
 {
     entries_.clear();
-    if (!std::filesystem::exists(file_)) {
+    std::string text;
+    std::string ignored_error;
+    if (!readStateFile(file_, KMaxActivityFileBytes, text, ignored_error)) {
         return;
     }
-    std::ifstream in(file_);
-    if (!in) {
-        return;
-    }
-    std::ostringstream ss;
-    ss << in.rdbuf();
-    std::string text = ss.str();
 
     JsonParser parser(text);
     JsonValue root;
@@ -478,12 +511,17 @@ void ActivityLog::load()
     }
 
     bool need_save = false;
+    const std::int64_t now_ms = nowMs();
     for (const JsonValue &elem : root.arr_val) {
         Activity activity;
         if (!parseActivity(elem, activity)) {
             continue;
         }
-        if (activity.shouldExpire(nowMs())) {
+        if (activity.shouldExpire(now_ms)) {
+            need_save = true;
+            continue;
+        }
+        if (entries_.size() >= kMaxEntries) {
             need_save = true;
             continue;
         }
@@ -525,20 +563,9 @@ void ActivityLog::save() const
         ss << "]\n";
     }
 
-    std::error_code ec;
-    std::filesystem::create_directories(file_.parent_path(), ec);
-
-    std::filesystem::path tmp = file_;
-    tmp += ".tmp";
-    {
-        std::ofstream out(tmp, std::ios::binary);
-        if (!out) {
-            return;
-        }
-        out << ss.str();
-        out.close();
-    }
-    std::filesystem::rename(tmp, file_, ec);
+    const std::string text = ss.str();
+    std::string ignored_error;
+    writeStateFileAtomically(file_, text, ignored_error);
 }
 
 }  // namespace spark

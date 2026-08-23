@@ -331,6 +331,24 @@ viewerUrl = "https://commented.example.com/"
     std::printf("  [PASS] TOML with comments\n");
 }
 
+void test_bounded_and_trailing_input()
+{
+    auto dir = tempDir();
+    auto path = dir / "bounded.toml";
+
+    writeFile(path, "viewerUrl = \"https://example.com/\"\ntrailing data\n");
+    SparkConfig trailing(path);
+    assert(!trailing.load());
+    assert(!trailing.lastError().empty());
+
+    writeFile(path, std::string(1U * 1024U * 1024U + 1U, '#'));
+    SparkConfig oversized(path);
+    assert(!oversized.load());
+    assert(!oversized.lastError().empty());
+
+    std::printf("  [PASS] bounded and trailing input\n");
+}
+
 }  // namespace
 
 int main()
@@ -350,6 +368,7 @@ int main()
     test_save_and_reload();
     test_empty_toml();
     test_toml_with_comments();
+    test_bounded_and_trailing_input();
     std::printf("All SparkConfig tests passed!\n");
     return 0;
 }

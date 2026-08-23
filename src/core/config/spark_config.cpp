@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cstdio>
-#include <fstream>
 #include <limits>
 #include <sstream>
 #include <string>
@@ -11,11 +10,14 @@
 
 #include <curl/curl.h>
 
+#include "core/util/state_file.h"
+
 namespace spark {
 
 namespace {
 
 constexpr std::int64_t KMaxBackgroundProfilerIntervalMs = 1000;
+constexpr std::size_t KMaxConfigFileBytes = 1U * 1024U * 1024U;
 
 bool hasInvalidEndpointCharacters(std::string_view value)
 {
@@ -122,19 +124,10 @@ bool SparkConfig::load()
 {
     last_error_.clear();
 
-    if (!std::filesystem::exists(file_)) {
+    std::string text;
+    if (!readStateFile(file_, KMaxConfigFileBytes, text, last_error_)) {
         return false;
     }
-
-    std::ifstream in(file_);
-    if (!in) {
-        last_error_ = "Unable to open config file for reading";
-        return false;
-    }
-
-    std::ostringstream ss;
-    ss << in.rdbuf();
-    std::string text = ss.str();
 
     toml::parse_result result;
     try {
@@ -252,26 +245,8 @@ bool SparkConfig::save() const
     std::ostringstream ss;
     writeTemplate(ss);
 
-    std::error_code ec;
-    std::filesystem::create_directories(file_.parent_path(), ec);
-
-    std::filesystem::path tmp = file_;
-    tmp += ".tmp";
-    {
-        std::ofstream out(tmp, std::ios::binary);
-        if (!out) {
-            last_error_ = "Unable to open config file for writing";
-            return false;
-        }
-        out << ss.str();
-        out.close();
-    }
-    std::filesystem::rename(tmp, file_, ec);
-    if (ec) {
-        last_error_ = "Unable to rename config file: " + ec.message();
-        return false;
-    }
-    return true;
+    const std::string text = ss.str();
+    return writeStateFileAtomically(file_, text, last_error_);
 }
 
 }  // namespace spark
