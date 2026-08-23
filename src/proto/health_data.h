@@ -20,6 +20,7 @@ struct HealthData {
     PlatformStats platform_stats;
     SystemStats system_stats;
     StatisticsSnapshot statistics;
+    MetricsSnapshot metrics;
     std::int64_t generated_time_ms = 0;
     std::vector<PluginInfo> plugins;
     std::map<std::string, std::string> server_configurations;

@@ -13,6 +13,18 @@ PingSummary::PingSummary(std::vector<int> values) : sorted_(std::move(values))
     std::ranges::sort(sorted_);
 }
 
+double PingSummary::mean() const
+{
+    if (sorted_.empty()) {
+        return 0.0;
+    }
+    double total = 0.0;
+    for (int value : sorted_) {
+        total += static_cast<double>(value);
+    }
+    return total / static_cast<double>(sorted_.size());
+}
+
 int PingSummary::percentile(double p) const
 {
     if (sorted_.empty()) {
@@ -137,6 +149,7 @@ PingStatistics::PingStatistics(PlayerPingProvider &provider) : provider_(provide
 bool PingStatistics::poll()
 {
     PingSummary summary = currentSummary();
+    last_poll_summary_ = summary;
     if (summary.total() == 0) {
         return false;
     }

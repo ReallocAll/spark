@@ -137,6 +137,7 @@ add_library(spark_core STATIC
         src/core/profiler/profiler.cpp
         src/core/profiler/profiler_export.cpp
         src/core/stats/executable_hash.cpp
+        src/core/stats/metrics_history.cpp
         src/core/stats/statistics_service.cpp
         src/core/stats/ping_statistics.cpp
         src/core/stats/network_monitor.cpp
@@ -145,6 +146,7 @@ add_library(spark_core STATIC
         src/core/ws/ws_proto.cpp
         src/core/ws/viewer_socket.cpp
         src/proto/health_data.cpp
+        src/proto/metrics_proto.cpp
         src/proto/sampler_data.cpp
         src/proto/statistics_proto.cpp
         src/net/gzip.cpp

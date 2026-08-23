@@ -36,6 +36,7 @@ message SamplerMetadata {
   SamplerMode sampler_mode = 15;
   SamplerEngine sampler_engine = 16;
   string sampler_engine_version = 17;
+  Metrics metrics = 18;
 
   message ThreadDumper {
     Type type = 1;

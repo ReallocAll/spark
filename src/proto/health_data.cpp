@@ -1,5 +1,6 @@
 #include "proto/health_data.h"
 
+#include "proto/metrics_proto.h"
 #include "proto/proto_writer.h"
 #include "proto/statistics_proto.h"
 #include "spark_constants.h"
@@ -87,6 +88,10 @@ std::string buildHealthData(const HealthData &data)
             entry_writer.string(1, key);
             entry_writer.string(2, value);
             metadata_writer.message(8, entry);
+        }
+
+        if (!data.metrics.empty()) {
+            metadata_writer.message(9, proto_detail::buildMetrics(data.metrics));
         }
 
         writer.message(1, metadata);
