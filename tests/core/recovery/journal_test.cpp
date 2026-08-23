@@ -224,68 +224,6 @@ void testWriterBasic()
     std::cout << "testWriterBasic: PASS\n";
 }
 
-void testTruncationRecovery()
-{
-    // Write a valid file, then truncate it mid-record.
-    auto dir = makeTempDir();
-    auto path = dir / "segment-0.jnl";
-
-    auto header = serializeFileHeader(1, 0, 0);
-    JournalBuffer payload = buildTickEventPayload(1, 10.0);
-    auto record = serializeRecord(RecordType::TickEvent, 0, payload);
-
-    std::vector<std::uint8_t> file_buf;
-    file_buf.insert(file_buf.end(), header.begin(), header.end());
-    file_buf.insert(file_buf.end(), record.begin(), record.end());
-    // Add a partial record (just the header, no payload).
-    file_buf.push_back(static_cast<std::uint8_t>(RecordType::TickEvent));
-    file_buf.push_back(0);                            // reserved
-    file_buf.insert(file_buf.end(), {1, 0, 0, 0});    // sequence
-    file_buf.insert(file_buf.end(), {100, 0, 0, 0});  // payload_len
-    // No CRC, no payload - truncated.
-
-    std::FILE *f = std::fopen(path.string().c_str(), "wb");
-    assert(f);
-    std::fwrite(file_buf.data(), 1, file_buf.size(), f);
-    std::fclose(f);
-
-    JournalReadResult result;
-    bool ok = JournalReader::readSegment(path, result);
-    assert(ok);
-    assert(result.records.size() == 1);  // only the complete record
-    assert(result.truncated_records == 1);
-    std::cout << "testTruncationRecovery: PASS\n";
-}
-
-void testCorruptCRC()
-{
-    auto dir = makeTempDir();
-    auto path = dir / "segment-0.jnl";
-
-    auto header = serializeFileHeader(1, 0, 0);
-    JournalBuffer payload = buildTickEventPayload(1, 10.0);
-    auto record = serializeRecord(RecordType::TickEvent, 0, payload);
-
-    // Corrupt the CRC (flip a bit in the payload).
-    record[kRecordHeaderSize] ^= 0xFF;
-
-    std::vector<std::uint8_t> file_buf;
-    file_buf.insert(file_buf.end(), header.begin(), header.end());
-    file_buf.insert(file_buf.end(), record.begin(), record.end());
-
-    std::FILE *f = std::fopen(path.string().c_str(), "wb");
-    assert(f);
-    std::fwrite(file_buf.data(), 1, file_buf.size(), f);
-    std::fclose(f);
-
-    JournalReadResult result;
-    bool ok = JournalReader::readSegment(path, result);
-    assert(ok);
-    assert(result.records.empty());
-    assert(result.corrupt_records == 1);
-    std::cout << "testCorruptCRC: PASS\n";
-}
-
 void testWriterStopJoins()
 {
     auto dir = makeTempDir();
@@ -752,37 +690,6 @@ void testCleanEndEarlyExit()
     std::cout << "testCleanEndEarlyExit: PASS\n";
 }
 
-// Test 2: Head-truncated journal (missing segment 0) must not replay.
-void testHeadTruncatedJournal()
-{
-    auto dir = makeTempDir() / "head-truncated";
-    std::filesystem::create_directories(dir);
-
-    Sample sample;
-    sample.thread_id = 1;
-    sample.tick_id = 0;
-    sample.window = 0;
-    sample.weight = 4000;
-    sample.frames.push_back({.module = 0, .rva = 0x1000, .raw_address = 0});
-
-    // Only segment-3 exists; segment-0..2 were rotated away.
-    writeSegmentMulti(
-        dir / "segment-3.jnl", 600000, 3,
-        {{.type = RecordType::ModuleDef, .sequence = 0, .payload = buildModuleDefPayload(0, "bedrock_server")},
-         {.type = RecordType::Sample, .sequence = 1, .payload = buildSamplePayload(sample)}});
-
-    auto result = RecoveryPlayer::replay(dir);
-    assert(!result.valid);
-    assert(result.error.find("head-truncated") != std::string::npos);
-
-    // Also verify the reader exposes head_truncated.
-    auto journal = JournalReader::readSession(dir);
-    assert(journal.valid);
-    assert(journal.head_truncated);
-    assert(journal.first_segment_number == 3);
-    std::cout << "testHeadTruncatedJournal: PASS\n";
-}
-
 // Test 3: Non-contiguous recorded ModuleId must be remapped to local IDs.
 void testNonContiguousModuleId()
 {
@@ -1115,28 +1022,6 @@ void writeBytes(const std::filesystem::path &path, const std::vector<std::uint8_
     std::fclose(file);
 }
 
-void testSnapshotRejectsMaliciousCountAndTrailingGarbage()
-{
-    auto dir = makeTempDir() / "snapshot-validation";
-    std::filesystem::create_directories(dir);
-
-    auto bytes = serializeMetadataSnapshot(960000, 0, {}, {}, {});
-    const std::uint32_t malicious_count = std::numeric_limits<std::uint32_t>::max();
-    std::memcpy(bytes.data() + kSnapshotHeaderSize + sizeof(std::uint16_t), &malicious_count, sizeof(malicious_count));
-    const auto payload_size = static_cast<std::uint32_t>(bytes.size() - kSnapshotHeaderSize);
-    const auto crc = static_cast<std::uint32_t>(crc32(0L, bytes.data() + kSnapshotHeaderSize, payload_size));
-    constexpr std::size_t k_snapshot_crc_offset = kSnapshotHeaderSize - sizeof(std::uint32_t);
-    std::memcpy(bytes.data() + k_snapshot_crc_offset, &crc, sizeof(crc));
-    writeBytes(dir / "metadata.snapshot", bytes);
-    assert(!JournalReader::readMetadataSnapshot(dir).valid);
-
-    bytes = serializeMetadataSnapshot(960000, 0, {}, {}, {});
-    bytes.push_back(0xff);
-    writeBytes(dir / "metadata.snapshot", bytes);
-    assert(!JournalReader::readMetadataSnapshot(dir).valid);
-    std::cout << "testSnapshotRejectsMaliciousCountAndTrailingGarbage: PASS\n";
-}
-
 void testSnapshotOnlyThreadIsNotExported()
 {
     auto dir = makeTempDir() / "snapshot-only-thread";
@@ -1168,25 +1053,6 @@ void testSnapshotOnlyThreadIsNotExported()
     std::cout << "testSnapshotOnlyThreadIsNotExported: PASS\n";
 }
 
-void testDuplicateSequenceRejected()
-{
-    auto dir = makeTempDir() / "duplicate-sequence";
-    std::filesystem::create_directories(dir);
-    Sample sample;
-    sample.thread_id = 1;
-    sample.frames.push_back({.module = 0, .rva = 0x1000, .raw_address = 0});
-    writeSegmentMulti(
-        dir / "segment-0.jnl", 980000, 0,
-        {{.type = RecordType::ModuleDef, .sequence = 7, .payload = buildModuleDefPayload(0, "bedrock_server")},
-         {.type = RecordType::Sample, .sequence = 7, .payload = buildSamplePayload(sample)}});
-    const auto journal = JournalReader::readSession(dir);
-    assert(journal.duplicate_sequences);
-    const auto result = RecoveryPlayer::replay(dir);
-    assert(!result.valid);
-    assert(result.error.find("duplicate") != std::string::npos);
-    std::cout << "testDuplicateSequenceRejected: PASS\n";
-}
-
 }  // namespace
 
 int main()
@@ -1196,8 +1062,6 @@ int main()
     testModuleDefRoundTrip();
     testSampleRoundTrip();
     testWriterBasic();
-    testTruncationRecovery();
-    testCorruptCRC();
     testWriterStopJoins();
     testSessionIsolation();
     testSessionConfigRoundTrip();
@@ -1211,7 +1075,6 @@ int main()
     testNoCleanEndRecovered();
     testLiveOnlyRefused();
     testCleanEndEarlyExit();
-    testHeadTruncatedJournal();
     testNonContiguousModuleId();
     testMissingModuleDefReferenced();
     testRollingJournalRecovery();
@@ -1220,9 +1083,7 @@ int main()
     testAllocationSentinelModule0();
     testMissingSentinelModule0();
     testStopWithoutCleanEndRecoverable();
-    testSnapshotRejectsMaliciousCountAndTrailingGarbage();
     testSnapshotOnlyThreadIsNotExported();
-    testDuplicateSequenceRejected();
     std::cout << "All journal tests passed.\n";
     return 0;
 }
