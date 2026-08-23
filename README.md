@@ -361,8 +361,8 @@ this file without touching `config.toml`.
 
 The platform requirements are:
 
-* **Linux:** Clang, libc++, Ninja, and Conan 2.
-* **Windows:** LLVM clang-cl, Visual Studio Build Tools, the Windows SDK,
+* **Linux:** Clang 18 or newer, libc++, Ninja, and Conan 2.
+* **Windows:** LLVM clang-cl 18 or newer, Visual Studio Build Tools, the Windows SDK,
   Ninja, and Conan 2. clang-cl must target the MSVC ABI.
 
 Install Conan, resolve the dependencies, then configure CMake directly with the

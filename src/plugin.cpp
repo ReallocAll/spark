@@ -74,8 +74,7 @@ public:
 
         auto papi_api =
             getServer().getServiceManager().load<papi::PlaceholderAPI>(std::string(papi::PlaceholderAPI::ServiceName));
-        const auto papi_result =
-            papi_integration_.enable(*this, std::move(papi_api), app_->statistics(), spark::kVersion);
+        const auto papi_result = papi_integration_.enable(*this, papi_api.get(), app_->statistics(), spark::kVersion);
         if (papi_result == spark::endstone_adapter::PapiRegistrationResult::Registered) {
             getLogger().info("Registered the spark PlaceholderAPI expansion.");
         }
@@ -83,7 +82,7 @@ public:
             getLogger().warning("PlaceholderAPI rejected the spark expansion; Spark will continue without it.");
         }
 
-        tick_task_ = getServer().getScheduler().runTaskTimer(*this, [this]() { onServerTick(); }, 0, 1);
+        tick_task_ = getServer().getScheduler().runTaskTimer(*this, [this]() { onServerTick(); }, 0, 1).get();
         getLogger().info("endstone-spark v{} enabled. Run {}/spark{} to get started.", spark::kVersion,
                          endstone::ColorFormat::Gold, endstone::ColorFormat::Reset);
     }
@@ -104,7 +103,7 @@ public:
         }
     }
 
-    bool onCommand(endstone::CommandSender &sender, const endstone::Command &command,
+    bool onCommand(const endstone::NotNull<endstone::CommandSender> &sender, const endstone::Command &command,
                    const std::vector<std::string> &args) override
     {
         if (command.getName() != "spark") {

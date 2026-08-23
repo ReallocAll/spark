@@ -16,8 +16,8 @@ The plugin must remain safe inside a long-running server process. Sampling and a
 - Ninja
 - Conan 2
 - Python 3.12 for release-tool tests
-- Windows: LLVM clang-cl 20, Visual Studio Build Tools, and the Windows SDK
-- Linux: Clang 20 with libc++ and libc++abi
+- Windows: LLVM clang-cl 18 or newer, Visual Studio Build Tools, and the Windows SDK
+- Linux: Clang 18 or newer with libc++ and libc++abi
 
 The repository ships `.conan2/profiles/default`, which selects clang-cl on Windows and Clang/libc++ on Linux. Do not run `conan profile detect` over this file.
 

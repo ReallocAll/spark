@@ -18,17 +18,17 @@ namespace spark::endstone_adapter {
 // Adapts endstone::CommandSender to spark::CommandSender.
 class EndstoneCommandSender : public CommandSender {
 public:
-    explicit EndstoneCommandSender(::endstone::CommandSender &sender) : sender_(sender) {}
+    explicit EndstoneCommandSender(const ::endstone::NotNull<::endstone::CommandSender> &sender) : sender_(*sender) {}
 
     std::string getName() const override { return sender_.getName(); }
-    bool isPlayer() const override { return sender_.asPlayer() != nullptr; }
+    bool isPlayer() const override { return sender_.is<::endstone::Player>(); }
     bool hasPermission(const std::string &name) const override { return sender_.hasPermission(name); }
 
 private:
     void sendImpl(const std::string &message) override;
     void errorImpl(const std::string &message) override;
 
-    ::endstone::CommandSender &sender_;
+    const ::endstone::CommandSender &sender_;
 };
 
 // Schedules tasks on the Endstone main thread.
