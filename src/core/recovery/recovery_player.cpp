@@ -81,7 +81,21 @@ RecoveredProfile RecoveryPlayer::replay(const std::filesystem::path &directory)
 
     JournalReadResult journal = JournalReader::readSession(directory);
     if (!journal.valid) {
-        result.error = "no valid journal found";
+        if (journal.duplicate_sequences) {
+            result.error = "journal contains duplicate record sequences";
+        }
+        else if (journal.gap_detected) {
+            result.error = "journal contains a missing segment";
+        }
+        else if (journal.limit_exceeded) {
+            result.error = "journal exceeds reader limits";
+        }
+        else if (journal.tail_truncated || journal.tail_corrupt) {
+            result.error = "journal has an invalid tail";
+        }
+        else {
+            result.error = "no valid journal found";
+        }
         return result;
     }
 
