@@ -108,6 +108,12 @@ set_target_properties(spark_profiler_start_options_test PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME spark_profiler_start_options_test COMMAND spark_profiler_start_options_test)
 
+add_executable(spark_profiler_open_orchestrator_test application/profiler/profiler_open_orchestrator_test.cpp)
+target_link_libraries(spark_profiler_open_orchestrator_test PRIVATE spark_application)
+set_target_properties(spark_profiler_open_orchestrator_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME spark_profiler_open_orchestrator_test COMMAND spark_profiler_open_orchestrator_test)
+
 add_executable(spark_placeholder_resolver_test application/placeholder/spark_placeholder_resolver_test.cpp)
 target_link_libraries(spark_placeholder_resolver_test PRIVATE spark_application)
 set_target_properties(spark_placeholder_resolver_test PROPERTIES

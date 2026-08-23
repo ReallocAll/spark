@@ -1683,7 +1683,7 @@ bool verifyViewerShutdownDuringLiveExport(std::uint64_t worker_tid)
             upload("channel");
             return std::string();
         });
-    service.cmdOpen(sender);
+    service.cmdOpen(sender, spark::Arguments({"open"}));
     const std::uint64_t service_starts = spark::ProfilerServiceTestAccess::samplerServiceStarts(service);
     {
         std::unique_lock lock(mutex);
@@ -1775,7 +1775,7 @@ bool verifyAllocationViewerLifecycle(std::uint64_t worker_tid)
             spark::ViewerSocketTestAccess::markOpen(socket);
             return std::string("https://spark.lucko.me/test");
         });
-    service.cmdOpen(sender);
+    service.cmdOpen(sender, spark::Arguments({"open"}));
     if (!waitForCondition(
             [&] {
                 return !spark::ProfilerServiceTestAccess::viewerOpenPending(service) &&
@@ -1795,7 +1795,7 @@ bool verifyAllocationViewerLifecycle(std::uint64_t worker_tid)
         return false;
     }
 
-    service.cmdOpen(sender);
+    service.cmdOpen(sender, spark::Arguments({"open"}));
     if (!waitForCondition(
             [&] {
                 return !spark::ProfilerServiceTestAccess::viewerOpenPending(service) &&
@@ -1856,7 +1856,7 @@ bool verifyWorkerExceptionBoundaries(std::uint64_t worker_tid)
             upload("channel");
             return std::string();
         });
-    service.cmdOpen(sender);
+    service.cmdOpen(sender, spark::Arguments({"open"}));
     if (!waitForCondition([&] { return !spark::ProfilerServiceTestAccess::viewerOpenPending(service); }, 3s) ||
         !service.running() || !spark::ProfilerServiceTestAccess::samplerRunning(service)) {
         std::fprintf(stderr, "worker exception: viewer failure escaped or left sampler paused\n");
@@ -1865,7 +1865,7 @@ bool verifyWorkerExceptionBoundaries(std::uint64_t worker_tid)
     spark::ProfilerServiceTestAccess::setLiveExportPausedHook(service, {});
     spark::ProfilerServiceTestAccess::setViewerOpenFunction(
         service, [](spark::ViewerSocket &, const spark::ViewerSocket::UploadCallback &) { return std::string(); });
-    service.cmdOpen(sender);
+    service.cmdOpen(sender, spark::Arguments({"open"}));
     if (!waitForCondition([&] { return !spark::ProfilerServiceTestAccess::viewerOpenPending(service); }, 3s)) {
         return false;
     }
@@ -1927,7 +1927,7 @@ bool verifyAsyncNetworkCommands(std::uint64_t worker_tid)
             cv.wait(lock, [&release]() { return release; });
             return std::string();
         });
-    service.cmdOpen(sender);
+    service.cmdOpen(sender, spark::Arguments({"open"}));
     {
         std::unique_lock<std::mutex> lock(mutex);
         if (!cv.wait_for(lock, std::chrono::seconds(2), [&entered]() { return entered; })) {

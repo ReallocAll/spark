@@ -69,7 +69,7 @@ void SparkApplication::registerCommands()
                 return;
             }
             if (action == "open") {
-                profiler_.cmdOpen(sender);
+                profiler_.cmdOpen(sender, args);
             }
             else if (action == "trust-viewer") {
                 profiler_.cmdTrustViewer(sender, args);
