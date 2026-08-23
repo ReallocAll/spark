@@ -1,5 +1,8 @@
 #include "application/health/health_report.h"
 
+#include <algorithm>
+#include <utility>
+
 #include "core/profiler/profiler.h"
 #include "core/stats/ping_statistics.h"
 #include "core/stats/system_stats.h"
@@ -36,7 +39,8 @@ void sendPerformanceReport(CommandSender &sender, const StatisticsSnapshot &stat
 }
 
 void showHealthReport(CommandSender &sender, StatisticsService &statistics, ProfileMetadataProvider &metadata_provider,
-                      const std::map<std::string, NetworkInterfaceSnapshot> &network_snapshots)
+                      const std::map<std::string, NetworkInterfaceSnapshot> &network_snapshots, bool detailed_memory,
+                      bool detailed_network)
 {
     const StatisticsSnapshot snapshot = statistics.snapshot();
     sendPerformanceReport(sender, snapshot);
@@ -47,20 +51,15 @@ void showHealthReport(CommandSender &sender, StatisticsService &statistics, Prof
                        formatDuration(metadata_provider.serverUptimeSeconds()));
     sender.sendMessage("{}Players online: {}{}", kColorGold, kColorGray, metadata_provider.playerCount());
 
-    if (process.rss_present && process.virtual_present) {
-        sender.sendMessage("{}Process memory {}(RSS/virtual){}: {} / {}", kColorGold, kColorGray, kColorReset,
-                           formatBytes(static_cast<std::uint64_t>(process.rss_bytes)),
-                           formatBytes(static_cast<std::uint64_t>(process.virtual_bytes)));
-    }
-    else if (process.rss_present) {
+    if (process.rss_present) {
         sender.sendMessage("{}Process RSS: {}{}", kColorGold, kColorGray,
                            formatBytes(static_cast<std::uint64_t>(process.rss_bytes)));
     }
-    else if (process.virtual_present) {
+    if (detailed_memory && process.virtual_present) {
         sender.sendMessage("{}Process virtual memory: {}{}", kColorGold, kColorGray,
                            formatBytes(static_cast<std::uint64_t>(process.virtual_bytes)));
     }
-    if (process.threads_present) {
+    if (detailed_memory && process.threads_present) {
         sender.sendMessage("{}Process threads: {}{}", kColorGold, kColorGray, process.threads);
     }
     if (system.memory_present) {
@@ -68,7 +67,7 @@ void showHealthReport(CommandSender &sender, StatisticsService &statistics, Prof
                            formatBytes(static_cast<std::uint64_t>(system.mem_used)),
                            formatBytes(static_cast<std::uint64_t>(system.mem_total)));
     }
-    if (system.swap_present) {
+    if (detailed_memory && system.swap_present) {
         sender.sendMessage("{}Swap/page file {}(used/total){}: {} / {}", kColorGold, kColorGray, kColorReset,
                            formatBytes(static_cast<std::uint64_t>(system.swap_used)),
                            formatBytes(static_cast<std::uint64_t>(system.swap_total)));
@@ -88,18 +87,27 @@ void showHealthReport(CommandSender &sender, StatisticsService &statistics, Prof
                            system.os_arch);
     }
 
-    if (!network_snapshots.empty()) {
-        sender.sendMessage("{}Network {}(RX/TX bytes/s, last 15m mean){}:", kColorGold, kColorGray, kColorReset);
-        for (const auto &[name, snapshot] : network_snapshots) {
-            if (!snapshot.rx_bytes_per_second.present || !snapshot.tx_bytes_per_second.present) {
-                continue;
+    std::vector<std::string> network_lines;
+    for (const auto &[name, snapshot] : network_snapshots) {
+        const auto append_direction = [&](const char *direction, const NetworkRateValues &bytes,
+                                          const NetworkRateValues &packets) {
+            if (!bytes.present || !packets.present || (!detailed_network && bytes.mean <= 0.0 && packets.mean <= 0.0)) {
+                return;
             }
-            std::string message = "  " + kColorGray + name + ": " + kColorGreen;
-            message += formatBytes(static_cast<std::uint64_t>(snapshot.rx_bytes_per_second.mean)) + "/s";
-            message += kColorGray + "  " + kColorGreen;
-            message += formatBytes(static_cast<std::uint64_t>(snapshot.tx_bytes_per_second.mean)) + "/s";
-            message += kColorGray;
-            sender.sendMessage(message);
+            const auto bytes_per_second = static_cast<std::uint64_t>((std::max)(0.0, bytes.mean));
+            const auto packets_per_second = static_cast<std::uint64_t>((std::max)(0.0, packets.mean));
+            std::string message = "  " + kColorGreen + formatBytes(bytes_per_second) + "/s";
+            message += kColorGray + " / " + kColorReset + std::to_string(packets_per_second) + " pps";
+            message += kColorGray + " (" + name + " " + direction + ")";
+            network_lines.push_back(std::move(message));
+        };
+        append_direction("RX", snapshot.rx_bytes_per_second, snapshot.rx_packets_per_second);
+        append_direction("TX", snapshot.tx_bytes_per_second, snapshot.tx_packets_per_second);
+    }
+    if (!network_lines.empty()) {
+        sender.sendMessage("{}Network usage {}(system, last 15m mean){}:", kColorGold, kColorGray, kColorReset);
+        for (const std::string &line : network_lines) {
+            sender.sendMessage(line);
         }
     }
 }

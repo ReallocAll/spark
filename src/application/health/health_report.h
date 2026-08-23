@@ -17,7 +17,8 @@ namespace spark {
 void sendPerformanceReport(CommandSender &sender, const StatisticsSnapshot &stats);
 
 void showHealthReport(CommandSender &sender, StatisticsService &statistics, ProfileMetadataProvider &metadata_provider,
-                      const std::map<std::string, NetworkInterfaceSnapshot> &network_snapshots);
+                      const std::map<std::string, NetworkInterfaceSnapshot> &network_snapshots, bool detailed_memory,
+                      bool detailed_network);
 
 HealthData captureHealthData(StatisticsService &statistics, ProfileMetadataProvider &metadata_provider,
                              const std::string &sender_name, bool sender_is_player, std::int64_t now_ms,

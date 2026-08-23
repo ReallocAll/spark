@@ -180,9 +180,10 @@ void HealthCommand::cmdPing(CommandSender &sender, const Arguments &args)
     sender.sendMessage("  {} ;  {}", formatPingRtts(summary), formatPingRtts(average));
 }
 
-void HealthCommand::showHealth(CommandSender &sender)
+void HealthCommand::showHealth(CommandSender &sender, const Arguments &args)
 {
-    showHealthReport(sender, statistics_, metadata_provider_, network_monitor_.snapshot());
+    showHealthReport(sender, statistics_, metadata_provider_, network_monitor_.snapshot(), args.boolFlag("memory"),
+                     args.boolFlag("network"));
 }
 
 void HealthCommand::cmdHealth(CommandSender &sender, const Arguments &args)
@@ -192,7 +193,7 @@ void HealthCommand::cmdHealth(CommandSender &sender, const Arguments &args)
         action.clear();
     }
     if (action == "show") {
-        showHealth(sender);
+        showHealth(sender, args);
     }
     else if (action == "trust-viewer") {
         trustViewer(sender, args);
