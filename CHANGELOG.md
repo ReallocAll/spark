@@ -32,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Include world metadata in the initial health report payload.
 - Require a valid signature before accepting a trusted live-viewer client,
   reject malformed WebSocket protobuf/base64 input, and bound live-viewer
   receive and send queues.

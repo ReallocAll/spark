@@ -29,6 +29,9 @@ int main()
     data.plugins.push_back({.name = "Example", .version = "1.0"});
     data.platform_stats.present = true;
     data.platform_stats.uptime_ms = 100;
+    data.world.present = true;
+    data.world.total_entities = 8;
+    data.world.entity_counts["minecraft:zombie"] = 3;
     data.channel_info = spark::SocketChannelInfo{.channel_id = "health-channel", .public_key = {1, 2, 3}};
 
     spark::WindowStats window;
@@ -41,6 +44,20 @@ int main()
                    bytes, 1,
                    [&](spark::ProtoReader metadata_reader) {
                        return spark::proto_test::hasVarint(metadata_reader, 5, 1234) &&
+                              spark::proto_test::findMessage(
+                                  metadata_reader, 3,
+                                  [](spark::ProtoReader platform_reader) {
+                                      return spark::proto_test::findMessage(
+                                          platform_reader, 8, [](spark::ProtoReader world_reader) {
+                                              return spark::proto_test::hasVarint(world_reader, 1, 8) &&
+                                                     spark::proto_test::findMessage(
+                                                         world_reader, 2, [](spark::ProtoReader entity_reader) {
+                                                             return spark::proto_test::hasString(entity_reader, 1,
+                                                                                                 "minecraft:zombie") &&
+                                                                    spark::proto_test::hasVarint(entity_reader, 2, 3);
+                                                         });
+                                          });
+                                  }) &&
                               spark::proto_test::findMessage(
                                   metadata_reader, 6,
                                   [](spark::ProtoReader entry_reader) {
@@ -68,6 +85,19 @@ int main()
                               spark::proto_test::hasString(channel_reader, 2, std::string_view("\x01\x02\x03", 3));
                    }),
                "health channel information was not encoded")) {
+        return 1;
+    }
+
+    data.world.present = false;
+    const std::string absent_world_bytes = spark::buildHealthData(data);
+    if (!check(spark::proto_test::findMessage(absent_world_bytes, 1,
+                                              [](spark::ProtoReader metadata_reader) {
+                                                  return spark::proto_test::findMessage(
+                                                      metadata_reader, 3, [](spark::ProtoReader platform_reader) {
+                                                          return !spark::proto_test::hasMessage(platform_reader, 8);
+                                                      });
+                                              }),
+               "absent world statistics were encoded")) {
         return 1;
     }
     return 0;

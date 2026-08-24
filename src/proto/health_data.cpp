@@ -42,7 +42,8 @@ std::string buildHealthData(const HealthData &data)
         }
 
         if (data.platform_stats.present) {
-            metadata_writer.message(3, proto_detail::buildPlatformStatistics(data.platform_stats, data.statistics));
+            metadata_writer.message(
+                3, proto_detail::buildPlatformStatistics(data.platform_stats, data.statistics, &data.world));
         }
         if (data.system_stats.present) {
             metadata_writer.message(4, proto_detail::buildSystemStatistics(data.system_stats, data.statistics));
