@@ -195,6 +195,7 @@ void addClass(PeFixture &fixture, std::uint32_t base, std::string_view name, std
 bool testPeAndFunctionRanges();
 bool testChainedAndMalformedUnwind();
 bool testDuplicateOverlapAndDeterminism();
+bool testShortReadOnlySectionBounds();
 bool testRttiVtableAmbiguity();
 bool testInvalidRttiAndThunk();
 bool testAslrIndependence();
