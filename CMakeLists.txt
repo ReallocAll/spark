@@ -148,6 +148,7 @@ add_library(spark_core STATIC
         src/core/command/arguments.cpp
         src/core/profiler/profiler.cpp
         src/core/profiler/profiler_export.cpp
+        src/core/profiler/profiler_recovery.cpp
         src/core/stats/executable_hash.cpp
         src/core/stats/metrics_history.cpp
         src/core/stats/statistics_service.cpp
