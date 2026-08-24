@@ -50,65 +50,97 @@ SocketChannelInfo ViewerSocket::channelInfo() const
 
 std::string ViewerSocket::open(const UploadCallback &upload)
 {
+    std::scoped_lock open_lock(open_mutex_);
+    std::uint64_t generation = 0;
+    bool generation_started = false;
     try {
-        std::scoped_lock transport_lock(transport_mutex_);
-        if (ws_) {
-            ws_->close();
-            ws_.reset();
-        }
-        prepareOpen();
-        ws_ = std::make_unique<WebSocketClient>();
-        ws_->setMessageCallback([this](const std::string &data) { onMessage(data); });
-        ws_->setCloseCallback(
-            [this](const WebSocketClient::Termination &termination) { onTransportClosed(termination); });
+        std::string channel_id;
+        {
+            std::scoped_lock transport_lock(transport_mutex_);
+            if (ws_) {
+                ws_->close();
+                ws_.reset();
+            }
+            generation = prepareOpen();
+            generation_started = true;
+            ws_ = std::make_unique<WebSocketClient>();
+            ws_->setMessageCallback([this](const std::string &data) { onMessage(data); });
+            ws_->setCloseCallback([this, generation](const WebSocketClient::Termination &termination) {
+                onTransportClosed(generation, termination);
+            });
 
-        channel_id_ = ws_->connect(config_.bytesocks_host, config_.user_agent);
-        if (channel_id_.empty()) {
-            return {};
+            channel_id_ = ws_->connect(config_.bytesocks_host, config_.user_agent);
+            if (channel_id_.empty()) {
+                state_.store(ConnectionState::Closed, std::memory_order_release);
+                return {};
+            }
+            channel_id = channel_id_;
         }
 
         // Build SocketChannelInfo proto.
         SocketChannelInfo info;
-        info.channel_id = channel_id_;
+        info.channel_id = std::move(channel_id);
         info.public_key = key_pair_.public_key_x509;
         std::string channel_info_proto = encodeSocketChannelInfo(info);
 
         // Upload initial sampler data.
         std::string bytebin_key = upload(channel_info_proto);
-        if (bytebin_key.empty()) {
-            ws_->close();
-            return {};
-        }
-        if (!ws_->isOpen()) {
-            ws_->close();
-            return {};
-        }
 
         {
-            std::scoped_lock lock(payload_mutex_);
-            last_payload_id_ = bytebin_key;
+            std::scoped_lock transport_lock(transport_mutex_);
+            if (generation != connection_generation_.load(std::memory_order_acquire)) {
+                return {};
+            }
+            if (bytebin_key.empty() || state_.load(std::memory_order_acquire) != ConnectionState::Opening || !ws_ ||
+                !ws_->isOpen()) {
+                if (ws_) {
+                    ws_->close();
+                }
+                state_.store(ConnectionState::Closed, std::memory_order_release);
+                return {};
+            }
+
+            {
+                std::scoped_lock lock(payload_mutex_);
+                last_payload_id_ = bytebin_key;
+            }
+            ConnectionState expected = ConnectionState::Opening;
+            if (!state_.compare_exchange_strong(expected, ConnectionState::Open, std::memory_order_acq_rel,
+                                                std::memory_order_acquire)) {
+                ws_->close();
+                state_.store(ConnectionState::Closed, std::memory_order_release);
+                return {};
+            }
         }
-        open_.store(true);
         return config_.viewer_url + bytebin_key;
     }
     catch (...) {
-        open_.store(false);
         try {
             std::scoped_lock transport_lock(transport_mutex_);
-            if (ws_) {
-                ws_->close();
+            if (generation_started && generation == connection_generation_.load(std::memory_order_acquire)) {
+                if (ws_) {
+                    ws_->close();
+                }
+                state_.store(ConnectionState::Closed, std::memory_order_release);
             }
         }
         catch (...) {
-            open_.store(false);
+            return {};
         }
         return {};
     }
 }
 
-void ViewerSocket::prepareOpen()
+std::uint64_t ViewerSocket::prepareOpen()
 {
-    open_.store(false);
+    std::uint64_t generation = 0;
+    {
+        std::scoped_lock lock(close_mutex_);
+        generation = connection_generation_.fetch_add(1, std::memory_order_acq_rel) + 1;
+        state_.store(ConnectionState::Opening, std::memory_order_release);
+        close_reason_ = CloseReason::None;
+        close_diagnostic_.clear();
+    }
     open_time_ms_ = nowMs();
     last_ping_ms_.store(0);
     channel_id_.clear();
@@ -125,23 +157,20 @@ void ViewerSocket::prepareOpen()
         std::scoped_lock lock(pending_keys_mutex_);
         pending_keys_.clear();
     }
-    {
-        std::scoped_lock lock(close_mutex_);
-        close_reason_ = CloseReason::None;
-        close_diagnostic_.clear();
-    }
+    return generation;
 }
 
 void ViewerSocket::close() noexcept
 {
     try {
         std::scoped_lock transport_lock(transport_mutex_);
-        const bool was_open = open_.exchange(false);
+        const bool was_open =
+            state_.exchange(ConnectionState::Closed, std::memory_order_acq_rel) == ConnectionState::Open;
         try {
             setCloseState(CloseReason::LocalClose);
         }
         catch (...) {
-            open_.store(false);
+            state_.store(ConnectionState::Closed, std::memory_order_release);
         }
         if (ws_) {
             if (was_open && ws_->isOpen()) {
@@ -160,7 +189,7 @@ void ViewerSocket::close() noexcept
         }
     }
     catch (...) {
-        open_.store(false);
+        state_.store(ConnectionState::Closed, std::memory_order_release);
     }
 }
 
@@ -186,30 +215,52 @@ void ViewerSocket::setCloseState(CloseReason reason, std::string diagnostic)
     close_diagnostic_ = std::move(diagnostic);
 }
 
-void ViewerSocket::onTransportClosed(const WebSocketClient::Termination &termination)
+void ViewerSocket::onTransportClosed(std::uint64_t generation, const WebSocketClient::Termination &termination)
 {
+    std::scoped_lock lock(close_mutex_);
+    if (generation != connection_generation_.load(std::memory_order_acquire)) {
+        return;
+    }
+
     switch (termination.kind) {
     case WebSocketClient::TerminationKind::LocalClose:
-        setCloseState(CloseReason::LocalClose);
+        if (close_reason_ == CloseReason::None) {
+            close_reason_ = CloseReason::LocalClose;
+            close_diagnostic_.clear();
+        }
         break;
     case WebSocketClient::TerminationKind::RemoteClose:
-        setCloseState(CloseReason::RemoteClose, "Live viewer closed: remote endpoint closed the connection");
+        if (close_reason_ == CloseReason::None) {
+            close_reason_ = CloseReason::RemoteClose;
+            close_diagnostic_ = "Live viewer closed: remote endpoint closed the connection";
+        }
         break;
     case WebSocketClient::TerminationKind::SendError:
-        setCloseState(CloseReason::SendError, "Live viewer transport failed: send error: " + termination.detail);
+        if (close_reason_ == CloseReason::None) {
+            close_reason_ = CloseReason::SendError;
+            close_diagnostic_ = "Live viewer transport failed: send error: " + termination.detail;
+        }
         break;
     case WebSocketClient::TerminationKind::ReceiveError:
-        setCloseState(CloseReason::ReceiveError, "Live viewer transport failed: receive error: " + termination.detail);
+        if (close_reason_ == CloseReason::None) {
+            close_reason_ = CloseReason::ReceiveError;
+            close_diagnostic_ = "Live viewer transport failed: receive error: " + termination.detail;
+        }
         break;
     case WebSocketClient::TerminationKind::WorkerFailure:
-        setCloseState(CloseReason::WorkerFailure,
-                      "Live viewer transport failed: worker failure: " + termination.detail);
+        if (close_reason_ == CloseReason::None) {
+            close_reason_ = CloseReason::WorkerFailure;
+            close_diagnostic_ = "Live viewer transport failed: worker failure: " + termination.detail;
+        }
         break;
     case WebSocketClient::TerminationKind::None:
-        setCloseState(CloseReason::WorkerFailure, "Live viewer transport failed: worker stopped unexpectedly");
+        if (close_reason_ == CloseReason::None) {
+            close_reason_ = CloseReason::WorkerFailure;
+            close_diagnostic_ = "Live viewer transport failed: worker stopped unexpectedly";
+        }
         break;
     }
-    open_.store(false);
+    state_.store(ConnectionState::Closed, std::memory_order_release);
 }
 
 }  // namespace spark

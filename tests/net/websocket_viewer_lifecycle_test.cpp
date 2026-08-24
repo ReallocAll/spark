@@ -11,7 +11,8 @@ void runViewerLifecycleTests()
         ViewerSocket auth({}, {});
         bool trusted = true;
         auth.setIsKeyTrustedCallback([&trusted](const std::vector<std::uint8_t> &) { return trusted; });
-        ViewerSocketTestAccess::markOpen(auth);
+        ViewerSocketTestAccess::beginOpen(auth);
+        assert(ViewerSocketTestAccess::markOpen(auth));
         const Crypto::KeyPair &key_pair = test::testKeyPair();
         ViewerSocketTestAccess::message(auth, clientConnectPacket(key_pair, false));
         assert(auth.tick());
@@ -35,7 +36,8 @@ void runViewerLifecycleTests()
 
     {
         ViewerSocket concurrent({}, {});
-        ViewerSocketTestAccess::markOpen(concurrent);
+        ViewerSocketTestAccess::beginOpen(concurrent);
+        assert(ViewerSocketTestAccess::markOpen(concurrent));
         auto transport_gate = ViewerSocketTestAccess::lockTransport(concurrent);
         std::atomic<bool> sender_started{false};
         std::atomic<bool> sender_finished{false};
@@ -53,6 +55,25 @@ void runViewerLifecycleTests()
         closer.join();
         assert(sender_finished.load());
         assert(!concurrent.isOpen());
+    }
+
+    {
+        ViewerSocket opening({}, {});
+        const auto generation = ViewerSocketTestAccess::beginOpen(opening);
+        ViewerSocketTestAccess::terminate(opening, generation, WebSocketClient::TerminationKind::RemoteClose);
+        assert(!ViewerSocketTestAccess::markOpen(opening));
+        assert(!opening.isOpen());
+
+        const auto older_generation = ViewerSocketTestAccess::beginOpen(opening);
+        assert(ViewerSocketTestAccess::markOpen(opening));
+        const auto newer_generation = ViewerSocketTestAccess::beginOpen(opening);
+        ViewerSocketTestAccess::terminate(opening, older_generation, WebSocketClient::TerminationKind::RemoteClose);
+        assert(!opening.isOpen());
+        assert(opening.closeReason() == ViewerSocket::CloseReason::None);
+        assert(ViewerSocketTestAccess::markOpen(opening));
+        assert(opening.isOpen());
+        ViewerSocketTestAccess::terminate(opening, newer_generation, WebSocketClient::TerminationKind::RemoteClose);
+        assert(!opening.isOpen());
     }
 
     {
@@ -83,13 +104,15 @@ void runViewerLifecycleTests()
     connect.public_key = {4, 5, 6};
     assert(!ViewerSocketTestAccess::trustedClient(viewer, connect));
 
-    ViewerSocketTestAccess::markOpen(viewer);
-    ViewerSocketTestAccess::terminate(viewer, WebSocketClient::TerminationKind::RemoteClose);
+    const auto generation = ViewerSocketTestAccess::beginOpen(viewer);
+    assert(ViewerSocketTestAccess::markOpen(viewer));
+    ViewerSocketTestAccess::terminate(viewer, generation, WebSocketClient::TerminationKind::RemoteClose);
     assert(!viewer.isOpen());
     assert(viewer.closeReason() == ViewerSocket::CloseReason::RemoteClose);
     assert(!viewer.takeDiagnostic().empty());
 
-    ViewerSocketTestAccess::markOpen(viewer);
+    ViewerSocketTestAccess::beginOpen(viewer);
+    assert(ViewerSocketTestAccess::markOpen(viewer));
     assert(viewer.isOpen());
     assert(viewer.closeReason() == ViewerSocket::CloseReason::None);
     viewer.close();

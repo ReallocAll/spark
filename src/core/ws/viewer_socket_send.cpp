@@ -33,7 +33,7 @@ void ViewerSocket::processWindowRotate(const UploadCallback &upload)
 {
     {
         std::scoped_lock transport_lock(transport_mutex_);
-        if (!open_.load() || !ws_ || !ws_->isOpen()) {
+        if (!isOpen() || !ws_ || !ws_->isOpen()) {
             return;
         }
     }
@@ -62,7 +62,7 @@ void ViewerSocket::sendUpdate(const std::string &bytebin_key)
 {
     try {
         std::scoped_lock transport_lock(transport_mutex_);
-        if (!open_.load() || !ws_ || !ws_->isOpen()) {
+        if (!isOpen() || !ws_ || !ws_->isOpen()) {
             return;
         }
         {
@@ -84,7 +84,7 @@ bool ViewerSocket::sendStatistics(const std::string &platform, const std::string
 {
     try {
         std::scoped_lock transport_lock(transport_mutex_);
-        if (!open_.load(std::memory_order_acquire) || !hasClient() || !ws_ || !ws_->isOpen()) {
+        if (!isOpen() || !hasClient() || !ws_ || !ws_->isOpen()) {
             return false;
         }
         const auto private_key = key_pair_.private_key_pkcs8;
@@ -133,7 +133,7 @@ void ViewerSocket::setDeferredSendError() noexcept
         setCloseState(CloseReason::SendError, "Live viewer transport failed: deferred send enqueue");
     }
     catch (...) {
-        open_.store(false);
+        state_.store(ConnectionState::Closed, std::memory_order_release);
     }
 }
 

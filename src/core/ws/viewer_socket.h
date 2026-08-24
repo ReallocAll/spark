@@ -67,7 +67,7 @@ public:
     // Close the socket and signal the viewer.
     void close() noexcept;
 
-    bool isOpen() const { return open_.load(); }
+    bool isOpen() const { return state_.load(std::memory_order_acquire) == ConnectionState::Open; }
     CloseReason closeReason() const;
     std::string takeDiagnostic();
 
@@ -94,9 +94,15 @@ public:
 private:
     friend struct ViewerSocketTestAccess;
 
+    enum class ConnectionState : std::uint8_t {
+        Closed,
+        Opening,
+        Open,
+    };
+
     void onMessage(const std::string &data);
-    void prepareOpen();
-    void onTransportClosed(const WebSocketClient::Termination &termination);
+    std::uint64_t prepareOpen();
+    void onTransportClosed(std::uint64_t generation, const WebSocketClient::Termination &termination);
     void setCloseState(CloseReason reason, std::string diagnostic = {});
     [[nodiscard]] bool isTrustedClient(const WsIncomingPacket &packet) const;
     bool enqueueDeferredLocked(WebSocketClient::DeferredEncoder encoder, std::size_t accounted_input_bytes) noexcept;
@@ -105,10 +111,12 @@ private:
 
     Config config_;
     Crypto::KeyPair key_pair_;
+    std::mutex open_mutex_;
     mutable std::mutex transport_mutex_;
     std::unique_ptr<WebSocketClient> ws_;
 
-    std::atomic<bool> open_{false};
+    std::atomic<ConnectionState> state_{ConnectionState::Closed};
+    std::atomic<std::uint64_t> connection_generation_{0};
     std::int64_t open_time_ms_ = 0;
     std::atomic<std::int64_t> last_ping_ms_{0};
     std::string last_payload_id_;
