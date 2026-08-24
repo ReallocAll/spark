@@ -147,6 +147,18 @@ set_target_properties(spark_viewer_update_worker_test PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME spark_viewer_update_worker_test COMMAND spark_viewer_update_worker_test)
 
+add_executable(spark_live_viewer_schedule_test application/profiler/live_viewer_schedule_test.cpp)
+target_link_libraries(spark_live_viewer_schedule_test PRIVATE spark_application)
+set_target_properties(spark_live_viewer_schedule_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME spark_live_viewer_schedule_test COMMAND spark_live_viewer_schedule_test)
+
+add_executable(spark_live_statistics_payload_test application/profiler/live_statistics_payload_test.cpp)
+target_link_libraries(spark_live_statistics_payload_test PRIVATE spark_application)
+set_target_properties(spark_live_statistics_payload_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME spark_live_statistics_payload_test COMMAND spark_live_statistics_payload_test)
+
 add_executable(spark_profiler_timeout_test application/profiler/profiler_timeout_test.cpp)
 target_link_libraries(spark_profiler_timeout_test PRIVATE spark_application)
 set_target_properties(spark_profiler_timeout_test PROPERTIES

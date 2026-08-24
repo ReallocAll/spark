@@ -73,8 +73,26 @@ std::optional<std::uint64_t> ViewerUpdateWorker::enqueueOpen(ExportContext conte
     return result;
 }
 
-bool ViewerUpdateWorker::enqueueUpdate(ExportContext context, std::shared_ptr<ViewerSocket> socket,
-                                       std::uint64_t generation)
+bool ViewerUpdateWorker::enqueueStatistics(ExportContext context, std::shared_ptr<ViewerSocket> socket,
+                                           std::uint64_t generation)
+{
+    return enqueueWork(WorkType::Statistics, std::move(context), std::move(socket), generation);
+}
+
+bool ViewerUpdateWorker::enqueueSampler(ExportContext context, std::shared_ptr<ViewerSocket> socket,
+                                        std::uint64_t generation)
+{
+    return enqueueWork(WorkType::Sampler, std::move(context), std::move(socket), generation);
+}
+
+bool ViewerUpdateWorker::enqueueCombined(ExportContext context, std::shared_ptr<ViewerSocket> socket,
+                                         std::uint64_t generation)
+{
+    return enqueueWork(WorkType::Combined, std::move(context), std::move(socket), generation);
+}
+
+bool ViewerUpdateWorker::enqueueWork(WorkType type, ExportContext context, std::shared_ptr<ViewerSocket> socket,
+                                     std::uint64_t generation)
 {
     {
         std::scoped_lock lock(mutex_);
@@ -82,7 +100,7 @@ bool ViewerUpdateWorker::enqueueUpdate(ExportContext context, std::shared_ptr<Vi
             return false;
         }
         WorkItem work;
-        work.type = WorkType::Update;
+        work.type = type;
         work.context = std::move(context);
         work.socket = std::move(socket);
         work.generation = generation;

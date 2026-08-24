@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Match upstream live-viewer cadence with standalone statistics every 10 seconds
+  and globally aligned sampler payload rotation every minute.
 - Record upstream-compatible rolling TPS, tick-duration, CPU, world, and ping metric series in health and sampler data.
 - Use globally aligned profiling windows and stop timed profiles on a monotonic deadline even while server ticks are stalled.
 - Measure server uptime from the monotonic clock anchor so wall-clock adjustments cannot skew health reports.
