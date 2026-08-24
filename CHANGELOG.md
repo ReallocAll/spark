@@ -30,8 +30,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   installed or active.
 - Support Java-compatible Spark configuration environment variables.
 
+### Changed
+
+- **BREAKING**: Temporarily disable Windows native allocation profiling in v0.6;
+  `--alloc` now reports that safe allocator entry patching is unavailable. Linux
+  x86-64 allocation profiling remains supported.
+
 ### Fixed
 
+- Include players in aggregate world entity gauges while continuing to report the
+  player count separately.
+- Exclude native allocation-hook instrumentation branches from execution profiles
+  so Plugins View does not charge allocator internals to Spark.
+- Align the emitted spark profile data version with upstream `DATA_VERSION = 2`.
+- Reject ambiguous live-viewer trust approval when different verified keys reuse
+  the same client ID.
+- Keep viewer and health notification failures from escaping onto the server tick
+  path or skipping connection cleanup.
 - Avoid recalculating and sorting rolling TPS and tick-duration metrics on every server tick when the history is only
   recorded every 10 seconds.
 - Prevent stale or concurrently closed live-viewer transports from restoring an open connection state, and run initial
