@@ -23,6 +23,8 @@ namespace spark {
 
 struct RecoveryWriterQueueTestAccess;
 
+// Crash-safe recovery journal writer. A dedicated thread drains a bounded lock-free queue;
+// all journal file lifecycle I/O belongs to that worker. Producers only enqueue serialized records.
 class RecoveryWriter : public RecoverySink {
 public:
     enum class IoOperation {
@@ -35,12 +37,13 @@ public:
     struct Config {
         std::filesystem::path directory;
         std::uint64_t session_id = 0;
-        std::size_t max_segment_bytes = 16 * 1024 * 1024;
-        std::size_t max_total_bytes = 128 * 1024 * 1024;
-        int flush_interval_ms = 1000;
-        int sync_interval_ms = 5000;
-        int shutdown_timeout_ms = 2000;
+        std::size_t max_segment_bytes = 16 * 1024 * 1024;  // 16 MiB
+        std::size_t max_total_bytes = 128 * 1024 * 1024;   // 128 MiB
+        int flush_interval_ms = 1000;                      // batch flush
+        int sync_interval_ms = 5000;                       // durable sync
+        int shutdown_timeout_ms = 2000;                    // bounded caller wait
         std::size_t queue_capacity = 65536;
+        // Test seam for deterministic I/O blocking/failure injection. Empty in production.
         std::function<bool(IoOperation)> io_hook;
     };
 
@@ -50,8 +53,13 @@ public:
     RecoveryWriter(const RecoveryWriter &) = delete;
     RecoveryWriter &operator=(const RecoveryWriter &) = delete;
 
+    // Spawns the writer thread. Returns false if the journal cannot be created;
+    // in that case the writer stays disabled and enqueues become no-ops.
     bool start();
 
+    // Closes admission immediately. stop() waits only for the configured budget.
+    // A timeout keeps the joinable worker and all state owned by this object; tryReap()
+    // joins it later after workerExited() becomes true. The worker owns final drain/sync/close.
     void requestStop() noexcept;
     bool stop();
     bool stop(std::chrono::milliseconds timeout);
@@ -63,11 +71,13 @@ public:
     std::uint64_t droppedRecords() const { return dropped_.load(std::memory_order_relaxed); }
     std::uint64_t writtenRecords() const { return written_.load(std::memory_order_relaxed); }
 
+    // --- RecoverySink (called from the aggregator thread) ---
     void journalModuleDef(std::uint32_t module_id, std::string_view path) override;
     void journalThreadDef(std::uint64_t thread_id, std::uint64_t os_thread_id, std::string_view name) override;
     void journalSample(const Sample &sample) override;
     void journalTickEvent(std::uint64_t tick_id, double mspt) override;
 
+    // --- Extended API (called from watchdog / main thread) ---
     void journalStallBegin(std::uint64_t detected_ns, std::uint64_t last_tick_ns);
     void journalStallEnd(std::uint64_t detected_ns, std::uint64_t recovered_ns);
     void journalCleanEnd();
@@ -77,6 +87,7 @@ public:
                               bool creator_is_player, std::string_view comment,
                               const std::vector<std::string> &thread_patterns, std::int32_t window_adjustment_ms);
 
+    // Requests an immediate durable flush.
     void requestFlush();
 
 private:
@@ -122,6 +133,7 @@ private:
     std::condition_variable exit_cv_;
     std::mutex reap_mutex_;
 
+    // Writer-thread state.
     std::filesystem::path segment_path_;
     std::FILE *file_ = nullptr;
     std::uint32_t segment_number_ = 0;
@@ -130,6 +142,8 @@ private:
     std::size_t total_bytes_ = 0;
     std::chrono::steady_clock::time_point last_sync_;
 
+    // Metadata cache (protected by metadata_mutex_). Updated by producers when they
+    // enqueue metadata records; read by the worker when snapshotting before pruning.
     std::mutex metadata_mutex_;
     std::vector<std::uint8_t> cached_session_config_;
     std::map<std::uint32_t, std::string> cached_modules_;
