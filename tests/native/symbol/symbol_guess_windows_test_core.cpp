@@ -116,6 +116,20 @@ bool testLargeRangeLookup()
     return true;
 }
 
+bool testShortReadOnlySectionBounds()
+{
+    PeFixture fixture;
+    fixture.section(1, ".rdata", 4, 8, IMAGE_SCN_MEM_READ | IMAGE_SCN_CNT_INITIALIZED_DATA);
+    fixture.leafUnwind(0x5000);
+    fixture.runtimeFunction(0, 0x1000, 0x1080, 0x5000);
+    windows::Engine engine = fixture.engine();
+    SPARK_SYMBOL_GUESS_CHECK(engine.valid());
+    SPARK_SYMBOL_GUESS_CHECK(engine.stats().vtables == 0);
+    const std::uint64_t query = 0x1010;
+    SPARK_SYMBOL_GUESS_CHECK(engine.guess(std::span(&query, 1)).empty());
+    return true;
+}
+
 }  // namespace spark::symbol_guess::windows_test
 
 #endif

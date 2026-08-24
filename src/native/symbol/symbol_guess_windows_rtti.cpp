@@ -87,8 +87,16 @@ void Engine::Impl::collectVtables()
         if (section.executable) {
             continue;
         }
-        const std::uint32_t start = (section.begin + 7U) & ~7U;
-        for (std::uint32_t rva = start; rva <= section.end - 16U; rva += 8) {
+        const std::uint32_t available = section.end - section.begin;
+        if (available < 16U) {
+            continue;
+        }
+        const std::uint32_t delta = (8U - (section.begin & 7U)) & 7U;
+        if (delta > available - 16U) {
+            continue;
+        }
+        for (std::uint32_t offset = delta; offset <= available - 16U; offset += 8U) {
+            const std::uint32_t rva = section.begin + offset;
             std::uint64_t col_pointer = 0;
             std::memcpy(&col_pointer, image + rva, sizeof(col_pointer));
             std::uint32_t col_rva = 0;
@@ -101,12 +109,16 @@ void Engine::Impl::collectVtables()
             }
             const auto &[class_name, col] = *validated;
             ++stats.vtables;
-            const std::uint32_t table = rva + 8;
+            const std::uint32_t table_offset = offset + 8U;
             bool saw_code = false;
             unsigned external_holes = 0;
-            for (std::uint32_t slot = 0; slot < 512 && table <= section.end - 8U * (slot + 1U); ++slot) {
+            for (std::uint32_t slot = 0; slot < 512; ++slot) {
+                const std::uint64_t entry_offset = static_cast<std::uint64_t>(table_offset) + 8ULL * slot;
+                if (entry_offset > static_cast<std::uint64_t>(available) - 8U) {
+                    break;
+                }
                 std::uint64_t entry = 0;
-                std::memcpy(&entry, image + table + 8U * slot, sizeof(entry));
+                std::memcpy(&entry, image + section.begin + static_cast<std::uint32_t>(entry_offset), sizeof(entry));
                 std::uint32_t target = 0;
                 if (!toRva(entry, target)) {
                     // Permit one external _purecall-like slot after the table has started.
