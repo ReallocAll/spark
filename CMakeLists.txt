@@ -125,7 +125,9 @@ if (WIN32)
     target_link_libraries(spark_native PUBLIC dbghelp psapi advapi32 funchook-static distorm)
 elseif (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
     target_include_directories(spark_native PRIVATE "${funchook_SOURCE_DIR}/distorm/include")
-    target_link_libraries(spark_native PUBLIC distorm)
+    target_link_libraries(spark_native PUBLIC distorm ${CMAKE_DL_LIBS})
+elseif (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_libraries(spark_native PUBLIC ${CMAKE_DL_LIBS})
 endif ()
 
 # --- platform-independent core: profiler, stats, proto, net (no Endstone) ---

@@ -353,6 +353,13 @@ elseif (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "x
             _GNU_SOURCE
             SPARK_ELF_HOOK_FIXTURE_PATH="$<TARGET_FILE:spark_elf_hook_fixture>")
     target_compile_definitions(spark_profiler_export_test PRIVATE _GNU_SOURCE)
+
+    add_executable(spark_capture_linux_lifecycle_test native/sampler/capture_linux_lifecycle_test.cpp)
+    target_compile_definitions(spark_capture_linux_lifecycle_test PRIVATE _GNU_SOURCE)
+    target_link_libraries(spark_capture_linux_lifecycle_test PRIVATE spark_core ${CMAKE_DL_LIBS})
+    set_target_properties(spark_capture_linux_lifecycle_test PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+    add_test(NAME spark_capture_linux_lifecycle_test COMMAND spark_capture_linux_lifecycle_test)
 endif ()
 
 add_test(NAME spark_selftest COMMAND spark_selftest --seconds=1)
