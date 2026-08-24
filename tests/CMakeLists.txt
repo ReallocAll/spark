@@ -120,6 +120,12 @@ set_target_properties(spark_profiler_timeout_integration_test PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME spark_profiler_timeout_integration_test COMMAND spark_profiler_timeout_integration_test)
 
+add_executable(spark_profiler_service_failure_test application/profiler/profiler_service_failure_test.cpp)
+target_link_libraries(spark_profiler_service_failure_test PRIVATE spark_application)
+set_target_properties(spark_profiler_service_failure_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME spark_profiler_service_failure_test COMMAND spark_profiler_service_failure_test)
+
 add_executable(spark_health_dashboard_test application/health/health_dashboard_test.cpp)
 target_link_libraries(spark_health_dashboard_test PRIVATE spark_application)
 set_target_properties(spark_health_dashboard_test PROPERTIES

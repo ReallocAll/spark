@@ -210,6 +210,25 @@ void test_bounded_trailing_and_collection_input()
     std::printf("  [PASS] bounded, trailing, and collection input\n");
 }
 
+void test_transactional_add_and_save_rolls_back()
+{
+    const auto dir = tempDir();
+    const auto parent = dir / "not-a-directory";
+    const auto path = parent / "trusted-viewers.json";
+    std::filesystem::remove_all(parent);
+    writeFile(parent, "occupied");
+
+    TrustedViewersState tv(path);
+    assert(!tv.addAndSave("key"));
+    assert(tv.keys().empty());
+    assert(!tv.contains("key"));
+    assert(!tv.lastError().empty());
+    assert(!tv.addAndSave(""));
+
+    std::filesystem::remove(parent);
+    std::printf("  [PASS] transactional add and save rollback\n");
+}
+
 }  // namespace
 
 int main()
@@ -225,6 +244,7 @@ int main()
     test_add_duplicate();
     test_save_pretty_format();
     test_bounded_trailing_and_collection_input();
+    test_transactional_add_and_save_rolls_back();
     std::printf("All TrustedViewersState tests passed!\n");
     return 0;
 }

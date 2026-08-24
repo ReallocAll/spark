@@ -118,43 +118,75 @@ bool ProfilerService::armProfilerTimeout(std::int64_t timeout_seconds) noexcept
 void ProfilerService::finishProfiler(const std::string &sender_name, bool sender_is_player, bool save,
                                      const std::string &comment)
 {
+    const auto notifyBestEffort = [this](const std::string &name, const std::string &message) noexcept {
+        try {
+            notifier_.notify(name, message);
+        }
+        catch (...) {  // NOLINT(bugprone-empty-catch): notification is best effort.
+        }
+    };
+    const auto restoreBackground = [this]() noexcept {
+        background_started_ = false;
+        if (!restart_background_after_export_) {
+            return;
+        }
+        restart_background_after_export_ = false;
+        background_suppressed_ = false;
+        background_started_ = startBackgroundSession();
+    };
+
     resetProfilerTimeout();
     std::string stop_error;
     if (!profiler_.stopSampling(stop_error)) {
+        const bool stopped = !profiler_.running();
+        if (stopped) {
+            session_type_ = SessionType::None;
+            restoreBackground();
+        }
         std::string backend_error;
-        if (!profiler_.running() && profiler_.backendFailure(backend_error)) {
-            notifier_.notify(sender_name,
+        if (stopped && profiler_.backendFailure(backend_error)) {
+            notifyBestEffort(sender_name,
                              "Allocation profiler FAILED; incomplete profile data was discarded: " + backend_error);
-            notifier_.notify(sender_name, "The allocation profiler backend is ready for a new session.");
+            notifyBestEffort(sender_name, "The allocation profiler backend is ready for a new session.");
         }
         else {
-            notifier_.notify(sender_name, "Profiler stop failed: " + stop_error);
-        }
-        // Restore the background profiler when export cannot start.
-        background_started_ = false;
-        if (restart_background_after_export_) {
-            restart_background_after_export_ = false;
-            background_suppressed_ = false;
+            notifyBestEffort(sender_name, "Profiler stop failed: " + stop_error);
         }
         return;
     }
     session_type_ = SessionType::None;
 
-    pending_ctx_ = ExportContext{};
-    pending_ctx_.bds_executable_sha256 = bds_executable_sha256_;
-    metadata_provider_.gatherServerMetadata(pending_ctx_, nowMs());
-    pending_ctx_.native_plugin_sources = session_native_plugin_sources_;
-    pending_ctx_.comment = comment;
-    pending_ctx_.statistics = statistics_.snapshot();
-    pending_ctx_.metrics = statistics_.metricsSnapshot();
-    pending_ctx_.window_stats = statistics_.profileWindows(profiler_.startTimeMs(), profiler_.endTimeMs());
-    pending_ctx_.system_stats = spark::gatherSystemStats(".");
-    metadata_provider_.gatherWorldMetadata(pending_ctx_);
-    if (ping_samples_provider_) {
-        pending_ctx_.ping_samples = ping_samples_provider_();
+    try {
+        pending_ctx_ = ExportContext{};
+        pending_ctx_.bds_executable_sha256 = bds_executable_sha256_;
+        metadata_provider_.gatherServerMetadata(pending_ctx_, nowMs());
+        pending_ctx_.native_plugin_sources = session_native_plugin_sources_;
+        pending_ctx_.comment = comment;
+        pending_ctx_.statistics = statistics_.snapshot();
+        pending_ctx_.metrics = statistics_.metricsSnapshot();
+        pending_ctx_.window_stats = statistics_.profileWindows(profiler_.startTimeMs(), profiler_.endTimeMs());
+        pending_ctx_.system_stats = spark::gatherSystemStats(".");
+        metadata_provider_.gatherWorldMetadata(pending_ctx_);
+        if (ping_samples_provider_) {
+            pending_ctx_.ping_samples = ping_samples_provider_();
+        }
+        if (network_snapshot_provider_) {
+            pending_ctx_.net_snapshots = network_snapshot_provider_();
+        }
     }
-    if (network_snapshot_provider_) {
-        pending_ctx_.net_snapshots = network_snapshot_provider_();
+    catch (const std::exception &error) {
+        restoreBackground();
+        try {
+            notifyBestEffort(sender_name, std::string("Failed to prepare the profile export: ") + error.what());
+        }
+        catch (...) {  // NOLINT(bugprone-empty-catch): notification is best effort.
+        }
+        return;
+    }
+    catch (...) {
+        restoreBackground();
+        notifyBestEffort(sender_name, "Failed to prepare the profile export.");
+        return;
     }
 
     pending_save_ = save;
@@ -172,12 +204,8 @@ void ProfilerService::finishProfiler(const std::string &sender_name, bool sender
     }
     catch (...) {
         exporting_.store(false);
-        if (restart_background_after_export_) {
-            restart_background_after_export_ = false;
-            background_suppressed_ = false;
-            background_started_ = startBackgroundSession();
-        }
-        notifier_.notify(sender_name, "Failed to start the profile export worker.");
+        restoreBackground();
+        notifyBestEffort(sender_name, "Failed to start the profile export worker.");
     }
 }
 
@@ -210,52 +238,64 @@ void ProfilerService::runExport() noexcept
     }
 }
 
-void ProfilerService::announceResult()
+void ProfilerService::announceResult() noexcept
 {
+    const ExportOutcome outcome = pending_outcome_;
+    const std::string sender = std::move(pending_sender_);
+    const bool sender_is_player = pending_sender_is_player_;
+    const std::string result = std::move(pending_result_);
     const char *headline = "Profiler stopped.";
-    if (pending_outcome_ == ExportOutcome::Uploaded) {
+    if (outcome == ExportOutcome::Uploaded) {
         headline = "Profiler stopped & upload complete!";
     }
-    else if (pending_outcome_ == ExportOutcome::Saved) {
+    else if (outcome == ExportOutcome::Saved) {
         headline = "Profiler stopped & saved locally!";
     }
-    notifier_.notify(pending_sender_, headline);
-    notifier_.notify(pending_sender_, pending_result_);
 
     // A successful export means the profile is safely delivered; discard the
     // crash-recovery journal so the next startup does not treat it as a crash.
     // On failure the journal is retained so a subsequent crash can still recover.
-    if (pending_outcome_ == ExportOutcome::Uploaded || pending_outcome_ == ExportOutcome::Saved) {
-        profiler_.discardRecoveryJournal();
-    }
-
-    if (activity_log_provider_) {
-        ActivityLog *log = activity_log_provider_();
-        if (log) {
-            const std::int64_t now_ms = nowMs();
-            if (pending_outcome_ == ExportOutcome::Uploaded) {
-                log->add(
-                    Activity::url(pending_sender_, pending_sender_is_player_, now_ms, "Profiler", pending_result_));
-            }
-            else if (pending_outcome_ == ExportOutcome::Saved) {
-                log->add(
-                    Activity::file(pending_sender_, pending_sender_is_player_, now_ms, "Profiler", pending_result_));
-            }
+    if (outcome == ExportOutcome::Uploaded || outcome == ExportOutcome::Saved) {
+        try {
+            profiler_.discardRecoveryJournal();
+        }
+        catch (...) {  // NOLINT(bugprone-empty-catch): a delivered profile remains usable.
         }
     }
 
     exporting_.store(false);
-
     if (restart_background_after_export_) {
         restart_background_after_export_ = false;
         background_suppressed_ = false;
-        if (startBackgroundSession()) {
-            // NOLINTNEXTLINE(readability-simplify-boolean-expr)
-            background_started_ = true;
+        background_started_ = startBackgroundSession();
+    }
+
+    try {
+        notifier_.notify(sender, headline);
+    }
+    catch (...) {  // NOLINT(bugprone-empty-catch): completion notification is best effort.
+    }
+    try {
+        notifier_.notify(sender, result);
+    }
+    catch (...) {  // NOLINT(bugprone-empty-catch): completion notification is best effort.
+    }
+
+    try {
+        if (activity_log_provider_) {
+            ActivityLog *log = activity_log_provider_();
+            if (log) {
+                const std::int64_t now_ms = nowMs();
+                if (outcome == ExportOutcome::Uploaded) {
+                    log->add(Activity::url(sender, sender_is_player, now_ms, "Profiler", result));
+                }
+                else if (outcome == ExportOutcome::Saved) {
+                    log->add(Activity::file(sender, sender_is_player, now_ms, "Profiler", result));
+                }
+            }
         }
-        else {
-            background_started_ = false;
-        }
+    }
+    catch (...) {  // NOLINT(bugprone-empty-catch): activity logging is best effort.
     }
 }
 
@@ -328,47 +368,56 @@ void ProfilerService::startBackgroundProfiler()
     // If main_tid_ is 0, the background profiler will start on the first tick.
 }
 
-bool ProfilerService::startBackgroundSession()
+bool ProfilerService::startBackgroundSession() noexcept
 {
-    if (!background_enabled_ || profiler_.running() || exporting_.load()) {
+    try {
+        if (!background_enabled_ || profiler_.running() || exporting_.load() || main_tid_ == 0) {
+            return false;
+        }
+
+        resetProfilerTimeout();
+
+        spark::ProfilerOptions options;
+        options.is_background = true;
+        options.interval_ms = background_interval_;
+        options.timeout_seconds = -1;
+        options.ignore_sleeping = false;
+
+        if (background_thread_dumper_ == "all") {
+            options.threads = {"*"};
+        }
+
+        if (background_thread_grouper_ == "by-name") {
+            options.thread_grouper = spark::ThreadGrouperMode::ByName;
+        }
+        else if (background_thread_grouper_ == "as-one") {
+            options.thread_grouper = spark::ThreadGrouperMode::AsOne;
+        }
+        else {
+            options.thread_grouper = spark::ThreadGrouperMode::ByPool;
+        }
+
+        std::vector<NativePluginSource> native_plugin_sources = metadata_provider_.nativePluginSources();
+        std::string error;
+        if (!profiler_.start(options, main_tid_, error)) {
+            return false;
+        }
+        session_native_plugin_sources_ = std::move(native_plugin_sources);
+
+        session_type_ = SessionType::Background;
+        return true;
+    }
+    catch (...) {
+        if (profiler_.running()) {
+            try {
+                profiler_.cancel();
+            }
+            catch (...) {  // NOLINT(bugprone-empty-catch): startup cleanup is best effort.
+            }
+        }
+        session_type_ = SessionType::None;
         return false;
     }
-
-    if (main_tid_ == 0) {
-        return false;
-    }
-
-    resetProfilerTimeout();
-
-    spark::ProfilerOptions options;
-    options.is_background = true;
-    options.interval_ms = background_interval_;
-    options.timeout_seconds = -1;
-    options.ignore_sleeping = false;
-
-    if (background_thread_dumper_ == "all") {
-        options.threads = {"*"};
-    }
-
-    if (background_thread_grouper_ == "by-name") {
-        options.thread_grouper = spark::ThreadGrouperMode::ByName;
-    }
-    else if (background_thread_grouper_ == "as-one") {
-        options.thread_grouper = spark::ThreadGrouperMode::AsOne;
-    }
-    else {
-        options.thread_grouper = spark::ThreadGrouperMode::ByPool;
-    }
-
-    std::vector<NativePluginSource> native_plugin_sources = metadata_provider_.nativePluginSources();
-    std::string error;
-    if (!profiler_.start(options, main_tid_, error)) {
-        return false;
-    }
-    session_native_plugin_sources_ = std::move(native_plugin_sources);
-
-    session_type_ = SessionType::Background;
-    return true;
 }
 
 }  // namespace spark

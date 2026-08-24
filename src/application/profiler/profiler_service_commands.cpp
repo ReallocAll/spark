@@ -1,4 +1,5 @@
 #include <cstdint>
+#include <exception>
 #include <string>
 #include <utility>
 
@@ -61,9 +62,52 @@ void ProfilerService::cmdStart(CommandSender &sender, const Arguments &args)
     }
 
     resetProfilerTimeout();
-    std::vector<NativePluginSource> native_plugin_sources = metadata_provider_.nativePluginSources();
+    std::vector<NativePluginSource> native_plugin_sources;
+    try {
+        native_plugin_sources = metadata_provider_.nativePluginSources();
+    }
+    catch (const std::exception &error) {
+        session_type_ = SessionType::None;
+        background_started_ = false;
+        background_suppressed_ = had_background_session ? false : previous_background_suppressed;
+        background_retry_delay_s_ = 0;
+        next_background_retry_ms_ = 0;
+        sender.sendErrorMessage("Couldn't start the profiler: metadata collection failed ({})", error.what());
+        return;
+    }
+    catch (...) {
+        session_type_ = SessionType::None;
+        background_started_ = false;
+        background_suppressed_ = had_background_session ? false : previous_background_suppressed;
+        background_retry_delay_s_ = 0;
+        next_background_retry_ms_ = 0;
+        sender.sendErrorMessage("Couldn't start the profiler: metadata collection failed");
+        return;
+    }
     std::string error;
-    if (!profiler_.start(options, tid, error)) {
+    bool started = false;
+    try {
+        started = profiler_.start(options, tid, error);
+    }
+    catch (const std::exception &exception) {
+        error = exception.what();
+    }
+    catch (...) {
+        error = "unknown profiler startup failure";
+    }
+    if (!started) {
+        if (profiler_.running()) {
+            try {
+                profiler_.cancel();
+            }
+            catch (...) {  // NOLINT(bugprone-empty-catch): startup cleanup is best effort.
+            }
+        }
+        session_type_ = SessionType::None;
+        background_started_ = false;
+        background_suppressed_ = had_background_session ? false : previous_background_suppressed;
+        background_retry_delay_s_ = 0;
+        next_background_retry_ms_ = 0;
         sender.sendErrorMessage("Couldn't start the profiler: {}", error);
         return;
     }
@@ -357,8 +401,16 @@ void ProfilerService::cmdTrustViewer(CommandSender &sender, const Arguments &arg
             sender.sendMessage("Client '{}' is already trusted.", id);
             continue;
         }
-        trusted_viewers_.add(b64);
-        trusted_viewers_.save();
+        if (!trusted_viewers_.addAndSave(b64)) {
+            const std::string error = trusted_viewers_.lastError();
+            if (error.empty()) {
+                sender.sendErrorMessage("Unable to persist trust for client '{}'.", id);
+            }
+            else {
+                sender.sendErrorMessage("Unable to persist trust for client '{}': {}", id, error);
+            }
+            continue;
+        }
         viewer_socket->sendClientTrusted(id);
         sender.sendMessage("Client '{}' is now trusted.", id);
     }
