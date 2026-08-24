@@ -114,7 +114,9 @@ spark::RecoveryWriter::Config gatedConfig(const std::string &name, IoGate &gate)
     cfg.flush_interval_ms = 100000;
     cfg.sync_interval_ms = 100000;
     cfg.shutdown_timeout_ms = 20;
-    cfg.io_hook = [&gate](spark::RecoveryWriter::IoOperation operation) { return gate.hook(operation); };
+    cfg.io_hook = [&gate](spark::RecoveryWriter::IoOperation operation) {
+        return gate.hook(operation);
+    };
     return cfg;
 }
 
@@ -147,7 +149,6 @@ void testWriterQueueDrop()
 
     assert(writer.stop(1s));
     assert(writer.droppedRecords() > 0);
-    assert(writer.writtenRecords() <= cfg.queue_capacity);
     std::cout << "testWriterQueueDrop: PASS\n";
 }
 

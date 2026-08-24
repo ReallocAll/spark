@@ -165,8 +165,7 @@ bool RecoveryWriter::stop(std::chrono::milliseconds timeout)
 
     if (!worker_exited_.load(std::memory_order_acquire)) {
         std::unique_lock lock(exit_mutex_);
-        if (!exit_cv_.wait_for(lock, timeout,
-                               [this] { return worker_exited_.load(std::memory_order_acquire); })) {
+        if (!exit_cv_.wait_for(lock, timeout, [this] { return worker_exited_.load(std::memory_order_acquire); })) {
             return false;
         }
     }
