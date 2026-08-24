@@ -129,6 +129,12 @@ set_target_properties(spark_activity_command_test PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME spark_activity_command_test COMMAND spark_activity_command_test)
 
+add_executable(spark_monitoring_schedule_test application/monitoring/monitoring_schedule_test.cpp)
+target_link_libraries(spark_monitoring_schedule_test PRIVATE spark_application)
+set_target_properties(spark_monitoring_schedule_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME spark_monitoring_schedule_test COMMAND spark_monitoring_schedule_test)
+
 add_executable(spark_profiler_action_resolver_test application/command/profiler_action_resolver_test.cpp)
 target_link_libraries(spark_profiler_action_resolver_test PRIVATE spark_application)
 set_target_properties(spark_profiler_action_resolver_test PROPERTIES

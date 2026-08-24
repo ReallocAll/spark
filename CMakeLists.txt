@@ -203,6 +203,7 @@ add_library(spark_application STATIC
         src/application/health/health_command.cpp
         src/application/health/health_command_report.cpp
         src/application/health/health_report.cpp
+        src/application/monitoring/monitoring_schedule.cpp
         src/application/health/health_dashboard.cpp
         src/application/health/health_dashboard_connection.cpp
         src/application/placeholder/spark_placeholder_resolver.cpp
