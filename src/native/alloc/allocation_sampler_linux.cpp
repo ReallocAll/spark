@@ -40,6 +40,7 @@
 #include "native/alloc/bounded_event_queue.h"
 #include "native/alloc/byte_sampler.h"
 #include "native/alloc/elf_import_hooks.h"
+#include "native/alloc/stable_shard_snapshot.h"
 #include "native/sampler/thread_info.h"
 #include "profiling_window.h"
 
@@ -1398,43 +1399,37 @@ struct AllocationSampler::Impl {
             (std::min)(KEventCapacity, static_cast<std::size_t>(live_samples.load(std::memory_order_relaxed))));
         const auto retained_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
         lifecycle_readers.fetch_add(1, std::memory_order_acq_rel);
+        bool stable = false;
         try {
-            while (true) {
-                retained.clear();
-                while (lifecycle_writers.load(std::memory_order_acquire) != 0) {
-                    if (std::chrono::steady_clock::now() >= retained_deadline) {
-                        lifecycle_readers.fetch_sub(1, std::memory_order_release);
-                        error = "timed out reading retained allocation state";
-                        return false;
+            stable = detail::captureStableShardSnapshot(
+                KLiveIndexShards, retained_deadline, [&retained] { retained.clear(); },
+                [this] { return lifecycle_version.load(std::memory_order_acquire); },
+                [this](std::size_t shard) { return ::pthread_rwlock_tryrdlock(&live_index_locks[shard]) == 0; },
+                [this](std::size_t shard) { ::pthread_rwlock_unlock(&live_index_locks[shard]); },
+                [this, &retained](std::size_t shard) {
+                    const std::size_t begin = shard * KLiveIndexShardCapacity;
+                    const std::size_t end = begin + KLiveIndexShardCapacity;
+                    for (std::size_t i = begin; i < end; ++i) {
+                        const LiveIndexEntry &entry = live_index[i];
+                        void *pointer = entryPointer(entry);
+                        LiveAllocation *entry_allocation = entryAllocation(entry);
+                        if (pointer != nullptr && pointer != tombstonePointer() && entry_allocation != nullptr &&
+                            entryAllocationId(entry) == entry_allocation->allocation_id) {
+                            retained.push_back(*entry_allocation);
+                        }
                     }
-                    std::this_thread::yield();
-                }
-                const std::uint64_t version = lifecycle_version.load(std::memory_order_acquire);
-                for (std::size_t i = 0; i < KLiveIndexCapacity; ++i) {
-                    const LiveIndexEntry &entry = live_index[i];
-                    void *pointer = entryPointer(entry);
-                    LiveAllocation *entry_allocation = entryAllocation(entry);
-                    if (pointer != nullptr && pointer != tombstonePointer() && entry_allocation != nullptr &&
-                        entryAllocationId(entry) == entry_allocation->allocation_id) {
-                        retained.push_back(*entry_allocation);
-                    }
-                }
-                if (version == lifecycle_version.load(std::memory_order_acquire) &&
-                    lifecycle_writers.load(std::memory_order_acquire) == 0) {
-                    break;
-                }
-                if (std::chrono::steady_clock::now() >= retained_deadline) {
-                    lifecycle_readers.fetch_sub(1, std::memory_order_release);
-                    error = "timed out stabilizing retained allocation state";
-                    return false;
-                }
-            }
+                },
+                [] { return std::chrono::steady_clock::now(); }, [] { std::this_thread::yield(); });
         }
         catch (...) {
             lifecycle_readers.fetch_sub(1, std::memory_order_release);
             throw;
         }
         lifecycle_readers.fetch_sub(1, std::memory_order_release);
+        if (!stable) {
+            error = "timed out stabilizing retained allocation state";
+            return false;
+        }
 
         const std::uint64_t captured_ms = monotonicMs();
         std::vector<AllocationProfileAggregation::RetainedSample> prepared;
