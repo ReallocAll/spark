@@ -348,6 +348,16 @@ Unknown fields are silently ignored.
 | `backgroundProfilerThreadDumper` | string | `"default"` | Thread selection: `default` (server thread) or `all`. |
 | `disableResponseBroadcast` | bool | `false` | Restrict result notifications to the originating player. |
 
+The native plugin also accepts the Java-compatible environment variables
+`SPARK_VIEWERURL`, `SPARK_BYTEBINURL`, `SPARK_BYTESOCKSHOST`,
+`SPARK_BACKGROUNDPROFILER`, `SPARK_BACKGROUNDPROFILERINTERVAL`,
+`SPARK_BACKGROUNDPROFILERTHREADGROUPER`, `SPARK_BACKGROUNDPROFILERTHREADDUMPER`,
+and `SPARK_DISABLERESPONSEBROADCAST`. Environment values override TOML values
+in memory and are not written to `config.toml`. Boolean values follow Java's
+`Boolean.parseBoolean` behavior; invalid interval text leaves the TOML value
+unchanged, while endpoint, thread-mode, and out-of-range interval values make
+startup reject the configuration.
+
 Trusted viewer public keys are stored separately in `trusted-viewers.json` (a
 JSON array of base64-encoded X.509 keys). The `trust-viewer` command appends to
 this file without touching `config.toml`.

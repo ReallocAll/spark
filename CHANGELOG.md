@@ -26,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Java spark-compatible TPS, tick-duration, and process/system CPU placeholders
   from Spark's live rolling statistics. Spark continues normally when PAPI is not
   installed or active.
+- Support Java-compatible Spark configuration environment variables.
 
 ### Fixed
 

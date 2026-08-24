@@ -140,6 +140,7 @@ endif ()
 # --- platform-independent core: profiler, stats, proto, net (no Endstone) ---
 add_library(spark_core STATIC
         src/core/config/spark_config.cpp
+        src/core/config/spark_config_environment.cpp
         src/core/config/trusted_viewers.cpp
         src/core/recovery/journal_reader.cpp
         src/core/recovery/recovery_player.cpp

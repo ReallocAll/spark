@@ -17,6 +17,12 @@ void testSaveAndReload();
 void testEmptyToml();
 void testTomlWithComments();
 void testBoundedAndTrailingInput();
+void testEnvironmentOverrides();
+void testEnvironmentMissingAndExactNames();
+void testEnvironmentInvalidIntegerFallback();
+void testEnvironmentBooleanParsing();
+void testEnvironmentValidationIsAtomic();
+void testEnvironmentLoadOrCreateDoesNotPersist();
 
 }  // namespace spark::config_test
 
