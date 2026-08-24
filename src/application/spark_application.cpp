@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <utility>
 
+#include "application/command/profiler_action_resolver.h"
 #include "native/sampler/heartbeat.h"
 #include "net/profile_file.h"
 
@@ -60,33 +61,30 @@ SparkApplication::SparkApplication(std::string bds_executable_sha256, const std:
 
 void SparkApplication::registerCommands()
 {
-    registry_.registerCommand(
-        {"profiler", "sampler"}, "start/stop/info/cancel/open/trust-viewer an execution or allocation profile",
-        "spark.profiler", true, [this](CommandSender &sender, const Arguments &args) {
-            const std::string &action = args.subCommand();
-            if (action == "info") {
-                profiler_.cmdInfo(sender);
-                return;
-            }
-            if (action == "open") {
-                profiler_.cmdOpen(sender, args);
-            }
-            else if (action == "trust-viewer") {
-                profiler_.cmdTrustViewer(sender, args);
-            }
-            else if (action == "cancel") {
-                profiler_.cmdCancel(sender);
-            }
-            else if (action == "stop" || action == "upload" || args.boolFlag("stop") || args.boolFlag("upload")) {
-                profiler_.cmdStop(sender, args);
-            }
-            else if (action == "start") {
-                profiler_.cmdStart(sender, args);
-            }
-            else {
-                profiler_.cmdInfo(sender);
-            }
-        });
+    registry_.registerCommand({"profiler", "sampler"},
+                              "start/stop/info/cancel/open/trust-viewer an execution or allocation profile",
+                              "spark.profiler", true, [this](CommandSender &sender, const Arguments &args) {
+                                  switch (resolveProfilerAction(args)) {
+                                  case ProfilerAction::Info:
+                                      profiler_.cmdInfo(sender);
+                                      break;
+                                  case ProfilerAction::Open:
+                                      profiler_.cmdOpen(sender, args);
+                                      break;
+                                  case ProfilerAction::TrustViewer:
+                                      profiler_.cmdTrustViewer(sender, args);
+                                      break;
+                                  case ProfilerAction::Cancel:
+                                      profiler_.cmdCancel(sender);
+                                      break;
+                                  case ProfilerAction::Stop:
+                                      profiler_.cmdStop(sender, args);
+                                      break;
+                                  case ProfilerAction::Start:
+                                      profiler_.cmdStart(sender, args);
+                                      break;
+                                  }
+                              });
     registry_.registerCommand({"tps", "cpu"}, "rolling TPS, MSPT percentiles, and CPU usage", "spark.tps", false,
                               [this](CommandSender &sender, const Arguments &) { health_.cmdTps(sender); });
     registry_.registerCommand({"ping"}, "player ping RTT statistics", "spark.ping", false,

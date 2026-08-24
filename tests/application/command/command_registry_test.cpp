@@ -71,5 +71,21 @@ int main()
     assert(saw_public);
     assert(!saw_profiler_details);
 
+    sender.permissions["endstone.command.spark"] = true;
+    sender.messages.clear();
+    registry.sendHelp(sender);
+    assert(sender.messages.size() >= 5);
+
+    sender.permissions["endstone.command.spark"] = false;
+    sender.permissions["spark"] = true;
+    sender.messages.clear();
+    registry.sendHelp(sender);
+    assert(sender.messages.size() >= 5);
+
+    sender.permissions["spark"] = false;
+    sender.errors.clear();
+    registry.dispatch(sender, {"profile", "start"});
+    assert(sender.errors.size() == 1);
+
     return 0;
 }

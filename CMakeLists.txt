@@ -199,6 +199,7 @@ endif ()
 add_library(spark_application STATIC
         src/application/activity/activity_command.cpp
         src/application/command/command_registry.cpp
+        src/application/command/profiler_action_resolver.cpp
         src/application/health/health_command.cpp
         src/application/health/health_command_report.cpp
         src/application/health/health_report.cpp
