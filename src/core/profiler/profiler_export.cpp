@@ -364,6 +364,32 @@ std::string Profiler::exportData(const ExportContext &ctx, const AllocationSnaps
             std::to_string(spark::AllocationSampler::moduleRegistryCapacity());
         meta.extra_platform_metadata["Allocation profile node capacity"] =
             std::to_string(spark::AllocationSampler::profileNodeCapacity());
+        meta.extra_platform_metadata["Allocation profile time-entry capacity"] =
+            std::to_string(spark::AllocationSampler::profileTimeEntryCapacity());
+        meta.extra_platform_metadata["Allocation profile storage sample drops"] =
+            std::to_string(allocation_sampler_.profileStorageSampleDrops());
+        meta.extra_platform_metadata["Allocation profile storage exhausted"] =
+            allocation_sampler_.profileStorageExhausted() ? "true" : "false";
+        meta.extra_platform_metadata["Allocation pending samples dropped"] =
+            std::to_string(allocation_sampler_.pendingSampleDrops());
+        meta.extra_platform_metadata["Allocation pending sample capacity"] =
+            std::to_string(spark::AllocationSampler::pendingSampleCapacity());
+        meta.extra_platform_metadata["Allocation pending capacity drops"] =
+            std::to_string(allocation_sampler_.pendingCapacityDrops());
+        meta.extra_platform_metadata["Allocation pending stale drops"] =
+            std::to_string(allocation_sampler_.pendingStaleDrops());
+        meta.extra_platform_metadata["Allocation pending final drops"] =
+            std::to_string(allocation_sampler_.pendingFinalDrops());
+        meta.extra_platform_metadata["Allocation module overflow frames"] =
+            std::to_string(allocation_sampler_.moduleOverflowFrames());
+        meta.extra_platform_metadata["Allocation retained history windows"] =
+            std::to_string(allocation_sampler_.retainedHistoryWindows());
+        meta.extra_platform_metadata["Allocation history samples pruned"] =
+            std::to_string(allocation_sampler_.historySamplesPruned());
+        meta.extra_platform_metadata["Allocation history bytes pruned"] =
+            std::to_string(allocation_sampler_.historyBytesPruned());
+        meta.extra_platform_metadata["Allocation history truncated"] =
+            allocation_sampler_.historyTruncated() ? "true" : "false";
 #ifdef __linux__
         meta.extra_platform_metadata["Allocation skipped modules"] =
             std::to_string(allocation_sampler_.skippedModuleCount());
