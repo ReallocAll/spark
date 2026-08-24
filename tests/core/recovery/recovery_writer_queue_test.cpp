@@ -18,7 +18,11 @@
 namespace spark {
 
 struct RecoveryWriterQueueTestAccess {
-    static void enable(RecoveryWriter &writer) { writer.enabled_.store(true, std::memory_order_release); }
+    static void enable(RecoveryWriter &writer)
+    {
+        writer.enabled_.store(true, std::memory_order_release);
+        writer.accepting_.store(true, std::memory_order_release);
+    }
 
     static std::size_t queued(const RecoveryWriter &writer)
     {
