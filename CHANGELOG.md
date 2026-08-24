@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Record upstream-compatible rolling TPS, tick-duration, CPU, world, and ping metric series in health and sampler data.
 - Use globally aligned profiling windows and stop timed profiles on a monotonic deadline even while server ticks are stalled.
 - Measure server uptime from the monotonic clock anchor so wall-clock adjustments cannot skew health reports.
+- Poll ping and network metrics on monotonic deadlines so server lag does not stretch their sampling cadence.
 - Align command argument parsing with Java spark and hide inaccessible commands from help output.
 - Align profiler action precedence, umbrella permissions, and zero-interval mode defaults with Java spark.
 - Add Java-compatible health report commands and a live health dashboard with

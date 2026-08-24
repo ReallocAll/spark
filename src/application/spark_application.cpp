@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "application/command/profiler_action_resolver.h"
+#include "core/util/monotonic_time.h"
 #include "native/sampler/heartbeat.h"
 #include "net/profile_file.h"
 
@@ -113,12 +114,11 @@ void SparkApplication::onTick(double mspt)
         auto [entities, chunks] = metadata_provider_.worldGauges();
         statistics_.recordWorldGauges(entities, chunks);
     }
-    // Poll ping every ~10 seconds (200 ticks at 20 TPS).
-    if (++tick_counter_ % 200 == 0) {
+    const MonitoringDue monitoring_due = monitoring_schedule_.poll(monotonicUnixMillis());
+    if (monitoring_due.ping) {
         health_.pollPing();
     }
-    // Poll network every ~60 seconds (1200 ticks at 20 TPS).
-    if (tick_counter_ % 1200 == 0) {
+    if (monitoring_due.network) {
         health_.pollNetwork();
     }
     health_.onTick();
