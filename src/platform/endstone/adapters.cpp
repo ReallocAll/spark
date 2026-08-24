@@ -304,7 +304,7 @@ void EndstoneNotifier::notify(const std::string &sender_name, const std::string 
     }
     else {
         for (const auto &player : server_.getOnlinePlayers()) {
-            if (player->hasPermission("endstone.command.spark")) {
+            if (player->getName() == sender_name || player->hasPermission("endstone.command.spark")) {
                 player->sendMessage(formatPlayerMessage(text));
             }
         }

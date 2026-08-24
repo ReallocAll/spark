@@ -215,4 +215,31 @@ void TrustedViewersState::add(const std::string &b64_key)
     }
 }
 
+bool TrustedViewersState::addAndSave(const std::string &b64_key)
+{
+    last_error_.clear();
+    if (b64_key.empty()) {
+        last_error_ = "Trusted viewer key is empty";
+        return false;
+    }
+    if (b64_key.size() > KMaxTrustedViewerKeyBytes) {
+        last_error_ = "Trusted viewer key exceeds the maximum size";
+        return false;
+    }
+    if (contains(b64_key)) {
+        return true;
+    }
+    if (keys_.size() >= KMaxTrustedViewerKeys) {
+        last_error_ = "Trusted viewer key limit reached";
+        return false;
+    }
+
+    keys_.push_back(b64_key);
+    if (save()) {
+        return true;
+    }
+    keys_.pop_back();
+    return false;
+}
+
 }  // namespace spark
