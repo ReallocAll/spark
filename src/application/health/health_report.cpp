@@ -128,6 +128,7 @@ HealthData captureHealthData(StatisticsService &statistics, ProfileMetadataProvi
 {
     ExportContext context;
     metadata_provider.gatherServerMetadata(context, now_ms);
+    metadata_provider.gatherWorldMetadata(context);
     context.statistics = statistics.snapshot();
     context.metrics = statistics.metricsSnapshot();
     context.system_stats = gatherSystemStats(".");
@@ -144,6 +145,7 @@ HealthData captureHealthData(StatisticsService &statistics, ProfileMetadataProvi
     data.endstone_version = context.endstone_version;
     data.minecraft_version = context.minecraft_version;
     data.generated_time_ms = now_ms;
+    data.world = std::move(context.world);
 
     data.platform_stats.present = true;
     data.platform_stats.player_count = context.player_count;
