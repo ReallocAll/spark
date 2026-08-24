@@ -101,6 +101,11 @@ if (WIN32)
     target_sources(spark_native PRIVATE
             src/native/symbol/dbghelp_manager.cpp
             src/native/symbol/symbol_guess_windows.cpp
+            src/native/symbol/symbol_guess_windows_support.cpp
+            src/native/symbol/symbol_guess_windows_core.cpp
+            src/native/symbol/symbol_guess_windows_rtti.cpp
+            src/native/symbol/symbol_guess_windows_strings.cpp
+            src/native/symbol/symbol_guess_windows_misc.cpp
             src/native/sampler/capture_windows.cpp
             src/native/alloc/allocation_sampler_windows.cpp
             src/native/alloc/windows_thread_suspension.cpp)
