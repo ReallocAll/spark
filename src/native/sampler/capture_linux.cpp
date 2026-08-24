@@ -1,11 +1,12 @@
 #include <dlfcn.h>
 #include <fcntl.h>
-#include <limits.h>
 #include <poll.h>
 #include <unistd.h>
 
 #include <atomic>
+#include <bit>
 #include <cerrno>
+#include <climits>
 #include <csignal>
 #include <cstdint>
 #include <cstdio>
@@ -34,8 +35,6 @@ constexpr std::uint64_t KComplete = 3;
 using Token = std::uintptr_t;
 constexpr Token KMaxToken = static_cast<Token>(std::numeric_limits<std::uint64_t>::max() >> KPhaseBits);
 
-static_assert(sizeof(Token) == sizeof(std::uint64_t));
-static_assert(std::numeric_limits<Token>::digits >= std::numeric_limits<std::uint64_t>::digits);
 static_assert(KMaxToken <= static_cast<Token>(std::numeric_limits<std::uint64_t>::max() >> KPhaseBits));
 
 std::atomic<std::uint64_t> GState{0};
@@ -257,7 +256,7 @@ bool installIgnoredAction()
 
 Token nextToken()
 {
-    Token token = GNextToken.load(std::memory_order_relaxed);
+    auto token = GNextToken.load(std::memory_order_relaxed);
     for (;;) {
         if (token == 0 || token > KMaxToken) {
             return 0;
@@ -279,7 +278,7 @@ void handler(int, siginfo_t *info, void *)
     if (info == nullptr || info->si_code != SI_QUEUE) {
         return;
     }
-    const Token token = reinterpret_cast<Token>(info->si_value.sival_ptr);
+    const auto token = std::bit_cast<Token>(info->si_value.sival_ptr);
     if (token == 0 || token > KMaxToken) {
         return;
     }
@@ -441,7 +440,7 @@ bool Capture::captureThread(std::uint64_t tid, CaptureBuffer &out)
     if (!monotonicNow(start)) {
         return false;
     }
-    const Token token = nextToken();
+    const auto token = nextToken();
     if (token == 0) {
         return false;
     }
@@ -460,7 +459,7 @@ bool Capture::captureThread(std::uint64_t tid, CaptureBuffer &out)
     info.si_code = SI_QUEUE;
     info.si_pid = getpid();
     info.si_uid = getuid();
-    info.si_value.sival_ptr = reinterpret_cast<void *>(token);
+    info.si_value.sival_ptr = std::bit_cast<void *>(token);
     if (::syscall(SYS_rt_tgsigqueueinfo, getpid(), static_cast<pid_t>(tid), KSignal, &info) != 0) {
         std::uint64_t expected = requested_state;
         GState.compare_exchange_strong(expected, 0, std::memory_order_acq_rel);

@@ -1,9 +1,9 @@
 #include <pthread.h>
-#include <signal.h>
 #include <unistd.h>
 
 #include <atomic>
 #include <chrono>
+#include <csignal>
 #include <cstdint>
 #include <cstdio>
 #include <limits>

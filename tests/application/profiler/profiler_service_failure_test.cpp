@@ -49,14 +49,14 @@ class Metadata final : public spark::ProfileMetadataProvider {
 public:
     void gatherServerMetadata(spark::ExportContext &, std::int64_t) override
     {
-        if (throw_server_) {
+        if (throw_server) {
             throw std::runtime_error("server metadata failed");
         }
     }
     void gatherWorldMetadata(spark::ExportContext &) override {}
     std::vector<spark::NativePluginSource> nativePluginSources() override
     {
-        if (throw_native_) {
+        if (throw_native) {
             throw std::runtime_error("native metadata failed");
         }
         return {};
@@ -65,8 +65,8 @@ public:
     std::int64_t playerCount() override { return 0; }
     spark::PlayerPingProvider *playerPingProvider() override { return nullptr; }
 
-    bool throw_native_ = false;
-    bool throw_server_ = false;
+    bool throw_native = false;
+    bool throw_server = false;
 };
 
 class ThrowingNotifier final : public spark::ResultNotifier {
@@ -114,7 +114,7 @@ void test_background_start_fails_closed_on_metadata_exception()
 {
     spark::StatisticsService statistics;
     Metadata metadata;
-    metadata.throw_native_ = true;
+    metadata.throw_native = true;
     Dispatcher dispatcher;
     ThrowingNotifier notifier;
     spark::TrustedViewersState trusted(std::filesystem::temp_directory_path() / "spark-profiler-failure-viewers.json");
@@ -143,7 +143,7 @@ void test_export_metadata_exception_restores_background()
 
     spark::StatisticsService statistics;
     Metadata metadata;
-    metadata.throw_server_ = true;
+    metadata.throw_server = true;
     Dispatcher dispatcher;
     ThrowingNotifier notifier;
     spark::TrustedViewersState trusted(std::filesystem::temp_directory_path() / "spark-profiler-failure-viewers.json");

@@ -1,0 +1,36 @@
+#ifndef SPARK_TESTS_CORE_RECOVERY_JOURNAL_TEST_CASES_H
+#define SPARK_TESTS_CORE_RECOVERY_JOURNAL_TEST_CASES_H
+
+void testFileHeaderMagic();
+void testRecordSerialization();
+void testModuleDefRoundTrip();
+void testSampleRoundTrip();
+void testWriterBasic();
+void testWriterStopJoins();
+void testSessionIsolation();
+void testSessionConfigRoundTrip();
+void testSessionConfigTrailingBytesRejected();
+void testLegacyV2Replay();
+void testUnsupportedAndMixedVersionsRejected();
+void testV3GlobalWindowsAndClippedStats();
+void testRecoveryPlayerReplay();
+void testRecoveryPlayerEmptyJournal();
+void testCleanEndDetected();
+void testNoCleanEndRecovered();
+void testLiveOnlyRefused();
+void testCleanEndEarlyExit();
+void testNonContiguousModuleId();
+void testMissingModuleDefReferenced();
+void testRollingJournalRecovery();
+void testCorruptSnapshotWrongSession();
+void testTruncatedSnapshot();
+void testAllocationSentinelModule0();
+void testMissingSentinelModule0();
+void testStopWithoutCleanEndRecoverable();
+void testSnapshotOnlyThreadIsNotExported();
+void testLegacyV2RebasesFromMinimumRetainedWindow();
+void testRecoveryHistoryExecution();
+void testRecoveryHistoryCumulativeAllocation();
+void testRecoveryRejectsExtremeIntegers();
+
+#endif  // SPARK_TESTS_CORE_RECOVERY_JOURNAL_TEST_CASES_H

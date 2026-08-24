@@ -5,7 +5,22 @@ else ()
 endif ()
 
 add_executable(spark_selftest
-        selftest.cpp)
+        selftest.cpp
+        selftest_internal.cpp
+        selftest_support.cpp
+        selftest_basic.cpp
+        selftest_capture.cpp
+        selftest_sampler.cpp
+        selftest_live.cpp
+        selftest_viewer.cpp
+        selftest_async.cpp
+        selftest_statistics.cpp
+        selftest_allocation_common.cpp
+        selftest_allocation_selection.cpp
+        selftest_allocation_sampling.cpp
+        selftest_allocation_pressure.cpp
+        selftest_allocation_lifecycle.cpp
+        selftest_allocation_linux.cpp)
 target_link_libraries(spark_selftest PRIVATE spark_application)
 set_target_properties(spark_selftest PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
@@ -246,7 +261,13 @@ set_target_properties(spark_stall_watchdog_test PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME spark_stall_watchdog_test COMMAND spark_stall_watchdog_test)
 
-add_executable(spark_journal_test core/recovery/journal_test.cpp)
+add_executable(spark_journal_test
+        core/recovery/journal_test_main.cpp
+        core/recovery/journal_test_support.cpp
+        core/recovery/journal_format_test.cpp
+        core/recovery/journal_writer_reader_test.cpp
+        core/recovery/recovery_player_test.cpp
+        core/recovery/recovery_rolling_test.cpp)
 target_link_libraries(spark_journal_test PRIVATE spark_core)
 set_target_properties(spark_journal_test PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
@@ -319,7 +340,14 @@ set_target_properties(spark_symbol_guess_dwarf_test PROPERTIES
 add_test(NAME spark_symbol_guess_dwarf_test COMMAND spark_symbol_guess_dwarf_test)
 
 if (WIN32)
-    add_executable(spark_symbol_guess_windows_test native/symbol/symbol_guess_windows_test.cpp)
+    add_executable(spark_symbol_guess_windows_test
+            native/symbol/symbol_guess_windows_test.cpp
+            native/symbol/symbol_guess_windows_test_support.cpp
+            native/symbol/symbol_guess_windows_test_core.cpp
+            native/symbol/symbol_guess_windows_test_rtti.cpp
+            native/symbol/symbol_guess_windows_test_strings.cpp
+            native/symbol/symbol_guess_windows_test_misc.cpp
+            native/symbol/symbol_guess_windows_test_evaluator.cpp)
     target_link_libraries(spark_symbol_guess_windows_test PRIVATE spark_core)
     set_target_properties(spark_symbol_guess_windows_test PROPERTIES
             RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")

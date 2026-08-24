@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <deque>
+#include <limits>
 #include <map>
 #include <memory>
 #include <optional>
@@ -99,6 +100,10 @@ RecoveredProfile RecoveryPlayer::replay(const std::filesystem::path &directory)
         return result;
     }
 
+    if (journal.session_id > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
+        result.error = "journal session_id exceeds INT64_MAX";
+        return result;
+    }
     result.session_start_ms = static_cast<std::int64_t>(journal.session_id);
     const std::int64_t replay_end_ms = nowMs();
     result.has_clean_end = journal.has_clean_end;
@@ -179,6 +184,30 @@ RecoveredProfile RecoveryPlayer::replay(const std::filesystem::path &directory)
     CallTree global_tree;
     std::map<std::uint64_t, ThreadCallTree> thread_trees;
     std::unordered_map<std::uint64_t, std::string> thread_names;
+    std::optional<std::int32_t> max_sample_window;
+    for (const auto &rec : journal.records) {
+        if (rec.type != RecordType::Sample) {
+            continue;
+        }
+        std::uint64_t thread_id;
+        std::uint64_t tick_id;
+        std::uint64_t weight;
+        std::int32_t window;
+        std::vector<FrameKey> frames;
+        if (rec.asSample(thread_id, tick_id, window, weight, frames)) {
+            max_sample_window = max_sample_window ? std::max(*max_sample_window, window) : window;
+        }
+    }
+
+    std::optional<std::int32_t> retained_window_cutoff;
+    if (max_sample_window) {
+        constexpr std::int64_t min_window = std::numeric_limits<std::int32_t>::min();
+        constexpr std::int64_t max_window = std::numeric_limits<std::int32_t>::max();
+        const std::int64_t cutoff = std::clamp(
+            static_cast<std::int64_t>(*max_sample_window) - profiling_window::kHistorySize, min_window, max_window);
+        retained_window_cutoff = static_cast<std::int32_t>(cutoff);
+    }
+
     std::optional<std::uint64_t> min_tick_id;
     std::optional<std::uint64_t> max_tick_id;
     std::optional<std::int32_t> min_window;
@@ -205,18 +234,11 @@ RecoveredProfile RecoveryPlayer::replay(const std::filesystem::path &directory)
             std::uint64_t weight;
             std::int32_t window;
             std::vector<FrameKey> frames;
-            if (rec.asSample(thread_id, tick_id, window, weight, frames)) {
+            if (rec.asSample(thread_id, tick_id, window, weight, frames) && retained_window_cutoff &&
+                window >= *retained_window_cutoff) {
                 min_tick_id = min_tick_id ? std::min(*min_tick_id, tick_id) : tick_id;
                 max_tick_id = max_tick_id ? std::max(*max_tick_id, tick_id) : tick_id;
                 min_window = min_window ? std::min(*min_window, window) : window;
-            }
-        }
-        else if (rec.type == RecordType::TickEvent) {
-            std::uint64_t tick_id;
-            double mspt;
-            if (rec.asTickEvent(tick_id, mspt)) {
-                min_tick_id = min_tick_id ? std::min(*min_tick_id, tick_id) : tick_id;
-                max_tick_id = max_tick_id ? std::max(*max_tick_id, tick_id) : tick_id;
             }
         }
     }
@@ -232,8 +254,22 @@ RecoveredProfile RecoveryPlayer::replay(const std::filesystem::path &directory)
     }
 
     const std::uint64_t retained_tick_start = min_tick_id.value_or(0);
+    if (min_tick_id && max_tick_id &&
+        *max_tick_id - *min_tick_id >= static_cast<std::uint64_t>(std::numeric_limits<std::int32_t>::max())) {
+        result.error = "retained tick span exceeds INT32_MAX";
+        return result;
+    }
     if (legacy_window_replay) {
-        result.session_start_ms += static_cast<std::int64_t>(retained_window_start) * profiling_window::kSizeMs;
+        const std::int64_t window_offset_ms =
+            static_cast<std::int64_t>(retained_window_start) * profiling_window::kSizeMs;
+        constexpr std::int64_t min_time = std::numeric_limits<std::int64_t>::min();
+        constexpr std::int64_t max_time = std::numeric_limits<std::int64_t>::max();
+        if ((window_offset_ms > 0 && result.session_start_ms > max_time - window_offset_ms) ||
+            (window_offset_ms < 0 && result.session_start_ms < min_time - window_offset_ms)) {
+            result.error = "legacy journal session start overflows INT64_MAX";
+            return result;
+        }
+        result.session_start_ms += window_offset_ms;
     }
     else {
         result.session_start_ms = std::max(
@@ -255,7 +291,8 @@ RecoveredProfile RecoveryPlayer::replay(const std::filesystem::path &directory)
             std::uint64_t thread_id, tick_id, weight;
             std::int32_t window;
             std::vector<FrameKey> frames;
-            if (!rec.asSample(thread_id, tick_id, window, weight, frames)) {
+            if (!rec.asSample(thread_id, tick_id, window, weight, frames) || !retained_window_cutoff ||
+                window < *retained_window_cutoff) {
                 continue;
             }
 
@@ -290,7 +327,8 @@ RecoveredProfile RecoveryPlayer::replay(const std::filesystem::path &directory)
         else if (rec.type == RecordType::TickEvent) {
             std::uint64_t tick_id;
             double mspt;
-            if (rec.asTickEvent(tick_id, mspt)) {
+            if (rec.asTickEvent(tick_id, mspt) && min_tick_id && max_tick_id && tick_id >= *min_tick_id &&
+                tick_id <= *max_tick_id) {
                 tick_events.push_back({.tick_id = tick_id, .mspt = mspt});
             }
         }

@@ -118,14 +118,14 @@ bool ProfilerService::armProfilerTimeout(std::int64_t timeout_seconds) noexcept
 void ProfilerService::finishProfiler(const std::string &sender_name, bool sender_is_player, bool save,
                                      const std::string &comment)
 {
-    const auto notifyBestEffort = [this](const std::string &name, const std::string &message) noexcept {
+    const auto notify_best_effort = [this](const std::string &name, const std::string &message) noexcept {
         try {
             notifier_.notify(name, message);
         }
         catch (...) {  // NOLINT(bugprone-empty-catch): notification is best effort.
         }
     };
-    const auto restoreBackground = [this]() noexcept {
+    const auto restore_background = [this]() noexcept {
         background_started_ = false;
         if (!restart_background_after_export_) {
             return;
@@ -141,16 +141,16 @@ void ProfilerService::finishProfiler(const std::string &sender_name, bool sender
         const bool stopped = !profiler_.running();
         if (stopped) {
             session_type_ = SessionType::None;
-            restoreBackground();
+            restore_background();
         }
         std::string backend_error;
         if (stopped && profiler_.backendFailure(backend_error)) {
-            notifyBestEffort(sender_name,
-                             "Allocation profiler FAILED; incomplete profile data was discarded: " + backend_error);
-            notifyBestEffort(sender_name, "The allocation profiler backend is ready for a new session.");
+            notify_best_effort(sender_name,
+                               "Allocation profiler FAILED; incomplete profile data was discarded: " + backend_error);
+            notify_best_effort(sender_name, "The allocation profiler backend is ready for a new session.");
         }
         else {
-            notifyBestEffort(sender_name, "Profiler stop failed: " + stop_error);
+            notify_best_effort(sender_name, "Profiler stop failed: " + stop_error);
         }
         return;
     }
@@ -175,17 +175,17 @@ void ProfilerService::finishProfiler(const std::string &sender_name, bool sender
         }
     }
     catch (const std::exception &error) {
-        restoreBackground();
+        restore_background();
         try {
-            notifyBestEffort(sender_name, std::string("Failed to prepare the profile export: ") + error.what());
+            notify_best_effort(sender_name, std::string("Failed to prepare the profile export: ") + error.what());
         }
         catch (...) {  // NOLINT(bugprone-empty-catch): notification is best effort.
         }
         return;
     }
     catch (...) {
-        restoreBackground();
-        notifyBestEffort(sender_name, "Failed to prepare the profile export.");
+        restore_background();
+        notify_best_effort(sender_name, "Failed to prepare the profile export.");
         return;
     }
 
@@ -204,8 +204,8 @@ void ProfilerService::finishProfiler(const std::string &sender_name, bool sender
     }
     catch (...) {
         exporting_.store(false);
-        restoreBackground();
-        notifyBestEffort(sender_name, "Failed to start the profile export worker.");
+        restore_background();
+        notify_best_effort(sender_name, "Failed to start the profile export worker.");
     }
 }
 
