@@ -265,19 +265,23 @@ set_target_properties(spark_trusted_viewers_test PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME spark_trusted_viewers_test COMMAND spark_trusted_viewers_test)
 
-add_executable(spark_crypto_test core/ws/crypto_test.cpp)
+add_executable(spark_crypto_test core/ws/crypto_test.cpp core/ws/crypto_test_keys.cpp)
 target_link_libraries(spark_crypto_test PRIVATE spark_core)
 set_target_properties(spark_crypto_test PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME spark_crypto_test COMMAND spark_crypto_test)
 
-add_executable(spark_ws_proto_test core/ws/ws_proto_test.cpp)
+add_executable(spark_ws_proto_test core/ws/ws_proto_test.cpp core/ws/crypto_test_keys.cpp)
 target_link_libraries(spark_ws_proto_test PRIVATE spark_core)
 set_target_properties(spark_ws_proto_test PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME spark_ws_proto_test COMMAND spark_ws_proto_test)
 
-add_executable(spark_websocket_lifecycle_test net/websocket_lifecycle_test.cpp)
+add_executable(spark_websocket_lifecycle_test
+        net/websocket_lifecycle_test.cpp
+        net/websocket_lifecycle_test_support.cpp
+        net/websocket_viewer_lifecycle_test.cpp
+        core/ws/crypto_test_keys.cpp)
 target_link_libraries(spark_websocket_lifecycle_test PRIVATE spark_core)
 set_target_properties(spark_websocket_lifecycle_test PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
