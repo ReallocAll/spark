@@ -1,3 +1,4 @@
+#include <atomic>
 #include <cassert>
 #include <chrono>
 #include <condition_variable>
@@ -304,9 +305,16 @@ void testJournalPreservedAcrossTimeout()
 
 void testRepeatedStopIsIdempotent()
 {
+    std::atomic<int> close_count{0};
     spark::RecoveryWriter::Config cfg;
     cfg.directory = makeTempDir("repeated-stop");
     cfg.session_id = 3;
+    cfg.io_hook = [&close_count](spark::RecoveryWriter::IoOperation operation) {
+        if (operation == spark::RecoveryWriter::IoOperation::Close) {
+            close_count.fetch_add(1, std::memory_order_relaxed);
+        }
+        return true;
+    };
 
     spark::RecoveryWriter writer(cfg);
     assert(writer.start());
@@ -314,7 +322,32 @@ void testRepeatedStopIsIdempotent()
     assert(writer.stop(1s));
     assert(writer.stop(20ms));
     assert(writer.tryReap());
+    assert(close_count.load(std::memory_order_relaxed) == 1);
     std::cout << "testRepeatedStopIsIdempotent: PASS\n";
+}
+
+void testTimeoutThenLaterReap()
+{
+    IoGate gate;
+    auto cfg = gatedConfig("timeout-later-reap", gate);
+    spark::RecoveryWriter writer(cfg);
+    assert(writer.start());
+
+    gate.arm(spark::RecoveryWriter::IoOperation::Close);
+    writer.requestStop();
+    assert(gate.waitEntered());
+    assertBoundedTimeout(writer);
+    assert(!writer.tryReap());
+
+    gate.release();
+    const auto deadline = std::chrono::steady_clock::now() + 1s;
+    while (!writer.workerExited() && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::yield();
+    }
+    assert(writer.workerExited());
+    assert(writer.tryReap());
+    assert(writer.tryReap());
+    std::cout << "testTimeoutThenLaterReap: PASS\n";
 }
 
 void testProfilerShutdownFailsClosedWhileWriterLives()
@@ -355,6 +388,7 @@ int main()
     testPostStopAdmissionClosed();
     testJournalPreservedAcrossTimeout();
     testRepeatedStopIsIdempotent();
+    testTimeoutThenLaterReap();
     testProfilerShutdownFailsClosedWhileWriterLives();
     std::cout << "All recovery writer shutdown tests passed.\n";
     return 0;
