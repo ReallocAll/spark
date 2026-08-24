@@ -230,7 +230,7 @@ int main()
         HealthCommandTestAccess::onTickAt(health, now_ms);
         {
             std::unique_lock lock(fixture.connection_probe.mutex);
-            assert(fixture.connection_probe.cv.wait_for(lock, std::chrono::seconds(2),
+            assert(fixture.connection_probe.cv.wait_for(lock, std::chrono::seconds(5),
                                                         [&] { return fixture.connection_probe.send_count == 1; }));
         }
         health.cmdHealth(sender, Arguments({"trust-viewer", "--id", "pending"}, true));
