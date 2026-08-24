@@ -33,12 +33,11 @@ struct NativePluginSource {
 
 inline constexpr int kMaxSamplingIntervalMs = 1000;
 
-// Parsed `/spark profiler start` options (spark's flag set).
 struct ProfilerOptions {
     int interval_ms = 4;
     std::int32_t allocation_interval_bytes = kDefaultAllocationIntervalBytes;
     std::int64_t timeout_seconds = -1;
-    std::int64_t only_ticks_over_ms = -1;  // -1 = disabled
+    std::int64_t only_ticks_over_ms = -1;
     bool ignore_sleeping = false;
     bool regex = false;
     std::vector<std::string> threads;
@@ -50,18 +49,16 @@ struct ProfilerOptions {
     bool creator_is_player = false;
     ThreadGrouperMode thread_grouper = ThreadGrouperMode::ByPool;
     bool is_background = false;
-    // Deterministic service-failure injection used only by the offline selftest.
     bool fail_allocation_aggregator_for_testing = false;
 };
 
-// Server facts needed only at export time (read from Endstone on the main thread).
 struct ExportContext {
     std::string endstone_version;
     std::string minecraft_version;
     std::string bds_executable_sha256;
-    std::string comment;  // overrides the start-time comment when non-empty
+    std::string comment;
     std::int64_t player_count = -1;
-    int online_mode = 0;  // 0 unknown, 1 offline, 2 online
+    int online_mode = 0;
     std::int64_t uptime_ms = 0;
     StatisticsSnapshot statistics;
     MetricsSnapshot metrics;
@@ -71,16 +68,11 @@ struct ExportContext {
     std::vector<NativePluginSource> native_plugin_sources;
     WorldInfo world;
     std::map<std::string, std::string> server_configurations;
-    // Ping rolling average snapshot for profile metadata (may be empty).
     std::vector<int> ping_samples;
-    // Network interface rolling average snapshots (may be empty).
     std::map<std::string, NetworkInterfaceSnapshot> net_snapshots;
-    // Pre-serialized SocketChannelInfo proto for live viewer (empty for normal exports).
     std::string socket_channel_info_proto;
 };
 
-// Owns either the execution sampler or the platform allocation sampler and turns
-// its call tree into a spark SamplerData payload.
 class Profiler {
 public:
     bool running() const { return running_.load(); }
@@ -102,45 +94,31 @@ public:
     const std::vector<AllocationHookCapability> &allocationHookCapabilities() const;
     std::size_t allocationHookTargetCount() const;
 
-    // Returns false and sets `error` if sampling can't start.
     bool start(const ProfilerOptions &options, std::uint64_t main_tid, std::string &error);
     void onTick(double mspt_ms);
 
-    // Two-phase stop: stopSampling() joins service threads on the main thread;
-    // exportData() performs symbolication and serialization on a background thread
-    // once sampling has stopped.
     bool stopSampling(std::string &error);
-    void stopSampling();  // compatibility helper that discards the error
+    void stopSampling();
     void requestStop() noexcept;
     std::string exportData(const ExportContext &ctx) const;
 
-    // Export while the profiler is still running.
     std::string liveExport(const ExportContext &ctx);
     bool setCurrentThreadAllocationTrackingSuppressed(bool suppressed) noexcept;
 
-    // Convenience (used by the self-test): stopSampling() + exportData().
     std::string stop(const ExportContext &ctx);
     bool cancel(std::string &error);
-    void cancel();  // compatibility helper
+    void cancel();
 
-    // Heartbeats from the execution sampler's service threads.
     const Heartbeat &samplerHeartbeat() const { return sampler_.samplerHeartbeat(); }
     const Heartbeat &aggregatorHeartbeat() const { return sampler_.aggregatorHeartbeat(); }
 
-    // Sets the recovery journal directory before start().
     void setRecoveryDirectory(std::filesystem::path dir) { recovery_dir_ = std::move(dir); }
 
-    // Deletes the recovery journal directory.  Called after a successful
-    // export, a user cancel, or a clean shutdown so the next startup does not
-    // mistake the journal for a crash to recover.  Safe to call when no
-    // journal exists.
     void discardRecoveryJournal();
 
     void journalStallBegin(std::uint64_t detected_ns, std::uint64_t last_tick_ns);
     void journalStallEnd(std::uint64_t detected_ns, std::uint64_t recovered_ns);
 
-    // Unconditionally closes the active backend and destroys native hook
-    // trampolines. Must run before the plugin module is unloaded.
     bool shutdown(std::string &error);
 
 private:
@@ -154,6 +132,8 @@ private:
     std::uint64_t activeNumberOfTicks() const;
     std::string exportData(const ExportContext &ctx, const AllocationSnapshot *allocation_snapshot) const;
     void stopRecoveryWriter();
+    bool reapRecoveryWriter();
+    bool hasPendingRecoveryWriter() const;
 
     Sampler sampler_;
     AllocationSampler allocation_sampler_;
@@ -163,7 +143,7 @@ private:
     std::int64_t start_time_ms_ = 0;
     std::int64_t end_time_ms_ = 0;
     std::int64_t auto_end_time_ms_ = -1;
-    std::int32_t interval_ = 4000;  // execution: microseconds; allocation: bytes
+    std::int32_t interval_ = 4000;
     std::filesystem::path recovery_dir_;
     mutable std::mutex recovery_mutex_;
     std::unique_ptr<RecoveryWriter> recovery_writer_;
