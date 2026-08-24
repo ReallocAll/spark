@@ -42,7 +42,7 @@ void stop(spark::Profiler &profiler)
     assert(profiler.cancel(error));
 }
 
-void assertThresholdAccepted(spark::ProfilerOptions options)
+void assertThresholdAccepted(const spark::ProfilerOptions &options)
 {
     spark::Profiler profiler;
     std::string error;

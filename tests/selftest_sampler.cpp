@@ -396,6 +396,8 @@ bool verifyAllThreadSampling()
     return true;
 }
 
+namespace {
+
 std::string escapeRegex(const std::string &text)
 {
     std::string escaped;
@@ -407,6 +409,8 @@ std::string escapeRegex(const std::string &text)
     }
     return escaped;
 }
+
+}  // namespace
 
 bool verifySelectedThreadSampling(std::uint64_t worker_tid)
 {

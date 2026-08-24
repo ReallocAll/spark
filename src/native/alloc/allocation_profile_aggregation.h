@@ -102,9 +102,10 @@ private:
         std::uint64_t bytes = 0;
     };
 
-    bool admitToTrees(const Sample &sample, CallTree &tree, std::map<std::uint64_t, ThreadCallTree> &thread_trees,
-                      std::size_t &remaining_nodes, std::size_t &remaining_time_entries, std::uint64_t *sample_count,
-                      std::uint64_t *sampled_bytes) const;
+    static bool admitToTrees(const Sample &sample, CallTree &tree,
+                             std::map<std::uint64_t, ThreadCallTree> &thread_trees, std::size_t &remaining_nodes,
+                             std::size_t &remaining_time_entries, std::uint64_t *sample_count,
+                             std::uint64_t *sampled_bytes);
     void recordDrop(std::atomic<std::uint64_t> &counter) noexcept;
     void flushPending(std::uint64_t tick_id, bool keep);
     void pruneHistory(std::int32_t current_window, bool force);

@@ -260,7 +260,7 @@ bool AllocationProfileAggregation::buildLiveSnapshot(const std::vector<RetainedS
 bool AllocationProfileAggregation::admitToTrees(const Sample &sample, CallTree &tree,
                                                 std::map<std::uint64_t, ThreadCallTree> &thread_trees,
                                                 std::size_t &remaining_nodes, std::size_t &remaining_time_entries,
-                                                std::uint64_t *sample_count, std::uint64_t *sampled_bytes) const
+                                                std::uint64_t *sample_count, std::uint64_t *sampled_bytes)
 {
     if (sample.frames.empty()) {
         return false;
