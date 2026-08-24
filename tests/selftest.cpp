@@ -63,15 +63,9 @@
 #include "selftest_internal.h"
 #include "spark_constants.h"
 
-namespace {
-using spark::selftest::waitForCondition;
-
-}  // namespace
-
 int main(int argc, char **argv)
 {
     using namespace std::chrono_literals;
-    using namespace spark::selftest;
 
     // Diagnostic: resolve a spread of addresses in a given binary to reproduce
     // symbolication crashes (e.g. the stripped bedrock_server) offline.
@@ -100,23 +94,23 @@ int main(int argc, char **argv)
 
     if (argc > 1 && std::string(argv[1]) == "--allocation-only") {
 #if defined(_WIN32) || defined(__linux__)
-        if (!verifyAllocationLifecycle()) {
+        if (!spark::selftest::verifyAllocationLifecycle()) {
             std::fprintf(stderr, "allocation-only: lifecycle test failed\n");
             return 1;
         }
-        if (!verifyAllocationThreadSelection()) {
+        if (!spark::selftest::verifyAllocationThreadSelection()) {
             std::fprintf(stderr, "allocation-only: thread selection test failed\n");
             return 1;
         }
-        if (!verifyProcessWideAllocationSampling()) {
+        if (!spark::selftest::verifyProcessWideAllocationSampling()) {
             std::fprintf(stderr, "allocation-only: process-wide test failed\n");
             return 1;
         }
-        if (!verifyAllocationContentionPolicy()) {
+        if (!spark::selftest::verifyAllocationContentionPolicy()) {
             std::fprintf(stderr, "allocation-only: contention policy test failed\n");
             return 1;
         }
-        if (!verifyAllocationResourcePressure()) {
+        if (!spark::selftest::verifyAllocationResourcePressure()) {
             std::fprintf(stderr, "allocation-only: resource pressure test failed\n");
             return 1;
         }
@@ -127,8 +121,9 @@ int main(int argc, char **argv)
     }
 
     if (argc > 1 && std::string(argv[1]) == "--statistics-only") {
-        return verifyStatisticsService() && verifySystemResourceStats() && verifyWorldGaugeStatistics() &&
-                       verifyWorldGaugeAbsentWhenNotRecorded()
+        return spark::selftest::verifyStatisticsService() && spark::selftest::verifySystemResourceStats() &&
+                       spark::selftest::verifyWorldGaugeStatistics() &&
+                       spark::selftest::verifyWorldGaugeAbsentWhenNotRecorded()
                  ? 0
                  : 1;
     }
@@ -152,38 +147,49 @@ int main(int argc, char **argv)
 
     std::atomic<std::uint64_t> worker_tid{0};
     std::atomic<bool> run{true};
-    std::thread w(worker, std::ref(worker_tid), std::ref(run));
+    std::thread w(spark::selftest::worker, std::ref(worker_tid), std::ref(run));
     while (worker_tid.load() == 0) {
         std::this_thread::sleep_for(1ms);
     }
 
-    if (!verifyArgumentParsing() || !spark::SamplerTestAccess::verifyContinuousHistory() ||
-        !verifyThreadSelectorSemantics() || !verifyTickMonitor() || !verifyStatisticsService() ||
-        !verifySystemResourceStats() || !verifyWorldGaugeStatistics() || !verifyWorldGaugeAbsentWhenNotRecorded() ||
-        !verifyThreadDiscovery() || !verifyMultiThreadSerialization() || !verifyHealthServerConfigurations() ||
-        !verifyLiveProfilerWindowStatistics(worker_tid.load()) || !verifyLiveExportStopCancel(worker_tid.load()) ||
-        !verifyLiveExportTimeout(worker_tid.load()) || !verifyViewerShutdownDuringLiveExport(worker_tid.load()) ||
-        !verifyViewerDisconnectKeepsProfilerRunning(worker_tid.load()) ||
-        !verifyAllocationViewerLifecycle(worker_tid.load()) || !verifyWorkerExceptionBoundaries(worker_tid.load()) ||
-        !verifyAsyncNetworkCommands(worker_tid.load()) || !verifyBackgroundCommandValidation(worker_tid.load()) ||
-        !verifyRecoveryWriterLifetime(worker_tid.load()) || !verifyUploadFailure() || !verifyCaptureLifecycle() ||
+    if (!spark::selftest::verifyArgumentParsing() || !spark::SamplerTestAccess::verifyContinuousHistory() ||
+        !spark::selftest::verifyThreadSelectorSemantics() || !spark::selftest::verifyTickMonitor() ||
+        !spark::selftest::verifyStatisticsService() || !spark::selftest::verifySystemResourceStats() ||
+        !spark::selftest::verifyWorldGaugeStatistics() || !spark::selftest::verifyWorldGaugeAbsentWhenNotRecorded() ||
+        !spark::selftest::verifyThreadDiscovery() || !spark::selftest::verifyMultiThreadSerialization() ||
+        !spark::selftest::verifyHealthServerConfigurations() ||
+        !spark::selftest::verifyLiveProfilerWindowStatistics(worker_tid.load()) ||
+        !spark::selftest::verifyLiveExportStopCancel(worker_tid.load()) ||
+        !spark::selftest::verifyLiveExportTimeout(worker_tid.load()) ||
+        !spark::selftest::verifyViewerShutdownDuringLiveExport(worker_tid.load()) ||
+        !spark::selftest::verifyViewerDisconnectKeepsProfilerRunning(worker_tid.load()) ||
+        !spark::selftest::verifyAllocationViewerLifecycle(worker_tid.load()) ||
+        !spark::selftest::verifyWorkerExceptionBoundaries(worker_tid.load()) ||
+        !spark::selftest::verifyAsyncNetworkCommands(worker_tid.load()) ||
+        !spark::selftest::verifyBackgroundCommandValidation(worker_tid.load()) ||
+        !spark::selftest::verifyRecoveryWriterLifetime(worker_tid.load()) || !spark::selftest::verifyUploadFailure() ||
+        !spark::selftest::verifyCaptureLifecycle() ||
 #ifdef __linux__
-        !verifyDelayedSignalLifecycle() || !verifyActiveCaptureTeardown(worker_tid.load()) ||
+        !spark::selftest::verifyDelayedSignalLifecycle() ||
+        !spark::selftest::verifyActiveCaptureTeardown(worker_tid.load()) ||
 #endif
 #ifdef _WIN32
-        !verifyWindowsThreadActivityDetection() ||
+        !spark::selftest::verifyWindowsThreadActivityDetection() ||
 #endif
-        !verifyAllThreadSampling() || !verifySelectedThreadSampling(worker_tid.load()) || !verifyExecutableHash() ||
-        !verifyByteSampling() || !verifyStopResponsiveness() || !verifySessionIsolation(worker_tid.load()) ||
-        !verifyTickFiltering(worker_tid.load())
+        !spark::selftest::verifyAllThreadSampling() ||
+        !spark::selftest::verifySelectedThreadSampling(worker_tid.load()) || !spark::selftest::verifyExecutableHash() ||
+        !spark::selftest::verifyByteSampling() || !spark::selftest::verifyStopResponsiveness() ||
+        !spark::selftest::verifySessionIsolation(worker_tid.load()) ||
+        !spark::selftest::verifyTickFiltering(worker_tid.load())
 #ifdef _WIN32
-        || !verifyAllocationLifecycle() || !verifyAllocationThreadSelection() ||
-        !verifyProcessWideAllocationSampling() || !verifyAllocationContentionPolicy() ||
-        !verifyAllocationResourcePressure()
+        || !spark::selftest::verifyAllocationLifecycle() || !spark::selftest::verifyAllocationThreadSelection() ||
+        !spark::selftest::verifyProcessWideAllocationSampling() ||
+        !spark::selftest::verifyAllocationContentionPolicy() || !spark::selftest::verifyAllocationResourcePressure()
 #elif defined(__linux__)
-        || !verifyLinuxImportHooks() || !verifyAllocationLifecycle() || !verifyAllocationThreadSelection() ||
-        !verifyProcessWideAllocationSampling() || !verifyAllocationContentionPolicy() ||
-        !verifyAllocationResourcePressure()
+        || !spark::selftest::verifyLinuxImportHooks() || !spark::selftest::verifyAllocationLifecycle() ||
+        !spark::selftest::verifyAllocationThreadSelection() ||
+        !spark::selftest::verifyProcessWideAllocationSampling() ||
+        !spark::selftest::verifyAllocationContentionPolicy() || !spark::selftest::verifyAllocationResourcePressure()
 #endif
     ) {
         run.store(false);

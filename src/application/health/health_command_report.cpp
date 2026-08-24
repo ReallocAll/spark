@@ -240,7 +240,7 @@ void HealthCommand::announceHealthUpload() noexcept
             sender_is_player = upload_sender_is_player_;
             now_ms = upload_time_ms_;
         }
-        const auto notifyBestEffort = [this, &sender_name](const std::string &message) noexcept {
+        const auto notify_best_effort = [this, &sender_name](const std::string &message) noexcept {
             try {
                 notifier_.notify(sender_name, message);
             }
@@ -249,7 +249,7 @@ void HealthCommand::announceHealthUpload() noexcept
         };
         if (result.ok) {
             const std::string url = viewer_url_ + result.key;
-            notifyBestEffort("Health report uploaded! " + url);
+            notify_best_effort("Health report uploaded! " + url);
             try {
                 if (activity_log_provider_) {
                     ActivityLog *log = activity_log_provider_();
@@ -262,7 +262,7 @@ void HealthCommand::announceHealthUpload() noexcept
             }
         }
         else {
-            notifyBestEffort("Health report upload failed: " + result.error);
+            notify_best_effort("Health report upload failed: " + result.error);
         }
     }
     catch (...) {  // NOLINT(bugprone-empty-catch): completion notifications are best effort.

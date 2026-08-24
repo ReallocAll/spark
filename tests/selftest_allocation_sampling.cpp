@@ -78,10 +78,14 @@ bool verifyByteSampling()
 
 #if defined(_WIN32) || defined(__linux__)
 #ifdef _WIN32
+namespace {
+
 void __cdecl ignoreInvalidParameter(const wchar_t * /*unused*/, const wchar_t * /*unused*/, const wchar_t * /*unused*/,
                                     unsigned int /*unused*/, std::uintptr_t /*unused*/)
 {
 }
+
+}  // namespace
 #endif
 
 bool verifyProcessWideAllocationSampling()

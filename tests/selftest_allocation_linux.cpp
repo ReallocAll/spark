@@ -13,12 +13,16 @@
 
 namespace spark::selftest {
 
+namespace {
+
 pid_t linuxHookProbe() noexcept
 {
     return static_cast<pid_t>(-12345);
 }
 
 pid_t (*volatile LinuxGetpidCall)() = &::getpid;
+
+}  // namespace
 
 bool verifyLinuxImportHooks()
 {

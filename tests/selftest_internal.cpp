@@ -6,7 +6,7 @@ namespace spark::selftest {
 
 namespace {
 
-volatile double sink = 0.0;
+volatile double Sink = 0.0;
 
 double hotInner(int n)
 {
@@ -20,7 +20,7 @@ double hotInner(int n)
 void hotMiddle(int rounds)
 {
     for (int i = 0; i < rounds; ++i) {
-        sink += hotInner(40);
+        Sink += hotInner(40);
     }
 }
 
