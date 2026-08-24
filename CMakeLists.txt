@@ -166,7 +166,9 @@ add_library(spark_core STATIC
         src/core/stats/tick_monitor.cpp
         src/core/stats/system_stats.cpp
         src/core/ws/ws_proto.cpp
-        src/core/ws/viewer_socket.cpp
+        src/core/ws/viewer_socket_lifecycle.cpp
+        src/core/ws/viewer_socket_send.cpp
+        src/core/ws/viewer_socket_receive.cpp
         src/proto/health_data.cpp
         src/proto/metrics_proto.cpp
         src/proto/sampler_data.cpp
@@ -206,6 +208,7 @@ add_library(spark_application STATIC
         src/application/health/health_report.cpp
         src/application/monitoring/monitoring_schedule.cpp
         src/application/health/health_dashboard.cpp
+        src/application/health/health_dashboard_worker.cpp
         src/application/health/health_dashboard_connection.cpp
         src/application/placeholder/spark_placeholder_resolver.cpp
         src/application/profiler/profile_exporter.cpp
