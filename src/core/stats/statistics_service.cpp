@@ -26,6 +26,18 @@ double clampUsage(double value)
     return (std::max)(0.0, (std::min)(1.0, value));
 }
 
+bool elapsedAtLeast(std::int64_t now_ms, std::int64_t start_ms, std::int64_t interval_ms)
+{
+    return now_ms >= start_ms && static_cast<std::uint64_t>(now_ms) - static_cast<std::uint64_t>(start_ms) >=
+                                     static_cast<std::uint64_t>(interval_ms);
+}
+
+bool elapsedMoreThan(std::int64_t now_ms, std::int64_t start_ms, std::int64_t interval_ms)
+{
+    return now_ms >= start_ms && static_cast<std::uint64_t>(now_ms) - static_cast<std::uint64_t>(start_ms) >
+                                     static_cast<std::uint64_t>(interval_ms);
+}
+
 }  // namespace
 
 StatisticsService::StatisticsService() : ticks_(kTickCapacity), cpu_(kCpuCapacity), gauges_(kGaugeCapacity) {}
@@ -48,9 +60,11 @@ void StatisticsService::startAt(std::int64_t steady_ms, std::int64_t unix_ms, co
     start_steady_ms_ = steady_ms;
     start_unix_ms_ = unix_ms;
     last_observation_steady_ms_ = steady_ms;
+    last_metrics_steady_ms_ = steady_ms;
     next_cpu_sample_steady_ms_ = steady_ms + 1000;
     previous_cpu_ = initial_cpu;
     metrics_history_.clear();
+    metrics_recorded_ = false;
     started_ = true;
 }
 
@@ -172,7 +186,7 @@ void StatisticsService::recordWorldGaugesAt(int entities, int chunks, std::int64
     gauges_[index].steady_ms = (std::max)(gauges_[index].steady_ms, steady_ms);
     last_observation_steady_ms_ = (std::max)(last_observation_steady_ms_, steady_ms);
 
-    if (steady_ms < start_steady_ms_ + MetricsHistory::kIntervalMs) {
+    if (!elapsedAtLeast(steady_ms, start_steady_ms_, MetricsHistory::kIntervalMs)) {
         return;
     }
     const GaugeSample &sample = gauges_[index];
@@ -191,7 +205,7 @@ void StatisticsService::recordPlayerPingAt(const MetricsAverages &summary, std::
     }
     steady_ms = (std::max)(steady_ms, last_observation_steady_ms_);
     last_observation_steady_ms_ = steady_ms;
-    if (steady_ms < start_steady_ms_ + MetricsHistory::kIntervalMs) {
+    if (!elapsedAtLeast(steady_ms, start_steady_ms_, MetricsHistory::kIntervalMs)) {
         return;
     }
     metrics_history_.recordPlayerPing(unixTimeFor(steady_ms), summary);
@@ -199,9 +213,19 @@ void StatisticsService::recordPlayerPingAt(const MetricsAverages &summary, std::
 
 void StatisticsService::recordMetricsAt(std::int64_t steady_ms)
 {
-    if (!started_ || steady_ms < start_steady_ms_ + MetricsHistory::kIntervalMs) {
+    if (!started_) {
         return;
     }
+    if (metrics_recorded_) {
+        if (!elapsedMoreThan(steady_ms, last_metrics_steady_ms_, MetricsHistory::kIntervalMs)) {
+            return;
+        }
+    }
+    else if (!elapsedAtLeast(steady_ms, start_steady_ms_, MetricsHistory::kIntervalMs)) {
+        return;
+    }
+    last_metrics_steady_ms_ = steady_ms;
+    metrics_recorded_ = true;
 
     const std::int64_t timestamp_ms = unixTimeFor(steady_ms);
     const RollingValue tps = tpsFor(steady_ms, MetricsHistory::kIntervalMs);

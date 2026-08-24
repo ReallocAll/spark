@@ -1,5 +1,6 @@
 #include <cassert>
 #include <cmath>
+#include <limits>
 
 #include "core/stats/metrics_history.h"
 #include "core/stats/statistics_service.h"
@@ -50,18 +51,23 @@ void testStatisticsRecordingDelayAndAnchors()
     }
     assert(statistics.metricsSnapshot().empty());
 
-    statistics.recordTickAt(20.0, 11'001);
+    statistics.recordTickAt(20.0, 11'000);
     statistics.recordPlayerCountAt(4, 11'001);
     statistics.recordWorldGaugesAt(30, 40, 11'001);
     statistics.recordPlayerPingAt({.mean = 30.0, .max = 50.0, .min = 10.0, .median = 30.0, .percentile95 = 50.0},
                                   11'001);
 
+    statistics.recordTickAt(30.0, 21'000);
+    assert(statistics.metricsSnapshot().tps.size() == 1);
+    statistics.recordTickAt(40.0, 21'001);
+
     const spark::MetricsSnapshot snapshot = statistics.metricsSnapshot();
-    assert(snapshot.tps.size() == 1);
-    assert(snapshot.tick_duration.size() == 1);
+    assert(snapshot.tps.size() == 2);
+    assert(snapshot.tick_duration.size() == 2);
     assert(snapshot.world_info.size() == 1);
     assert(snapshot.player_ping.size() == 1);
-    assert(snapshot.tps.front().timestamp_ms == 5'010'001);
+    assert(snapshot.tps.front().timestamp_ms == 5'010'000);
+    assert(snapshot.tps.back().timestamp_ms == 5'020'001);
     assert(snapshot.world_info.front().players == 4);
     assert(snapshot.world_info.front().entities == 30);
     assert(snapshot.world_info.front().chunks == 40);
@@ -70,11 +76,21 @@ void testStatisticsRecordingDelayAndAnchors()
     assert(std::isfinite(snapshot.tps.front().value));
 }
 
+void testStatisticsCadenceOverflow()
+{
+    spark::StatisticsService statistics;
+    constexpr std::int64_t start = (std::numeric_limits<std::int64_t>::max)() - 5'000;
+    statistics.startAt(start, 5'000'000, initialCpu());
+    statistics.recordTickAt(10.0, (std::numeric_limits<std::int64_t>::max)());
+    assert(statistics.metricsSnapshot().empty());
+}
+
 }  // namespace
 
 int main()
 {
     testRingRetentionAndOrder();
     testStatisticsRecordingDelayAndAnchors();
+    testStatisticsCadenceOverflow();
     return 0;
 }
