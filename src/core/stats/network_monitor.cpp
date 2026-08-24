@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <iterator>
+#include <stdexcept>
 #include <utility>
 
 namespace spark {
@@ -34,6 +35,9 @@ NetworkInterfaceInfo NetworkInterfaceInfo::subtract(const NetworkInterfaceInfo &
 
 DoubleRollingAverage::DoubleRollingAverage(std::size_t window_size) : capacity_(window_size)
 {
+    if (window_size == 0) {
+        throw std::invalid_argument("rolling average window must be positive");
+    }
     samples_.reserve(window_size);
 }
 

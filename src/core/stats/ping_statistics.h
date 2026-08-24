@@ -31,7 +31,7 @@ private:
 // Each add() contributes one median value; query-time statistics are
 // computed from the accumulated samples.
 struct PingRollingAverage {
-    explicit PingRollingAverage(std::size_t window_size) : capacity_(window_size) { samples_.reserve(window_size); }
+    explicit PingRollingAverage(std::size_t window_size);
 
     void add(int value);
     std::size_t samples() const { return count_; }
