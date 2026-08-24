@@ -261,7 +261,13 @@ set_target_properties(spark_stall_watchdog_test PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME spark_stall_watchdog_test COMMAND spark_stall_watchdog_test)
 
-add_executable(spark_journal_test core/recovery/journal_test.cpp)
+add_executable(spark_journal_test
+        core/recovery/journal_test_main.cpp
+        core/recovery/journal_test_support.cpp
+        core/recovery/journal_format_test.cpp
+        core/recovery/journal_writer_reader_test.cpp
+        core/recovery/recovery_player_test.cpp
+        core/recovery/recovery_rolling_test.cpp)
 target_link_libraries(spark_journal_test PRIVATE spark_core)
 set_target_properties(spark_journal_test PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
