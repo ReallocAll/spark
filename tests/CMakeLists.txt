@@ -5,7 +5,22 @@ else ()
 endif ()
 
 add_executable(spark_selftest
-        selftest.cpp)
+        selftest.cpp
+        selftest_internal.cpp
+        selftest_support.cpp
+        selftest_basic.cpp
+        selftest_capture.cpp
+        selftest_sampler.cpp
+        selftest_live.cpp
+        selftest_viewer.cpp
+        selftest_async.cpp
+        selftest_statistics.cpp
+        selftest_allocation_common.cpp
+        selftest_allocation_selection.cpp
+        selftest_allocation_sampling.cpp
+        selftest_allocation_pressure.cpp
+        selftest_allocation_lifecycle.cpp
+        selftest_allocation_linux.cpp)
 target_link_libraries(spark_selftest PRIVATE spark_application)
 set_target_properties(spark_selftest PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
