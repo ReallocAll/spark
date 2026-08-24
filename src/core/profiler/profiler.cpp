@@ -166,10 +166,6 @@ bool Profiler::start(const ProfilerOptions &options, std::uint64_t main_tid, std
                     config.all_threads, config.regex_threads, false, static_cast<std::uint8_t>(options.thread_grouper),
                     1, config.live_only, options.creator_name, options.creator_is_player, options.comment,
                     options.threads, profiling_window::windowAdjustmentMs());
-                // The bounded allocation ModuleTable pre-creates a sentinel
-                // module 0 for overflow paths; journal it so recovery can
-                // remap frames that were assigned to it.
-                writer->journalModuleDef(0, kOtherModulesSentinel);
                 writer->requestFlush();
                 std::scoped_lock lock(recovery_mutex_);
                 recovery_writer_ = std::move(writer);

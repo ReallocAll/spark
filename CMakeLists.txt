@@ -85,6 +85,7 @@ set_target_properties(spark_profiling_time PROPERTIES POSITION_INDEPENDENT_CODE 
 
 # --- native backend: sampler, symbol guesser, allocation hooks (no Endstone) ---
 add_library(spark_native STATIC
+        src/native/alloc/allocation_profile_aggregation.cpp
         src/native/alloc/allocation_thread_filter.cpp
         src/native/sampler/call_tree.cpp
         src/native/sampler/sampler.cpp
