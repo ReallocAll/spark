@@ -182,6 +182,24 @@ void testStopDuringStall()
     std::cout << "testStopDuringStall: PASS\n";
 }
 
+void testCallbackCanReplaceItself()
+{
+    WatchdogFixture f;
+    std::atomic<bool> replaced{false};
+    f.watchdog().setStallCallback([&](bool stalled) {
+        if (stalled) {
+            f.watchdog().setStallCallback([](bool) {});
+            replaced.store(true);
+        }
+    });
+    f.start();
+    f.serverHb().beat();
+    std::this_thread::sleep_for(std::chrono::milliseconds(400));
+    assert(replaced.load());
+    f.watchdog().stop();
+    std::cout << "testCallbackCanReplaceItself: PASS\n";
+}
+
 void testStopIsIdempotent()
 {
     WatchdogFixture f;
@@ -227,6 +245,7 @@ int main()
     testRecoveryTransitionsToHealthy();
     testMultipleStallCycles();
     testStopDuringStall();
+    testCallbackCanReplaceItself();
     testStopIsIdempotent();
     testStartIsIdempotent();
     testDestructorStopsThread();

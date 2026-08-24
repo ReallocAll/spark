@@ -42,6 +42,17 @@ void stop(spark::Profiler &profiler)
     assert(profiler.cancel(error));
 }
 
+void assertThresholdAccepted(spark::ProfilerOptions options)
+{
+    spark::Profiler profiler;
+    std::string error;
+    const bool started = profiler.start(options, currentThreadId(), error);
+    assert(error != "tick threshold is too large");
+    if (started) {
+        stop(profiler);
+    }
+}
+
 }  // namespace
 
 int main()
@@ -71,7 +82,20 @@ int main()
     assert(spark::ProfilerTestAccess::includedTicks(profiler) == 0);
     stop(profiler);
 
-    options.only_ticks_over_ms = std::numeric_limits<std::int64_t>::max();
+    options.only_ticks_over_ms = std::numeric_limits<std::int32_t>::max();
+    assertThresholdAccepted(options);
+
+    options.alloc = true;
+    assertThresholdAccepted(options);
+
+    options.alloc = false;
+    options.interval_ms = spark::kMaxSamplingIntervalMs + 1;
+    options.only_ticks_over_ms = static_cast<std::int64_t>(std::numeric_limits<std::int32_t>::max()) + 1;
+    assert(!profiler.start(options, currentThreadId(), error));
+    assert(error == "tick threshold is too large");
+
+    options.alloc = true;
+    options.allocation_interval_bytes = 0;
     assert(!profiler.start(options, currentThreadId(), error));
     assert(error == "tick threshold is too large");
     return 0;

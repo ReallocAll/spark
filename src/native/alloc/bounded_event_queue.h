@@ -8,11 +8,14 @@
 
 namespace spark {
 
+inline constexpr std::size_t KBoundedEventQueueMaxAttempts = 64;
+
 // Fixed-capacity MPMC ring used where enqueueing must never allocate. Capacity
 // must be a power of two so positions can wrap without division.
-template <typename Event, std::size_t Capacity>
+template <typename Event, std::size_t Capacity, std::size_t MaxAttempts = KBoundedEventQueueMaxAttempts>
 class BoundedEventQueue {
     static_assert(Capacity > 1 && (Capacity & (Capacity - 1)) == 0);
+    static_assert(MaxAttempts > 0);
 
     struct Cell {
         std::atomic<std::size_t> sequence{0};
@@ -31,13 +34,15 @@ public:
     {
         std::size_t position = producer_.load(std::memory_order_relaxed);
         Cell *cell = nullptr;
-        for (;;) {
+        bool reserved = false;
+        for (std::size_t attempt = 0; attempt < MaxAttempts; ++attempt) {
             cell = &storage_[position & (Capacity - 1)];
             const std::size_t sequence = cell->sequence.load(std::memory_order_acquire);
             const std::intptr_t difference =
                 static_cast<std::intptr_t>(sequence) - static_cast<std::intptr_t>(position);
             if (difference == 0) {
                 if (producer_.compare_exchange_weak(position, position + 1, std::memory_order_relaxed)) {
+                    reserved = true;
                     break;
                 }
             }
@@ -48,6 +53,9 @@ public:
                 position = producer_.load(std::memory_order_relaxed);
             }
         }
+        if (!reserved) {
+            return false;
+        }
         cell->event = event;
         cell->sequence.store(position + 1, std::memory_order_release);
         return true;
@@ -57,13 +65,15 @@ public:
     {
         std::size_t position = consumer_.load(std::memory_order_relaxed);
         Cell *cell = nullptr;
-        for (;;) {
+        bool reserved = false;
+        for (std::size_t attempt = 0; attempt < MaxAttempts; ++attempt) {
             cell = &storage_[position & (Capacity - 1)];
             const std::size_t sequence = cell->sequence.load(std::memory_order_acquire);
             const std::intptr_t difference =
                 static_cast<std::intptr_t>(sequence) - static_cast<std::intptr_t>(position + 1);
             if (difference == 0) {
                 if (consumer_.compare_exchange_weak(position, position + 1, std::memory_order_relaxed)) {
+                    reserved = true;
                     break;
                 }
             }
@@ -73,6 +83,9 @@ public:
             else {
                 position = consumer_.load(std::memory_order_relaxed);
             }
+        }
+        if (!reserved) {
+            return false;
         }
         event = cell->event;
         cell->sequence.store(position + Capacity, std::memory_order_release);

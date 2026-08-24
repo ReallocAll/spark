@@ -76,6 +76,7 @@ private:
 struct Sample {
     std::vector<FrameKey> frames;
     std::uint64_t thread_id = 0;
+    std::uint64_t os_thread_id = 0;
     std::string thread_name;
     std::int32_t window = 0;
     std::uint64_t tick_id = 0;

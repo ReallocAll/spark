@@ -113,8 +113,8 @@ private:
     void sendAllocationHookCoverage(CommandSender &sender);
     void finishProfiler(const std::string &sender_name, bool sender_is_player, bool save, const std::string &comment);
     void runExport() noexcept;
-    void announceResult();
-    bool startBackgroundSession();
+    void announceResult() noexcept;
+    bool startBackgroundSession() noexcept;
     void closeViewerSocket();
     void resetProfilerTimeout() noexcept;
     bool armProfilerTimeout(std::int64_t timeout_seconds) noexcept;

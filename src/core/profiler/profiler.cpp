@@ -131,7 +131,7 @@ bool Profiler::start(const ProfilerOptions &options, std::uint64_t main_tid, std
         error = "profiling timeout is too large";
         return false;
     }
-    if (options.only_ticks_over_ms > std::numeric_limits<std::int64_t>::max() / 1000) {
+    if (options.only_ticks_over_ms > std::numeric_limits<std::int32_t>::max()) {
         error = "tick threshold is too large";
         return false;
     }
@@ -166,10 +166,6 @@ bool Profiler::start(const ProfilerOptions &options, std::uint64_t main_tid, std
                     config.all_threads, config.regex_threads, false, static_cast<std::uint8_t>(options.thread_grouper),
                     1, config.live_only, options.creator_name, options.creator_is_player, options.comment,
                     options.threads, profiling_window::windowAdjustmentMs());
-                // The bounded allocation ModuleTable pre-creates a sentinel
-                // module 0 for overflow paths; journal it so recovery can
-                // remap frames that were assigned to it.
-                writer->journalModuleDef(0, kOtherModulesSentinel);
                 writer->requestFlush();
                 std::scoped_lock lock(recovery_mutex_);
                 recovery_writer_ = std::move(writer);
@@ -198,7 +194,6 @@ bool Profiler::start(const ProfilerOptions &options, std::uint64_t main_tid, std
             config.thread_patterns = options.threads;
         }
         config.only_ticks_over_ms = options.only_ticks_over_ms > 0 ? options.only_ticks_over_ms : 0;
-        config.continuous = options.is_background;
         sampler_.setTarget(main_tid);
         if (!recovery_dir_.empty()) {
             RecoveryWriter::Config wc;
@@ -213,6 +208,8 @@ bool Profiler::start(const ProfilerOptions &options, std::uint64_t main_tid, std
                     static_cast<std::uint8_t>(options.thread_grouper), 0, false, options.creator_name,
                     options.creator_is_player, options.comment, options.threads,
                     profiling_window::windowAdjustmentMs());
+                // Journal the bounded execution module sentinel before samples.
+                writer->journalModuleDef(0, kOtherModulesSentinel);
                 writer->requestFlush();
                 std::scoped_lock lock(recovery_mutex_);
                 recovery_writer_ = std::move(writer);
@@ -304,63 +301,6 @@ void Profiler::stopSampling()
 {
     std::string ignored;
     stopSampling(ignored);
-}
-
-void Profiler::stopRecoveryWriter()
-{
-    std::unique_ptr<RecoveryWriter> writer;
-    {
-        std::scoped_lock lock(recovery_mutex_);
-        sampler_.setRecoverySink(nullptr);
-        allocation_sampler_.setRecoverySink(nullptr);
-        writer = std::move(recovery_writer_);
-    }
-    if (!writer) {
-        return;
-    }
-    // Do NOT journal CleanEnd here.  CleanEnd was previously written before
-    // export, which caused crash-during-export profiles to be silently
-    // discarded on the next startup.  The journal is now deleted only after a
-    // successful export (announceResult), cancel, or clean shutdown.
-    writer->requestFlush();
-    writer->stop();
-}
-
-void Profiler::discardRecoveryJournal()
-{
-    std::unique_ptr<RecoveryWriter> writer;
-    {
-        std::scoped_lock lock(recovery_mutex_);
-        sampler_.setRecoverySink(nullptr);
-        allocation_sampler_.setRecoverySink(nullptr);
-        writer = std::move(recovery_writer_);
-    }
-    if (writer) {
-        writer->requestFlush();
-        writer->stop();
-    }
-    if (!recovery_dir_.empty()) {
-        std::error_code ec;
-        std::filesystem::remove_all(recovery_dir_, ec);
-    }
-}
-
-void Profiler::journalStallBegin(std::uint64_t detected_ns, std::uint64_t last_tick_ns)
-{
-    std::scoped_lock lock(recovery_mutex_);
-    if (recovery_writer_) {
-        recovery_writer_->journalStallBegin(detected_ns, last_tick_ns);
-        recovery_writer_->requestFlush();
-    }
-}
-
-void Profiler::journalStallEnd(std::uint64_t detected_ns, std::uint64_t recovered_ns)
-{
-    std::scoped_lock lock(recovery_mutex_);
-    if (recovery_writer_) {
-        recovery_writer_->journalStallEnd(detected_ns, recovered_ns);
-        recovery_writer_->requestFlush();
-    }
 }
 
 std::string Profiler::stop(const ExportContext &ctx)

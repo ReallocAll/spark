@@ -15,6 +15,7 @@
 namespace spark {
 
 namespace {
+constexpr std::size_t KMaxThreadCycleEntries = 4096;
 bool GArmed = false;
 std::unordered_map<DWORD, ULONG64> GThreadCycles;  // NOLINT(bugprone-throwing-static-initialization)
 }  // namespace
@@ -129,6 +130,9 @@ bool Capture::isThreadRunning(std::uint64_t tid)
 
     auto it = GThreadCycles.find(thread_id);
     if (it == GThreadCycles.end()) {
+        if (GThreadCycles.size() == KMaxThreadCycleEntries) {
+            GThreadCycles.erase(GThreadCycles.begin());
+        }
         GThreadCycles.emplace(thread_id, cycles);
         return false;  // the first observation establishes a baseline
     }

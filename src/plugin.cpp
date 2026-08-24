@@ -193,8 +193,7 @@ ENDSTONE_PLUGIN("spark", "0.5.3", SparkPlugin)
             "/spark (tps|cpu|ping|health|healthreport|ht|activity|activitylog|log|tickmonitor|tickmonitoring)<module: "
             "SparkStatusModule> [flags: message]",
             "/spark (profiler|sampler)<module: SparkProfilerModule> "
-            "(start|stop|upload|info|cancel|open|trust-viewer)[action: SparkProfilerAction] [flags: message]")
-        .permissions("endstone.command.spark");
+            "(start|stop|upload|info|cancel|open|trust-viewer)[action: SparkProfilerAction] [flags: message]");
 
     permission("endstone.command.spark")
         .description("Allows use of the spark profiler")

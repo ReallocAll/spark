@@ -17,6 +17,8 @@ namespace spark {
 
 namespace {
 
+constexpr std::size_t KMaxQueueReservationAttempts = 64;
+
 std::uint64_t monotonicNowNs()
 {
     return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
@@ -35,7 +37,7 @@ bool syncFileImpl(std::FILE *f)
 
 }  // namespace
 
-RecoveryWriter::RecoveryWriter(Config config) : config_(std::move(config)) {}
+RecoveryWriter::RecoveryWriter(Config config) : config_(std::move(config)), queue_(config_.queue_capacity) {}
 
 RecoveryWriter::~RecoveryWriter()
 {
@@ -137,16 +139,36 @@ void RecoveryWriter::enqueue(RecordType type, const JournalBuffer &payload)
         return;
     }
 
-    const std::size_t approx = queue_size_.load(std::memory_order_relaxed);
-    if (approx >= config_.queue_capacity) {
+    std::size_t current = queue_size_.load(std::memory_order_relaxed);
+    bool reserved = false;
+    for (std::size_t attempt = 0; attempt < KMaxQueueReservationAttempts; ++attempt) {
+        if (current >= config_.queue_capacity) {
+            dropped_.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+        if (queue_size_.compare_exchange_weak(current, current + 1, std::memory_order_relaxed,
+                                              std::memory_order_relaxed)) {
+            reserved = true;
+            break;
+        }
+    }
+    if (!reserved) {
         dropped_.fetch_add(1, std::memory_order_relaxed);
         return;
     }
 
-    const std::uint32_t seq = sequence_.fetch_add(1, std::memory_order_relaxed);
-    auto record = serializeRecord(type, seq, payload);
-    queue_.enqueue(std::move(record));
-    queue_size_.fetch_add(1, std::memory_order_relaxed);
+    try {
+        const std::uint32_t seq = sequence_.fetch_add(1, std::memory_order_relaxed);
+        auto record = serializeRecord(type, seq, payload);
+        if (!queue_.enqueue(std::move(record))) {
+            queue_size_.fetch_sub(1, std::memory_order_relaxed);
+            dropped_.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+    catch (...) {
+        queue_size_.fetch_sub(1, std::memory_order_relaxed);
+        dropped_.fetch_add(1, std::memory_order_relaxed);
+    }
 }
 
 void RecoveryWriter::journalModuleDef(std::uint32_t module_id, std::string_view path)

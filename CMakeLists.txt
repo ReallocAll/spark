@@ -85,9 +85,11 @@ set_target_properties(spark_profiling_time PROPERTIES POSITION_INDEPENDENT_CODE 
 
 # --- native backend: sampler, symbol guesser, allocation hooks (no Endstone) ---
 add_library(spark_native STATIC
+        src/native/alloc/allocation_profile_aggregation.cpp
         src/native/alloc/allocation_thread_filter.cpp
         src/native/sampler/call_tree.cpp
         src/native/sampler/sampler.cpp
+        src/native/sampler/sampler_aggregation.cpp
         src/native/sampler/thread_selector.cpp
         src/native/sampler/thread_info.cpp
         src/native/symbol/symbol_guess_dwarf.cpp
@@ -125,7 +127,9 @@ if (WIN32)
     target_link_libraries(spark_native PUBLIC dbghelp psapi advapi32 funchook-static distorm)
 elseif (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
     target_include_directories(spark_native PRIVATE "${funchook_SOURCE_DIR}/distorm/include")
-    target_link_libraries(spark_native PUBLIC distorm)
+    target_link_libraries(spark_native PUBLIC distorm ${CMAKE_DL_LIBS})
+elseif (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_libraries(spark_native PUBLIC ${CMAKE_DL_LIBS})
 endif ()
 
 # --- platform-independent core: profiler, stats, proto, net (no Endstone) ---
@@ -138,12 +142,14 @@ add_library(spark_core STATIC
         src/core/recovery/stall_watchdog.cpp
         src/core/util/base64.cpp
         src/core/util/format.cpp
+        src/core/util/state_file.cpp
         src/core/util/world_region.cpp
         src/core/metadata/server_properties.cpp
         src/core/activity/activity_log.cpp
         src/core/command/arguments.cpp
         src/core/profiler/profiler.cpp
         src/core/profiler/profiler_export.cpp
+        src/core/profiler/profiler_recovery.cpp
         src/core/stats/executable_hash.cpp
         src/core/stats/metrics_history.cpp
         src/core/stats/statistics_service.cpp
@@ -163,10 +169,14 @@ add_library(spark_core STATIC
         src/net/websocket.cpp)
 target_include_directories(spark_core PUBLIC src)
 if (WIN32)
-    target_sources(spark_core PRIVATE src/core/ws/crypto_cng.cpp)
+    target_sources(spark_core PRIVATE
+            src/core/stats/network_monitor_windows.cpp
+            src/core/ws/crypto_cng.cpp)
     target_link_libraries(spark_core PUBLIC spark_native ZLIB::ZLIB CURL::libcurl tomlplusplus::tomlplusplus bcrypt)
 else ()
-    target_sources(spark_core PRIVATE src/core/ws/crypto.cpp)
+    target_sources(spark_core PRIVATE
+            src/core/stats/network_monitor_linux.cpp
+            src/core/ws/crypto.cpp)
     target_link_libraries(spark_core PUBLIC spark_native ZLIB::ZLIB CURL::libcurl tomlplusplus::tomlplusplus OpenSSL::Crypto)
 endif ()
 if (WIN32)
@@ -183,6 +193,7 @@ add_library(spark_application STATIC
         src/application/activity/activity_command.cpp
         src/application/command/command_registry.cpp
         src/application/health/health_command.cpp
+        src/application/health/health_command_report.cpp
         src/application/health/health_report.cpp
         src/application/health/health_dashboard.cpp
         src/application/health/health_dashboard_connection.cpp
@@ -190,6 +201,7 @@ add_library(spark_application STATIC
         src/application/profiler/profile_exporter.cpp
         src/application/profiler/profiler_open_orchestrator.cpp
         src/application/profiler/profiler_service.cpp
+        src/application/profiler/profiler_service_commands.cpp
         src/application/profiler/profiler_start_options.cpp
         src/application/profiler/profiler_timeout.cpp
         src/application/profiler/viewer_update_worker.cpp

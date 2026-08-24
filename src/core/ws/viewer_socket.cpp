@@ -1,6 +1,7 @@
 #include "core/ws/viewer_socket.h"
 
-#include <cstring>
+#include <initializer_list>
+#include <limits>
 #include <utility>
 
 #include "core/util/base64.h"
@@ -17,6 +18,18 @@ namespace {
 std::int64_t nowMs()
 {
     return monotonicUnixMillis();
+}
+
+std::size_t accountedBytes(std::initializer_list<std::size_t> sizes)
+{
+    std::size_t total = 256;
+    for (const std::size_t size : sizes) {
+        if (size > std::numeric_limits<std::size_t>::max() - total) {
+            return std::numeric_limits<std::size_t>::max();
+        }
+        total += size;
+    }
+    return total;
 }
 
 }  // namespace
@@ -41,43 +54,60 @@ SocketChannelInfo ViewerSocket::channelInfo() const
 
 std::string ViewerSocket::open(const UploadCallback &upload)
 {
-    if (ws_) {
-        ws_->close();
-        ws_.reset();
-    }
-    prepareOpen();
-    ws_ = std::make_unique<WebSocketClient>();
-    ws_->setMessageCallback([this](const std::string &data) { onMessage(data); });
-    ws_->setCloseCallback([this](const WebSocketClient::Termination &termination) { onTransportClosed(termination); });
+    try {
+        std::scoped_lock transport_lock(transport_mutex_);
+        if (ws_) {
+            ws_->close();
+            ws_.reset();
+        }
+        prepareOpen();
+        ws_ = std::make_unique<WebSocketClient>();
+        ws_->setMessageCallback([this](const std::string &data) { onMessage(data); });
+        ws_->setCloseCallback(
+            [this](const WebSocketClient::Termination &termination) { onTransportClosed(termination); });
 
-    channel_id_ = ws_->connect(config_.bytesocks_host, config_.user_agent);
-    if (channel_id_.empty()) {
+        channel_id_ = ws_->connect(config_.bytesocks_host, config_.user_agent);
+        if (channel_id_.empty()) {
+            return {};
+        }
+
+        // Build SocketChannelInfo proto.
+        SocketChannelInfo info;
+        info.channel_id = channel_id_;
+        info.public_key = key_pair_.public_key_x509;
+        std::string channel_info_proto = encodeSocketChannelInfo(info);
+
+        // Upload initial sampler data.
+        std::string bytebin_key = upload(channel_info_proto);
+        if (bytebin_key.empty()) {
+            ws_->close();
+            return {};
+        }
+        if (!ws_->isOpen()) {
+            ws_->close();
+            return {};
+        }
+
+        {
+            std::scoped_lock lock(payload_mutex_);
+            last_payload_id_ = bytebin_key;
+        }
+        open_.store(true);
+        return config_.viewer_url + bytebin_key;
+    }
+    catch (...) {
+        open_.store(false);
+        try {
+            std::scoped_lock transport_lock(transport_mutex_);
+            if (ws_) {
+                ws_->close();
+            }
+        }
+        catch (...) {
+            open_.store(false);
+        }
         return {};
     }
-
-    // Build SocketChannelInfo proto.
-    SocketChannelInfo info;
-    info.channel_id = channel_id_;
-    info.public_key = key_pair_.public_key_x509;
-    std::string channel_info_proto = encodeSocketChannelInfo(info);
-
-    // Upload initial sampler data.
-    std::string bytebin_key = upload(channel_info_proto);
-    if (bytebin_key.empty()) {
-        close();
-        return {};
-    }
-    if (!ws_->isOpen()) {
-        ws_->close();
-        return {};
-    }
-
-    {
-        std::scoped_lock lock(payload_mutex_);
-        last_payload_id_ = bytebin_key;
-    }
-    open_.store(true);
-    return config_.viewer_url + bytebin_key;
 }
 
 void ViewerSocket::prepareOpen()
@@ -94,6 +124,11 @@ void ViewerSocket::prepareOpen()
         std::scoped_lock lock(queue_mutex_);
         incoming_queue_.clear();
     }
+    incoming_overflow_.store(false, std::memory_order_release);
+    {
+        std::scoped_lock lock(pending_keys_mutex_);
+        pending_keys_.clear();
+    }
     {
         std::scoped_lock lock(close_mutex_);
         close_reason_ = CloseReason::None;
@@ -103,8 +138,11 @@ void ViewerSocket::prepareOpen()
 
 void ViewerSocket::processWindowRotate(const UploadCallback &upload)
 {
-    if (!open_.load() || !ws_ || !ws_->isOpen()) {
-        return;
+    {
+        std::scoped_lock transport_lock(transport_mutex_);
+        if (!open_.load() || !ws_ || !ws_->isOpen()) {
+            return;
+        }
     }
 
     auto time = nowMs();
@@ -129,102 +167,178 @@ void ViewerSocket::processWindowRotate(const UploadCallback &upload)
 
 void ViewerSocket::sendUpdate(const std::string &bytebin_key)
 {
-    if (!open_.load() || !ws_ || !ws_->isOpen()) {
-        return;
+    try {
+        std::scoped_lock transport_lock(transport_mutex_);
+        if (!open_.load() || !ws_ || !ws_->isOpen()) {
+            return;
+        }
+        {
+            std::scoped_lock lock(payload_mutex_);
+            last_payload_id_ = bytebin_key;
+        }
+        const auto private_key = key_pair_.private_key_pkcs8;
+        WebSocketClient::DeferredEncoder encoder = [payload_id = bytebin_key, private_key]() {
+            return encodeServerUpdateSamplerData(payload_id, private_key);
+        };
+        enqueueDeferredLocked(std::move(encoder), accountedBytes({bytebin_key.size(), private_key.size()}));
     }
-    {
-        std::scoped_lock lock(payload_mutex_);
-        last_payload_id_ = bytebin_key;
+    catch (...) {
+        setDeferredSendError();
     }
-    std::string msg = encodeServerUpdateSamplerData(bytebin_key, key_pair_.private_key_pkcs8);
-    ws_->send(msg);
 }
 
 bool ViewerSocket::sendStatistics(const std::string &platform, const std::string &system, const std::string &metrics)
 {
-    if (!open_.load(std::memory_order_acquire) || !hasClient() || !ws_ || !ws_->isOpen()) {
+    try {
+        std::scoped_lock transport_lock(transport_mutex_);
+        if (!open_.load(std::memory_order_acquire) || !hasClient() || !ws_ || !ws_->isOpen()) {
+            return false;
+        }
+        const auto private_key = key_pair_.private_key_pkcs8;
+        WebSocketClient::DeferredEncoder encoder = [platform, system, metrics, private_key]() {
+            return encodeServerUpdateStatistics(platform, system, metrics, private_key);
+        };
+        return enqueueDeferredLocked(
+            std::move(encoder), accountedBytes({platform.size(), system.size(), metrics.size(), private_key.size()}));
+    }
+    catch (...) {
+        setDeferredSendError();
         return false;
     }
-    ws_->send(encodeServerUpdateStatistics(platform, system, metrics, key_pair_.private_key_pkcs8));
-    return true;
 }
 
-void ViewerSocket::close()
+void ViewerSocket::close() noexcept
 {
-    const bool was_open = open_.exchange(false);
-    setCloseState(CloseReason::LocalClose);
-    if (ws_) {
-        if (was_open && ws_->isOpen()) {
-            std::string msg = encodeServerClose(key_pair_.private_key_pkcs8);
-            ws_->send(msg);
+    try {
+        std::scoped_lock transport_lock(transport_mutex_);
+        const bool was_open = open_.exchange(false);
+        try {
+            setCloseState(CloseReason::LocalClose);
         }
-        ws_->close();
+        catch (...) {
+            open_.store(false);
+        }
+        if (ws_) {
+            if (was_open && ws_->isOpen()) {
+                try {
+                    const auto private_key = key_pair_.private_key_pkcs8;
+                    WebSocketClient::DeferredEncoder encoder = [private_key]() {
+                        return encodeServerClose(private_key);
+                    };
+                    enqueueDeferredLocked(std::move(encoder), accountedBytes({private_key.size()}));
+                }
+                catch (...) {
+                    setDeferredSendError();
+                }
+            }
+            ws_->close();
+        }
+    }
+    catch (...) {
+        open_.store(false);
     }
 }
 
 bool ViewerSocket::tick()
 {
-    if (!open_.load()) {
-        return false;
-    }
-    if (!ws_ || !ws_->isOpen()) {
-        if (ws_) {
-            onTransportClosed(ws_->termination());
+    try {
+        if (!open_.load()) {
+            return false;
         }
-        return false;
-    }
-
-    // Process queued incoming messages.
-    std::vector<std::string> messages;
-    {
-        std::scoped_lock lock(queue_mutex_);
-        messages.swap(incoming_queue_);
-    }
-    for (const auto &msg : messages) {
-        WsIncomingPacket packet;
-        if (!decodeRawPacket(msg, packet)) {
-            continue;
+        bool transport_closed = false;
+        WebSocketClient::Termination termination;
+        {
+            std::scoped_lock transport_lock(transport_mutex_);
+            if (!ws_ || !ws_->isOpen()) {
+                transport_closed = true;
+                if (ws_) {
+                    termination = ws_->termination();
+                }
+            }
+        }
+        if (transport_closed) {
+            onTransportClosed(termination);
+            return false;
         }
 
-        switch (packet.type) {
-        case WsPacketType::ClientPing:
-            last_ping_ms_.store(nowMs());
-            ws_->send(encodeServerPong(open_.load(), packet.ping.data, key_pair_.private_key_pkcs8));
-            break;
-        case WsPacketType::ClientConnect: {
-            last_ping_ms_.store(nowMs());
-            bool trusted = false;
-            if (is_key_trusted_ && !packet.public_key.empty()) {
-                trusted = is_key_trusted_(packet.public_key);
-            }
-            if (!packet.public_key.empty()) {
-                pending_keys_[packet.connect.client_id] = packet.public_key;
-            }
-            int state = trusted ? 0 : 1;  // 0=ACCEPTED, 1=UNTRUSTED
-            std::string payload_id;
-            {
-                std::scoped_lock lock(payload_mutex_);
-                payload_id = last_payload_id_;
-            }
-            ws_->send(encodeServerConnectResponse(packet.connect.client_id, state, config_.sampler_interval,
-                                                  config_.statistics_interval, payload_id,
-                                                  key_pair_.private_key_pkcs8));
-            break;
+        if (incoming_overflow_.exchange(false, std::memory_order_acq_rel)) {
+            setCloseState(CloseReason::ReceiveError, "Live viewer closed: incoming message queue exceeded its limit");
+            close();
+            return false;
         }
-        default:
-            break;
-        }
-    }
 
-    // Check timeout.
-    auto time = nowMs();
-    if ((time - open_time_ms_) > kInitialTimeoutMs && (time - last_ping_ms_.load()) > kEstablishedTimeoutMs) {
-        setCloseState(CloseReason::ClientPingTimeout, "Live viewer closed: client ping timeout");
+        // Process packets parsed and verified by the transport worker.
+        std::vector<WsIncomingPacket> packets;
+        {
+            std::scoped_lock lock(queue_mutex_);
+            packets.swap(incoming_queue_);
+        }
+        for (const auto &packet : packets) {
+            switch (packet.type) {
+            case WsPacketType::ClientPing:
+                last_ping_ms_.store(nowMs());
+                {
+                    const bool ok = open_.load();
+                    const std::int32_t data = packet.ping.data;
+                    const auto private_key = key_pair_.private_key_pkcs8;
+                    WebSocketClient::DeferredEncoder encoder = [ok, data, private_key]() {
+                        return encodeServerPong(ok, data, private_key);
+                    };
+                    enqueueDeferred(std::move(encoder), accountedBytes({private_key.size()}));
+                }
+                break;
+            case WsPacketType::ClientConnect: {
+                last_ping_ms_.store(nowMs());
+                const bool trusted = isTrustedClient(packet);
+                if (packet.verified && !packet.public_key.empty()) {
+                    std::scoped_lock lock(pending_keys_mutex_);
+                    const auto existing = pending_keys_.find(packet.connect.client_id);
+                    if (existing != pending_keys_.end()) {
+                        existing->second = packet.public_key;
+                    }
+                    else if (pending_keys_.size() < kMaxPendingKeys) {
+                        pending_keys_.emplace(packet.connect.client_id, packet.public_key);
+                    }
+                }
+                int state = trusted ? 0 : 1;  // 0=ACCEPTED, 1=UNTRUSTED
+                std::string payload_id;
+                {
+                    std::scoped_lock lock(payload_mutex_);
+                    payload_id = last_payload_id_;
+                }
+                const std::string client_id = packet.connect.client_id;
+                const int sampler_interval = config_.sampler_interval;
+                const int statistics_interval = config_.statistics_interval;
+                const auto private_key = key_pair_.private_key_pkcs8;
+                WebSocketClient::DeferredEncoder encoder = [client_id, state, sampler_interval, statistics_interval,
+                                                            payload_id, private_key]() {
+                    return encodeServerConnectResponse(client_id, state, sampler_interval, statistics_interval,
+                                                       payload_id, private_key);
+                };
+                enqueueDeferred(std::move(encoder),
+                                accountedBytes({client_id.size(), payload_id.size(), private_key.size()}));
+                break;
+            }
+            default:
+                break;
+            }
+        }
+
+        // Check timeout.
+        auto time = nowMs();
+        if ((time - open_time_ms_) > kInitialTimeoutMs && (time - last_ping_ms_.load()) > kEstablishedTimeoutMs) {
+            setCloseState(CloseReason::ClientPingTimeout, "Live viewer closed: client ping timeout");
+            close();
+            return false;
+        }
+
+        return true;
+    }
+    catch (...) {
+        setDeferredSendError();
         close();
         return false;
     }
-
-    return true;
 }
 
 ViewerSocket::CloseReason ViewerSocket::closeReason() const
@@ -247,6 +361,43 @@ void ViewerSocket::setCloseState(CloseReason reason, std::string diagnostic)
     }
     close_reason_ = reason;
     close_diagnostic_ = std::move(diagnostic);
+}
+
+bool ViewerSocket::enqueueDeferredLocked(WebSocketClient::DeferredEncoder encoder,
+                                         std::size_t accounted_input_bytes) noexcept
+{
+    try {
+        if (!ws_ || !ws_->isOpen()) {
+            return false;
+        }
+        return ws_->sendDeferred(std::move(encoder), accounted_input_bytes);
+    }
+    catch (...) {
+        setDeferredSendError();
+        return false;
+    }
+}
+
+bool ViewerSocket::enqueueDeferred(WebSocketClient::DeferredEncoder encoder, std::size_t accounted_input_bytes) noexcept
+{
+    try {
+        std::scoped_lock transport_lock(transport_mutex_);
+        return enqueueDeferredLocked(std::move(encoder), accounted_input_bytes);
+    }
+    catch (...) {
+        setDeferredSendError();
+        return false;
+    }
+}
+
+void ViewerSocket::setDeferredSendError() noexcept
+{
+    try {
+        setCloseState(CloseReason::SendError, "Live viewer transport failed: deferred send enqueue");
+    }
+    catch (...) {
+        open_.store(false);
+    }
 }
 
 void ViewerSocket::onTransportClosed(const WebSocketClient::Termination &termination)
@@ -277,12 +428,27 @@ void ViewerSocket::onTransportClosed(const WebSocketClient::Termination &termina
 
 void ViewerSocket::onMessage(const std::string &data)
 {
+    WsIncomingPacket packet;
+    if (!decodeRawPacket(data, packet)) {
+        return;
+    }
     std::scoped_lock lock(queue_mutex_);
-    incoming_queue_.push_back(data);
+    if (incoming_queue_.size() >= kMaxQueuedPackets) {
+        incoming_overflow_.store(true, std::memory_order_release);
+        return;
+    }
+    incoming_queue_.push_back(std::move(packet));
+}
+
+bool ViewerSocket::isTrustedClient(const WsIncomingPacket &packet) const
+{
+    return packet.type == WsPacketType::ClientConnect && packet.verified && !packet.public_key.empty() &&
+           is_key_trusted_ && is_key_trusted_(packet.public_key);
 }
 
 std::vector<std::uint8_t> ViewerSocket::pendingKey(const std::string &client_id) const
 {
+    std::scoped_lock lock(pending_keys_mutex_);
     auto it = pending_keys_.find(client_id);
     if (it == pending_keys_.end()) {
         return {};
@@ -292,17 +458,37 @@ std::vector<std::uint8_t> ViewerSocket::pendingKey(const std::string &client_id)
 
 void ViewerSocket::sendClientTrusted(const std::string &client_id)
 {
-    if (!open_.load() || !ws_ || !ws_->isOpen()) {
-        return;
+    try {
+        std::vector<std::uint8_t> pending_key;
+        {
+            std::scoped_lock lock(pending_keys_mutex_);
+            const auto pending = pending_keys_.find(client_id);
+            if (pending == pending_keys_.end()) {
+                return;
+            }
+            pending_key = pending->second;
+        }
+        if (!is_key_trusted_ || !is_key_trusted_(pending_key)) {
+            return;
+        }
+        std::string payload_id;
+        {
+            std::scoped_lock lock(payload_mutex_);
+            payload_id = last_payload_id_;
+        }
+        const int sampler_interval = config_.sampler_interval;
+        const int statistics_interval = config_.statistics_interval;
+        const auto private_key = key_pair_.private_key_pkcs8;
+        WebSocketClient::DeferredEncoder encoder = [client_id, sampler_interval, statistics_interval, payload_id,
+                                                    private_key]() {
+            return encodeServerConnectResponse(client_id, 0,  // 0=ACCEPTED
+                                               sampler_interval, statistics_interval, payload_id, private_key);
+        };
+        enqueueDeferred(std::move(encoder), accountedBytes({client_id.size(), payload_id.size(), private_key.size()}));
     }
-    std::string payload_id;
-    {
-        std::scoped_lock lock(payload_mutex_);
-        payload_id = last_payload_id_;
+    catch (...) {
+        setDeferredSendError();
     }
-    ws_->send(encodeServerConnectResponse(client_id, 0,  // 0=ACCEPTED
-                                          config_.sampler_interval, config_.statistics_interval, payload_id,
-                                          key_pair_.private_key_pkcs8));
 }
 
 }  // namespace spark

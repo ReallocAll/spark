@@ -65,7 +65,7 @@ public:
     bool sendStatistics(const std::string &platform, const std::string &system, const std::string &metrics);
 
     // Close the socket and signal the viewer.
-    void close();
+    void close() noexcept;
 
     bool isOpen() const { return open_.load(); }
     CloseReason closeReason() const;
@@ -98,9 +98,14 @@ private:
     void prepareOpen();
     void onTransportClosed(const WebSocketClient::Termination &termination);
     void setCloseState(CloseReason reason, std::string diagnostic = {});
+    [[nodiscard]] bool isTrustedClient(const WsIncomingPacket &packet) const;
+    bool enqueueDeferredLocked(WebSocketClient::DeferredEncoder encoder, std::size_t accounted_input_bytes) noexcept;
+    bool enqueueDeferred(WebSocketClient::DeferredEncoder encoder, std::size_t accounted_input_bytes) noexcept;
+    void setDeferredSendError() noexcept;
 
     Config config_;
     Crypto::KeyPair key_pair_;
+    mutable std::mutex transport_mutex_;
     std::unique_ptr<WebSocketClient> ws_;
 
     std::atomic<bool> open_{false};
@@ -113,11 +118,13 @@ private:
     IsKeyTrustedCallback is_key_trusted_;
 
     // Pending client keys awaiting trust approval.
+    mutable std::mutex pending_keys_mutex_;
     std::map<std::string, std::vector<std::uint8_t>> pending_keys_;
 
     // Incoming messages are queued for processing on the main thread.
     std::mutex queue_mutex_;
-    std::vector<std::string> incoming_queue_;
+    std::vector<WsIncomingPacket> incoming_queue_;
+    std::atomic<bool> incoming_overflow_{false};
 
     mutable std::mutex close_mutex_;
     CloseReason close_reason_ = CloseReason::None;
@@ -125,6 +132,8 @@ private:
 
     static constexpr std::int64_t kInitialTimeoutMs = 60000;      // 60s
     static constexpr std::int64_t kEstablishedTimeoutMs = 30000;  // 30s
+    static constexpr std::size_t kMaxQueuedPackets = 64;
+    static constexpr std::size_t kMaxPendingKeys = 64;
 };
 
 }  // namespace spark

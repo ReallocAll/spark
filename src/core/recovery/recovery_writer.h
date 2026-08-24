@@ -19,6 +19,8 @@
 
 namespace spark {
 
+struct RecoveryWriterQueueTestAccess;
+
 // Crash-safe recovery journal writer. Dedicated thread drains a bounded lock-free queue;
 // all file I/O is on the writer thread. Producers only enqueue lightweight serialized records.
 class RecoveryWriter : public RecoverySink {
@@ -72,6 +74,8 @@ public:
     void requestFlush();
 
 private:
+    friend struct RecoveryWriterQueueTestAccess;
+
     void enqueue(RecordType type, const JournalBuffer &payload);
     void writerLoop();
     bool openSegment(std::uint32_t segment_number);

@@ -30,6 +30,24 @@ set_target_properties(spark_sampler_bounded_queue_test PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME spark_sampler_bounded_queue_test COMMAND spark_sampler_bounded_queue_test)
 
+add_executable(spark_sampler_bounded_aggregation_test native/sampler/bounded_aggregation_test.cpp)
+target_link_libraries(spark_sampler_bounded_aggregation_test PRIVATE spark_core)
+set_target_properties(spark_sampler_bounded_aggregation_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME spark_sampler_bounded_aggregation_test COMMAND spark_sampler_bounded_aggregation_test)
+
+add_executable(spark_allocation_bounded_event_queue_test native/alloc/bounded_event_queue_test.cpp)
+target_include_directories(spark_allocation_bounded_event_queue_test PRIVATE "${CMAKE_SOURCE_DIR}/src")
+set_target_properties(spark_allocation_bounded_event_queue_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME spark_allocation_bounded_event_queue_test COMMAND spark_allocation_bounded_event_queue_test)
+
+add_executable(spark_allocation_profile_aggregation_test native/alloc/allocation_profile_aggregation_test.cpp)
+target_link_libraries(spark_allocation_profile_aggregation_test PRIVATE spark_core)
+set_target_properties(spark_allocation_profile_aggregation_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME spark_allocation_profile_aggregation_test COMMAND spark_allocation_profile_aggregation_test)
+
 add_executable(spark_ping_statistics_test core/stats/ping_statistics_test.cpp)
 target_link_libraries(spark_ping_statistics_test PRIVATE spark_core)
 set_target_properties(spark_ping_statistics_test PROPERTIES
@@ -114,6 +132,12 @@ set_target_properties(spark_profiler_timeout_integration_test PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME spark_profiler_timeout_integration_test COMMAND spark_profiler_timeout_integration_test)
 
+add_executable(spark_profiler_service_failure_test application/profiler/profiler_service_failure_test.cpp)
+target_link_libraries(spark_profiler_service_failure_test PRIVATE spark_application)
+set_target_properties(spark_profiler_service_failure_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME spark_profiler_service_failure_test COMMAND spark_profiler_service_failure_test)
+
 add_executable(spark_health_dashboard_test application/health/health_dashboard_test.cpp)
 target_link_libraries(spark_health_dashboard_test PRIVATE spark_application)
 set_target_properties(spark_health_dashboard_test PROPERTIES
@@ -125,6 +149,12 @@ target_link_libraries(spark_health_command_routing_test PRIVATE spark_applicatio
 set_target_properties(spark_health_command_routing_test PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME spark_health_command_routing_test COMMAND spark_health_command_routing_test)
+
+add_executable(spark_health_command_failure_test application/health/health_command_failure_test.cpp)
+target_link_libraries(spark_health_command_failure_test PRIVATE spark_application)
+set_target_properties(spark_health_command_failure_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME spark_health_command_failure_test COMMAND spark_health_command_failure_test)
 
 add_executable(spark_health_report_test application/health/health_report_test.cpp)
 target_link_libraries(spark_health_report_test PRIVATE spark_application)
@@ -222,6 +252,24 @@ set_target_properties(spark_journal_test PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME spark_journal_test COMMAND spark_journal_test)
 
+add_executable(spark_journal_reader_bounds_test core/recovery/journal_reader_bounds_test.cpp)
+target_link_libraries(spark_journal_reader_bounds_test PRIVATE spark_core)
+set_target_properties(spark_journal_reader_bounds_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME spark_journal_reader_bounds_test COMMAND spark_journal_reader_bounds_test)
+
+add_executable(spark_recovery_writer_queue_test core/recovery/recovery_writer_queue_test.cpp)
+target_link_libraries(spark_recovery_writer_queue_test PRIVATE spark_core)
+set_target_properties(spark_recovery_writer_queue_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME spark_recovery_writer_queue_test COMMAND spark_recovery_writer_queue_test)
+
+add_executable(spark_journal_format_bounds_test core/recovery/journal_format_bounds_test.cpp)
+target_link_libraries(spark_journal_format_bounds_test PRIVATE spark_core)
+set_target_properties(spark_journal_format_bounds_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME spark_journal_format_bounds_test COMMAND spark_journal_format_bounds_test)
+
 add_executable(spark_recovery_save_failure_test application/recovery/recovery_save_failure_test.cpp)
 target_link_libraries(spark_recovery_save_failure_test PRIVATE spark_application)
 set_target_properties(spark_recovery_save_failure_test PROPERTIES
@@ -317,6 +365,13 @@ elseif (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "x
             _GNU_SOURCE
             SPARK_ELF_HOOK_FIXTURE_PATH="$<TARGET_FILE:spark_elf_hook_fixture>")
     target_compile_definitions(spark_profiler_export_test PRIVATE _GNU_SOURCE)
+
+    add_executable(spark_capture_linux_lifecycle_test native/sampler/capture_linux_lifecycle_test.cpp)
+    target_compile_definitions(spark_capture_linux_lifecycle_test PRIVATE _GNU_SOURCE)
+    target_link_libraries(spark_capture_linux_lifecycle_test PRIVATE spark_core ${CMAKE_DL_LIBS})
+    set_target_properties(spark_capture_linux_lifecycle_test PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+    add_test(NAME spark_capture_linux_lifecycle_test COMMAND spark_capture_linux_lifecycle_test)
 endif ()
 
 add_test(NAME spark_selftest COMMAND spark_selftest --seconds=1)

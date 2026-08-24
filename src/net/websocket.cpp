@@ -1,20 +1,16 @@
 #include "net/websocket.h"
 
 #include <chrono>
-#include <cstring>
 #include <exception>
+#include <limits>
 #include <memory>
+#include <utility>
 
 #include <curl/curl.h>
 
 namespace spark {
 
 namespace {
-
-// HTTP response buffer for the /create request.
-struct CreateResponse {
-    std::string data;
-};
 
 struct CurlEasyDeleter {
     std::atomic<std::uint64_t> *cleanup_count = nullptr;
@@ -62,13 +58,6 @@ private:
 
 using CurlEasyPtr = std::unique_ptr<CURL, CurlEasyDeleter>;
 
-size_t writeCallback(char *ptr, size_t size, size_t nmemb, void *userdata)
-{
-    auto *resp = static_cast<CreateResponse *>(userdata);
-    resp->data.append(ptr, size * nmemb);
-    return size * nmemb;
-}
-
 // Parse {"key":"<channelId>"} from the /create response.
 std::string parseChannelKey(const std::string &json)
 {
@@ -101,6 +90,29 @@ WebSocketClient::~WebSocketClient()
     close();
 }
 
+std::size_t WebSocketClient::writeCallback(char *ptr, std::size_t size, std::size_t nmemb, void *userdata) noexcept
+{
+    if (size != 0 && nmemb > std::numeric_limits<std::size_t>::max() / size) {
+        return 0;
+    }
+    const std::size_t bytes = size * nmemb;
+    if (bytes == 0) {
+        return 0;
+    }
+    auto *response = static_cast<std::string *>(userdata);
+    if (response == nullptr || bytes > kMaxCreateResponseBytes || response->size() > kMaxCreateResponseBytes - bytes ||
+        (bytes != 0 && ptr == nullptr)) {
+        return 0;
+    }
+    try {
+        response->append(ptr, bytes);
+    }
+    catch (...) {
+        return 0;
+    }
+    return bytes;
+}
+
 std::string WebSocketClient::connect(const std::string &host, const std::string &user_agent)
 {
     if (thread_.joinable()) {
@@ -113,6 +125,7 @@ std::string WebSocketClient::connect(const std::string &host, const std::string 
     {
         std::scoped_lock lock(send_mutex_);
         send_queue_ = {};
+        queued_send_bytes_ = 0;
         pending_send_.reset();
         pending_send_offset_ = 0;
     }
@@ -126,7 +139,7 @@ std::string WebSocketClient::connect(const std::string &host, const std::string 
     }
 
     std::string url = "https://" + host + "/create";
-    CreateResponse resp;
+    std::string response;
     struct curl_slist *headers = nullptr;
     headers = curl_slist_append(headers, "Accept: application/json");
     if (!user_agent.empty()) {
@@ -136,8 +149,9 @@ std::string WebSocketClient::connect(const std::string &host, const std::string 
 
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeCallback);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &resp);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, &WebSocketClient::writeCallback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
 
     CURLcode rc = curl_easy_perform(curl);
@@ -148,7 +162,7 @@ std::string WebSocketClient::connect(const std::string &host, const std::string 
         return {};
     }
 
-    channel_id_ = parseChannelKey(resp.data);
+    channel_id_ = parseChannelKey(response);
     if (channel_id_.empty()) {
         return {};
     }
@@ -195,28 +209,118 @@ bool WebSocketClient::startReceiveWorker()
     return true;
 }
 
-void WebSocketClient::send(const std::string &message)
+void WebSocketClient::send(const std::string &message) noexcept
 {
-    if (!running_.load()) {
-        return;
+    try {
+        enqueueSendJob(SendJob{.message = message, .accounted_bytes = message.size()});
     }
-    {
-        std::scoped_lock lock(send_mutex_);
-        send_queue_.push(message);
+    catch (...) {
+        recordSendFailure("outgoing WebSocket message allocation failed");
     }
-    send_cv_.notify_one();
 }
 
-void WebSocketClient::close()
+bool WebSocketClient::sendDeferred(DeferredEncoder encoder, std::size_t accounted_input_bytes) noexcept
+{
+    if (!running_.load()) {
+        return false;
+    }
+    if (!encoder) {
+        recordSendFailure("deferred encoder missing");
+        return false;
+    }
+    try {
+        return enqueueSendJob(SendJob{.encoder = std::move(encoder), .accounted_bytes = accounted_input_bytes});
+    }
+    catch (...) {
+        recordSendFailure("deferred WebSocket job allocation failed");
+        return false;
+    }
+}
+
+bool WebSocketClient::enqueueSendJob(SendJob job) noexcept
+{
+    if (!running_.load()) {
+        return false;
+    }
+    bool rejected = false;
+    bool allocation_failure = false;
+    try {
+        std::scoped_lock lock(send_mutex_);
+        if (!running_.load()) {
+            return false;
+        }
+        if ((!job.encoder && job.message.size() > kMaxOutgoingMessageBytes) ||
+            job.accounted_bytes > kMaxQueuedSendBytes || send_queue_.size() >= kMaxQueuedSends ||
+            queued_send_bytes_ > kMaxQueuedSendBytes ||
+            job.accounted_bytes > kMaxQueuedSendBytes - queued_send_bytes_) {
+            rejected = true;
+        }
+        else {
+            try {
+                send_queue_.push(std::move(job));
+            }
+            catch (...) {
+                allocation_failure = true;
+            }
+            if (!allocation_failure) {
+                queued_send_bytes_ += send_queue_.back().accounted_bytes;
+            }
+        }
+    }
+    catch (...) {
+        allocation_failure = true;
+    }
+    if (rejected) {
+        rejectSendQueue();
+        return false;
+    }
+    if (allocation_failure) {
+        recordSendFailure("outgoing WebSocket queue allocation failed");
+        return false;
+    }
+    send_cv_.notify_one();
+    return true;
+}
+
+void WebSocketClient::rejectSendQueue() noexcept
+{
+    recordSendFailure("outgoing WebSocket queue exceeded its limit");
+    running_.store(false);
+    send_cv_.notify_all();
+}
+
+void WebSocketClient::recordSendFailure(const char *detail) noexcept
+{
+    try {
+        recordTermination(TerminationKind::SendError, detail);
+    }
+    catch (...) {
+        running_.store(false);
+    }
+    running_.store(false);
+    send_cv_.notify_all();
+}
+
+void WebSocketClient::close() noexcept
 {
     if (running_.load()) {
         local_close_requested_.store(true);
-        recordTermination(TerminationKind::LocalClose);
+        try {
+            recordTermination(TerminationKind::LocalClose);
+        }
+        catch (...) {
+            running_.store(false);
+        }
     }
     running_.store(false);
     send_cv_.notify_all();
     if (thread_.joinable() && thread_.get_id() != std::this_thread::get_id()) {
-        thread_.join();
+        try {
+            thread_.join();
+        }
+        catch (...) {
+            running_.store(false);
+        }
     }
 }
 
@@ -250,13 +354,39 @@ void WebSocketClient::notifyTermination() noexcept
 WebSocketClient::SendStep WebSocketClient::processNextSend(const SendFunction &send_function)
 {
     if (!pending_send_) {
-        std::scoped_lock lock(send_mutex_);
-        if (send_queue_.empty()) {
-            return SendStep::Idle;
+        SendJob job;
+        {
+            std::scoped_lock lock(send_mutex_);
+            if (send_queue_.empty()) {
+                return SendStep::Idle;
+            }
+            job = std::move(send_queue_.front());
+            queued_send_bytes_ -= job.accounted_bytes;
+            send_queue_.pop();
         }
-        pending_send_ = std::move(send_queue_.front());
-        send_queue_.pop();
         pending_send_offset_ = 0;
+
+        if (job.encoder) {
+            try {
+                pending_send_ = job.encoder();
+            }
+            catch (const std::exception &error) {
+                recordTermination(TerminationKind::SendError, error.what());
+                return SendStep::Fatal;
+            }
+            catch (...) {
+                recordTermination(TerminationKind::SendError, "deferred encoder failed");
+                return SendStep::Fatal;
+            }
+        }
+        else {
+            pending_send_ = std::move(job.message);
+        }
+        if (pending_send_->size() > kMaxOutgoingMessageBytes) {
+            pending_send_.reset();
+            recordTermination(TerminationKind::SendError, "outgoing WebSocket message exceeded its limit");
+            return SendStep::Fatal;
+        }
     }
 
     const std::size_t remaining = pending_send_->size() - pending_send_offset_;
@@ -279,6 +409,20 @@ WebSocketClient::SendStep WebSocketClient::processNextSend(const SendFunction &s
         pending_send_offset_ = 0;
     }
     return SendStep::Progress;
+}
+
+bool WebSocketClient::drainLocalClose(const SendFunction &send_function)
+{
+    if (!local_close_requested_.exchange(false)) {
+        return false;
+    }
+    for (std::size_t attempt = 0; attempt <= kMaxQueuedSends; ++attempt) {
+        const SendStep send_step = processNextSend(send_function);
+        if (send_step == SendStep::Idle || send_step == SendStep::Fatal || send_step == SendStep::Retry) {
+            break;
+        }
+    }
+    return true;
 }
 
 void WebSocketClient::handleReceiveFailure(int code)
@@ -308,6 +452,8 @@ void WebSocketClient::runReceiveLoop()
 
     curl_easy_setopt(curl.get(), CURLOPT_URL, ws_url.c_str());
     curl_easy_setopt(curl.get(), CURLOPT_HTTPHEADER, headers.get());
+    curl_easy_setopt(curl.get(), CURLOPT_CONNECTTIMEOUT, 10L);
+    curl_easy_setopt(curl.get(), CURLOPT_TIMEOUT, 10L);
     curl_easy_setopt(curl.get(), CURLOPT_CONNECT_ONLY, 2L);  // WebSocket mode
 
     if (!incoming_message_for_testing_.empty() && message_cb_) {
@@ -344,6 +490,16 @@ void WebSocketClient::runReceiveLoop()
                 recordTermination(TerminationKind::RemoteClose);
                 break;
             }
+            if (frame->bytesleft < 0 || pending_recv.size() > kMaxIncomingMessageBytes ||
+                recv > kMaxIncomingMessageBytes - pending_recv.size()) {
+                recordTermination(TerminationKind::ReceiveError, "incoming WebSocket message exceeded its limit");
+                break;
+            }
+            const std::size_t remaining_capacity = kMaxIncomingMessageBytes - pending_recv.size() - recv;
+            if (std::cmp_greater(frame->bytesleft, remaining_capacity)) {
+                recordTermination(TerminationKind::ReceiveError, "incoming WebSocket message exceeded its limit");
+                break;
+            }
             if (recv > 0) {
                 pending_recv.append(recv_buf, recv);
                 if (frame->bytesleft == 0) {
@@ -369,7 +525,12 @@ void WebSocketClient::runReceiveLoop()
         }
     }
 
-    if (local_close_requested_.exchange(false)) {
+    const SendFunction send_function = [&curl](const char *data, std::size_t size) {
+        std::size_t sent = 0;
+        const CURLcode code = curl_ws_send(curl.get(), data, size, &sent, 0, CURLWS_TEXT);
+        return SendAttempt{.code = code, .sent = sent};
+    };
+    if (drainLocalClose(send_function)) {
         size_t sent = 0;
         const char *close_msg = "";
         curl_ws_send(curl.get(), close_msg, 0, &sent, 0, CURLWS_CLOSE);

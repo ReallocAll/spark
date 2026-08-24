@@ -1,12 +1,15 @@
 #ifndef ENDSTONE_SPARK_WS_PROTO_H
 #define ENDSTONE_SPARK_WS_PROTO_H
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <string_view>
 #include <vector>
 
 namespace spark {
+
+inline constexpr std::size_t kMaxIncomingWsPacketBytes = 64 * 1024;
 
 // SocketChannelInfo (spark.proto; used by SamplerData and HealthData)
 struct SocketChannelInfo {

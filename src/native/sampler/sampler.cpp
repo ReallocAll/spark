@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <chrono>
 #include <exception>
-#include <limits>
 #include <string_view>
 #include <utility>
 
@@ -29,20 +28,6 @@ constexpr std::size_t KLeadingDrop = 0;
 #else
 constexpr std::size_t KLeadingDrop = 2;
 #endif
-
-std::int32_t clampWindow(std::int64_t window) noexcept
-{
-    constexpr std::int64_t k_min = std::numeric_limits<std::int32_t>::min();
-    constexpr std::int64_t k_max = std::numeric_limits<std::int32_t>::max();
-    if (window < k_min) {
-        return std::numeric_limits<std::int32_t>::min();
-    }
-    if (window > k_max) {
-        return std::numeric_limits<std::int32_t>::max();
-    }
-    return static_cast<std::int32_t>(window);
-}
-
 }  // namespace
 
 void Sampler::markWorkerFailure() noexcept
@@ -205,13 +190,20 @@ void Sampler::resetSession()
     window_sample_counts_.clear();
     const std::int32_t current_window = currentWindow();
     next_history_prune_window_ = current_window;
-    modules_ = ModuleTable{};
+    modules_ = ModuleTable{kModuleCapacity};
     window_ticks_.clear();
     next_tick_history_prune_window_ = current_window;
     current_tick_.store(0);
     sample_count_.store(0, std::memory_order_relaxed);
     dropped_samples_.store(0, std::memory_order_relaxed);
+    dropped_queue_samples_.store(0, std::memory_order_relaxed);
+    dropped_pending_samples_.store(0, std::memory_order_relaxed);
+    dropped_profile_samples_.store(0, std::memory_order_relaxed);
     dropped_tick_events_.store(0, std::memory_order_relaxed);
+    module_overflow_frames_.store(0, std::memory_order_relaxed);
+    overflow_thread_samples_.store(0, std::memory_order_relaxed);
+    history_samples_pruned_.store(0, std::memory_order_relaxed);
+    profile_storage_exhausted_.store(false, std::memory_order_relaxed);
     sampler_tid_.store(0, std::memory_order_relaxed);
     aggregator_tid_.store(0, std::memory_order_relaxed);
     worker_failed_.store(false, std::memory_order_relaxed);
@@ -219,6 +211,10 @@ void Sampler::resetSession()
     sampler_heartbeat_.last_ns.store(0, std::memory_order_relaxed);
     aggregator_heartbeat_.sequence.store(0, std::memory_order_relaxed);
     aggregator_heartbeat_.last_ns.store(0, std::memory_order_relaxed);
+    pending_sample_count_ = 0;
+    profile_nodes_remaining_ = kProfileNodeCapacity;
+    profile_time_entries_remaining_ = kProfileTimeEntryCapacity;
+    thread_identities_.clear();
     journaled_threads_.clear();
 }
 
@@ -248,6 +244,7 @@ bool Sampler::enqueueSample(Sample sample) noexcept
     if (samples_.try_enqueue(sample_producer_, std::move(sample))) {
         return true;
     }
+    dropped_queue_samples_.fetch_add(1, std::memory_order_relaxed);
     dropped_samples_.fetch_add(1, std::memory_order_relaxed);
     return false;
 }
@@ -370,6 +367,9 @@ void Sampler::samplerLoop()
                 FrameKey key;
                 const std::size_t prev_module_count = modules_.size();
                 key.module = modules_.intern(path);
+                if (key.module == 0 && path != kOtherModulesSentinel && modules_.size() == kModuleCapacity) {
+                    module_overflow_frames_.fetch_add(1, std::memory_order_relaxed);
+                }
                 if (recovery_sink_ && modules_.size() > prev_module_count) {
                     recovery_sink_->journalModuleDef(key.module, path);
                 }
@@ -383,6 +383,9 @@ void Sampler::samplerLoop()
                 FrameKey key;
                 const std::size_t prev_module_count = modules_.size();
                 key.module = modules_.intern(path);
+                if (key.module == 0 && path != kOtherModulesSentinel && modules_.size() == kModuleCapacity) {
+                    module_overflow_frames_.fetch_add(1, std::memory_order_relaxed);
+                }
                 if (recovery_sink_ && modules_.size() > prev_module_count) {
                     recovery_sink_->journalModuleDef(key.module, path);
                 }
@@ -404,155 +407,6 @@ void Sampler::samplerLoop()
         sampler_heartbeat_.beat();
     }
     sampler_tid_.store(0, std::memory_order_release);
-}
-
-void Sampler::acceptSample(const Sample &sample)
-{
-    tree_.log(sample.frames, sample.window, sample.weight);
-    auto [it, inserted] = thread_trees_.try_emplace(sample.thread_id);
-    ThreadCallTree &thread = it->second;
-    if (inserted) {
-        thread.thread_id = sample.thread_id;
-        thread.thread_name = sample.thread_name;
-    }
-    thread.tree.log(sample.frames, sample.window, sample.weight);
-    ++window_sample_counts_[sample.window];
-    sample_count_.fetch_add(1, std::memory_order_relaxed);
-    maybePruneHistory(sample.window);
-
-    if (recovery_sink_) {
-        if (journaled_threads_.insert(sample.thread_id).second) {
-            recovery_sink_->journalThreadDef(sample.thread_id, sample.thread_id, sample.thread_name);
-        }
-        recovery_sink_->journalSample(sample);
-    }
-}
-
-void Sampler::maybePruneHistory(std::int32_t current_window)
-{
-    if (!config_.continuous || current_window < next_history_prune_window_) {
-        return;
-    }
-    const std::int32_t minimum_window = clampWindow(static_cast<std::int64_t>(current_window) -
-                                                    static_cast<std::int64_t>(profiling_window::kHistorySize));
-    tree_.pruneBefore(minimum_window);
-    std::erase_if(thread_trees_,
-                  [minimum_window](auto &entry) { return entry.second.tree.pruneBefore(minimum_window); });
-    std::uint64_t removed_samples = 0;
-    auto end = window_sample_counts_.lower_bound(minimum_window);
-    for (auto it = window_sample_counts_.begin(); it != end; ++it) {
-        removed_samples += it->second;
-    }
-    window_sample_counts_.erase(window_sample_counts_.begin(), end);
-    sample_count_.fetch_sub(removed_samples, std::memory_order_relaxed);
-    next_history_prune_window_ = static_cast<std::int64_t>(current_window) + kHistoryPruneIntervalWindows;
-}
-
-void Sampler::maybePruneTickHistory(std::int32_t current_window)
-{
-    if (!config_.continuous || current_window < next_tick_history_prune_window_) {
-        return;
-    }
-    const std::int32_t minimum_window = clampWindow(static_cast<std::int64_t>(current_window) -
-                                                    static_cast<std::int64_t>(profiling_window::kHistorySize));
-    window_ticks_.erase(window_ticks_.begin(), window_ticks_.lower_bound(minimum_window));
-    next_tick_history_prune_window_ = static_cast<std::int64_t>(current_window) + kHistoryPruneIntervalWindows;
-}
-
-void Sampler::recordTickDecision(std::uint64_t tick_id, bool keep)
-{
-    if (tick_id < tick_decision_base_) {
-        return;
-    }
-    if (tick_id - tick_decision_base_ >= kTickDecisionCapacity) {
-        const std::uint64_t new_base = tick_id - kTickDecisionCapacity + 1;
-        const std::uint64_t remove_count = new_base - tick_decision_base_;
-        if (remove_count >= tick_decisions_.size()) {
-            tick_decisions_.clear();
-        }
-        else {
-            tick_decisions_.erase(tick_decisions_.begin(),
-                                  tick_decisions_.begin() + static_cast<std::ptrdiff_t>(remove_count));
-        }
-        tick_decision_base_ = new_base;
-    }
-    const auto offset = static_cast<std::size_t>(tick_id - tick_decision_base_);
-    if (tick_decisions_.size() <= offset) {
-        tick_decisions_.resize(offset + 1, 0);
-    }
-    tick_decisions_[offset] = keep ? 2 : 1;
-    std::erase_if(buckets_, [this](const auto &entry) { return entry.first < tick_decision_base_; });
-}
-
-void Sampler::flushOrDrop(std::uint64_t tick_id, bool keep)
-{
-    auto it = buckets_.find(tick_id);
-    if (it == buckets_.end()) {
-        return;
-    }
-    if (keep) {
-        for (const Sample &s : it->second) {
-            acceptSample(s);
-        }
-    }
-    buckets_.erase(it);
-}
-
-void Sampler::aggregatorLoop()
-{
-    aggregator_tid_.store(currentNativeThreadId(), std::memory_order_release);
-    const bool ticked = config_.only_ticks_over_ms > 0;
-    const auto threshold = static_cast<double>(config_.only_ticks_over_ms);
-
-    auto drain = [&] {
-        TickEvent ev;
-        while (ticks_.try_dequeue(ev)) {
-            bool keep = !ticked || ev.mspt_ms > threshold;
-            if (ticked) {
-                recordTickDecision(ev.tick_id, keep);
-            }
-            if (recovery_sink_) {
-                recovery_sink_->journalTickEvent(ev.tick_id, ev.mspt_ms);
-            }
-            flushOrDrop(ev.tick_id, keep);
-        }
-        Sample s;
-        while (samples_.try_dequeue(s)) {
-            if (!ticked) {
-                acceptSample(s);
-            }
-            else if (s.tick_id < tick_decision_base_) {
-                continue;
-            }
-            else if (const auto offset = static_cast<std::size_t>(s.tick_id - tick_decision_base_);
-                     offset < tick_decisions_.size() && tick_decisions_[offset] != 0) {
-                if (tick_decisions_[offset] == 2) {
-                    acceptSample(s);
-                }
-            }
-            else {
-                buckets_[s.tick_id].push_back(std::move(s));
-            }
-        }
-    };
-
-    while (agg_running_.load()) {
-        drain();
-        aggregator_heartbeat_.beat();
-        std::this_thread::sleep_for(std::chrono::milliseconds(2));
-    }
-    drain();  // final: sampler has stopped, so this empties the queues
-    aggregator_heartbeat_.beat();
-
-    if (!ticked) {  // disabled => keep everything still buffered
-        for (auto &[tick_id, samples] : buckets_) {
-            for (const Sample &s : samples) {
-                acceptSample(s);
-            }
-        }
-    }
-    buckets_.clear();
-    aggregator_tid_.store(0, std::memory_order_release);
 }
 
 }  // namespace spark
