@@ -81,6 +81,18 @@ set_target_properties(spark_network_monitor_test PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME spark_network_monitor_test COMMAND spark_network_monitor_test)
 
+add_executable(spark_network_monitor_lifecycle_test core/stats/network_monitor_lifecycle_test.cpp)
+target_link_libraries(spark_network_monitor_lifecycle_test PRIVATE spark_core)
+set_target_properties(spark_network_monitor_lifecycle_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME spark_network_monitor_lifecycle_test COMMAND spark_network_monitor_lifecycle_test)
+
+add_executable(spark_double_rolling_average_test core/stats/double_rolling_average_test.cpp)
+target_link_libraries(spark_double_rolling_average_test PRIVATE spark_core)
+set_target_properties(spark_double_rolling_average_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME spark_double_rolling_average_test COMMAND spark_double_rolling_average_test)
+
 add_executable(spark_arguments_test core/command/arguments_test.cpp)
 target_link_libraries(spark_arguments_test PRIVATE spark_core)
 set_target_properties(spark_arguments_test PROPERTIES
@@ -370,6 +382,12 @@ target_link_libraries(spark_server_properties_test PRIVATE spark_core)
 set_target_properties(spark_server_properties_test PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME spark_server_properties_test COMMAND spark_server_properties_test)
+
+add_executable(spark_server_properties_json_test core/metadata/server_properties_json_test.cpp)
+target_link_libraries(spark_server_properties_json_test PRIVATE spark_core)
+set_target_properties(spark_server_properties_json_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME spark_server_properties_json_test COMMAND spark_server_properties_json_test)
 
 add_executable(spark_symbol_guess_dwarf_test native/symbol/symbol_guess_dwarf_test.cpp)
 target_link_libraries(spark_symbol_guess_dwarf_test PRIVATE spark_core)
