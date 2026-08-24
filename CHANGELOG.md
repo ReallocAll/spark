@@ -32,6 +32,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Avoid recalculating and sorting rolling TPS and tick-duration metrics on every server tick when the history is only
+  recorded every 10 seconds.
 - Prevent stale or concurrently closed live-viewer transports from restoring an open connection state, and run initial
   uploads without holding the transport lock.
 - Serialize health-dashboard opening and shutdown without invoking completion callbacks under internal locks.
