@@ -198,7 +198,6 @@ bool Profiler::start(const ProfilerOptions &options, std::uint64_t main_tid, std
             config.thread_patterns = options.threads;
         }
         config.only_ticks_over_ms = options.only_ticks_over_ms > 0 ? options.only_ticks_over_ms : 0;
-        config.continuous = options.is_background;
         sampler_.setTarget(main_tid);
         if (!recovery_dir_.empty()) {
             RecoveryWriter::Config wc;
@@ -213,6 +212,8 @@ bool Profiler::start(const ProfilerOptions &options, std::uint64_t main_tid, std
                     static_cast<std::uint8_t>(options.thread_grouper), 0, false, options.creator_name,
                     options.creator_is_player, options.comment, options.threads,
                     profiling_window::windowAdjustmentMs());
+                // Journal the bounded execution module sentinel before samples.
+                writer->journalModuleDef(0, kOtherModulesSentinel);
                 writer->requestFlush();
                 std::scoped_lock lock(recovery_mutex_);
                 recovery_writer_ = std::move(writer);

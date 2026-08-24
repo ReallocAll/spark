@@ -30,6 +30,12 @@ set_target_properties(spark_sampler_bounded_queue_test PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME spark_sampler_bounded_queue_test COMMAND spark_sampler_bounded_queue_test)
 
+add_executable(spark_sampler_bounded_aggregation_test native/sampler/bounded_aggregation_test.cpp)
+target_link_libraries(spark_sampler_bounded_aggregation_test PRIVATE spark_core)
+set_target_properties(spark_sampler_bounded_aggregation_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME spark_sampler_bounded_aggregation_test COMMAND spark_sampler_bounded_aggregation_test)
+
 add_executable(spark_allocation_bounded_event_queue_test native/alloc/bounded_event_queue_test.cpp)
 target_include_directories(spark_allocation_bounded_event_queue_test PRIVATE "${CMAKE_SOURCE_DIR}/src")
 set_target_properties(spark_allocation_bounded_event_queue_test PROPERTIES

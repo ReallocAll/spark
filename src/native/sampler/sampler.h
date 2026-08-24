@@ -35,7 +35,6 @@ struct SamplerConfig {
     bool regex_threads = false;
     std::vector<std::string> thread_patterns;
     std::int64_t only_ticks_over_ms = 0;  // 0 = disabled (record every tick)
-    bool continuous = false;
 };
 
 // Per-window tick accounting, used to build the viewer's timeline overlay.
@@ -92,9 +91,24 @@ public:
     std::uint64_t numberOfTicks() const { return current_tick_.load(); }
     std::uint64_t sampleCount() const { return sample_count_.load(std::memory_order_relaxed); }
     std::uint64_t droppedSamples() const { return dropped_samples_.load(std::memory_order_relaxed); }
+    std::uint64_t droppedQueueSamples() const { return dropped_queue_samples_.load(std::memory_order_relaxed); }
+    std::uint64_t droppedPendingSamples() const { return dropped_pending_samples_.load(std::memory_order_relaxed); }
+    std::uint64_t droppedProfileSamples() const { return dropped_profile_samples_.load(std::memory_order_relaxed); }
     std::uint64_t droppedTickEvents() const { return dropped_tick_events_.load(std::memory_order_relaxed); }
     static constexpr std::size_t sampleQueueCapacity() { return kSampleQueueCapacity; }
     static constexpr std::size_t tickQueueCapacity() { return kTickQueueCapacity; }
+    static constexpr std::size_t moduleCapacity() { return kModuleCapacity; }
+    static constexpr std::size_t threadRootCapacity() { return kThreadRootCapacity; }
+    static constexpr std::size_t pendingSampleCapacity() { return kMaxPendingSamples; }
+    static constexpr std::size_t profileNodeCapacity() { return kProfileNodeCapacity; }
+    static constexpr std::size_t profileTimeEntryCapacity() { return kProfileTimeEntryCapacity; }
+    std::uint64_t moduleOverflowFrames() const { return module_overflow_frames_.load(std::memory_order_relaxed); }
+    std::uint64_t overflowThreadSamples() const { return overflow_thread_samples_.load(std::memory_order_relaxed); }
+    std::uint64_t historySamplesPruned() const { return history_samples_pruned_.load(std::memory_order_relaxed); }
+    std::size_t retainedHistoryWindows() const { return tree_.root().times.size(); }
+    bool historyTruncated() const { return historySamplesPruned() != 0; }
+    bool profileStorageExhausted() const { return profile_storage_exhausted_.load(std::memory_order_relaxed); }
+    bool dataIncomplete() const { return droppedSamples() != 0 || droppedTickEvents() != 0; }
     const std::string &lastError() const { return last_error_; }
 
     // Heartbeats updated by the sampler and aggregator threads.
@@ -107,6 +121,12 @@ private:
 
     static constexpr std::size_t kSampleQueueCapacity = 4096;
     static constexpr std::size_t kTickQueueCapacity = 4096;
+    static constexpr std::size_t kModuleCapacity = 512;
+    static constexpr std::size_t kMaxThreadIdentities = 256;
+    static constexpr std::size_t kThreadRootCapacity = kMaxThreadIdentities + 1;
+    static constexpr std::size_t kProfileNodeCapacity = 131072;
+    static constexpr std::size_t kProfileTimeEntryCapacity = 2 * 1024 * 1024;
+    static constexpr std::size_t kMaxPendingSamples = 32768;
 
     struct QueueTraits : moodycamel::ConcurrentQueueDefaultTraits {
         static constexpr std::size_t MAX_SUBQUEUE_SIZE = kSampleQueueCapacity;
@@ -119,7 +139,7 @@ private:
 
     void samplerLoop();
     void aggregatorLoop();
-    void acceptSample(const Sample &sample);
+    bool acceptSample(const Sample &sample);
     void flushOrDrop(std::uint64_t tick_id, bool keep);
     void resetSession();
     static std::int32_t currentWindow();
@@ -127,6 +147,7 @@ private:
     void maybePruneTickHistory(std::int32_t current_window);
     void recordTickDecision(std::uint64_t tick_id, bool keep);
     bool enqueueSample(Sample sample) noexcept;
+    void dropPendingSamples(std::size_t count) noexcept;
     void markWorkerFailure() noexcept;
     bool startServiceThreads();
 
@@ -139,7 +160,14 @@ private:
     std::atomic<std::uint64_t> current_tick_{0};
     std::atomic<std::uint64_t> sample_count_{0};
     std::atomic<std::uint64_t> dropped_samples_{0};
+    std::atomic<std::uint64_t> dropped_queue_samples_{0};
+    std::atomic<std::uint64_t> dropped_pending_samples_{0};
+    std::atomic<std::uint64_t> dropped_profile_samples_{0};
     std::atomic<std::uint64_t> dropped_tick_events_{0};
+    std::atomic<std::uint64_t> module_overflow_frames_{0};
+    std::atomic<std::uint64_t> overflow_thread_samples_{0};
+    std::atomic<std::uint64_t> history_samples_pruned_{0};
+    std::atomic<bool> profile_storage_exhausted_{false};
     std::atomic<std::uint64_t> sampler_tid_{0};
     std::atomic<std::uint64_t> aggregator_tid_{0};
     std::atomic<bool> worker_failed_{false};
@@ -160,13 +188,16 @@ private:
     CallTree tree_;
     std::map<std::uint64_t, ThreadCallTree> thread_trees_;
     std::unordered_map<std::uint64_t, std::vector<Sample>> buckets_;
+    std::size_t pending_sample_count_ = 0;
     std::deque<std::uint8_t> tick_decisions_;  // 0 pending, 1 drop, 2 keep
     std::uint64_t tick_decision_base_ = 0;
     std::map<std::int32_t, std::uint64_t> window_sample_counts_;
     std::int64_t next_history_prune_window_ = profiling_window::kHistorySize;
+    std::size_t profile_nodes_remaining_ = kProfileNodeCapacity;
+    std::size_t profile_time_entries_remaining_ = kProfileTimeEntryCapacity;
 
     // sampler-thread state
-    ModuleTable modules_;
+    ModuleTable modules_{kModuleCapacity};
 
     // main-thread state (written by onTick, read at export after join)
     std::map<std::int32_t, WindowTickStats> window_ticks_;
@@ -179,6 +210,7 @@ private:
     // Recovery journal sink (nullptr = no journaling).  Used by the
     // aggregator thread only.
     RecoverySink *recovery_sink_ = nullptr;
+    std::unordered_map<std::uint64_t, std::uint64_t> thread_identities_;
     std::unordered_set<std::uint64_t> journaled_threads_;
     std::function<void()> sampler_thread_hook_;
     std::function<void()> aggregator_thread_hook_;
