@@ -74,7 +74,7 @@ private:
     void onTickAt(std::int64_t now_ms);
     UploadResult uploadHealthData(const HealthData &data);
     void runHealthUpload(const HealthData &data, std::string sender_name, bool sender_is_player, std::int64_t now_ms);
-    void announceHealthUpload();
+    void announceHealthUpload() noexcept;
     void completeHealthDashboard(HealthDashboard::OpenResult result);
 
     StatisticsService &statistics_;
@@ -92,6 +92,7 @@ private:
     std::string dashboard_sender_;
     bool dashboard_sender_is_player_ = false;
     std::int64_t dashboard_open_time_ms_ = 0;
+    std::uint64_t accepted_dashboard_generation_ = 0;
     std::thread upload_thread_;
     std::atomic<bool> uploading_{false};
     std::mutex upload_mutex_;
