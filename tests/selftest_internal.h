@@ -133,7 +133,7 @@ bool verifyWindowsThreadActivityDetection();
 
 bool verifyThreadSelectorSemantics();
 bool verifyByteSampling();
-#if defined(_WIN32) || defined(__linux__)
+#if defined(__linux__)
 bool verifyAllocationThreadSelection();
 bool verifyProcessWideAllocationSampling();
 bool verifyAllocationContentionPolicy();

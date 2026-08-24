@@ -35,6 +35,43 @@ void runViewerLifecycleTests()
     }
 
     {
+        ViewerSocket conflict({}, {});
+        conflict.setIsKeyTrustedCallback([](const std::vector<std::uint8_t> &) { return false; });
+        ViewerSocketTestAccess::beginOpen(conflict);
+        assert(ViewerSocketTestAccess::markOpen(conflict));
+
+        const Crypto::KeyPair &first_key = test::testKeyPair();
+        const Crypto::KeyPair second_key = Crypto::generateKeyPair();
+        assert(!second_key.public_key_x509.empty());
+
+        ViewerSocketTestAccess::message(conflict, clientConnectPacket(first_key, true));
+        assert(conflict.tick());
+        assert(conflict.pendingKey("client") == first_key.public_key_x509);
+
+        ViewerSocketTestAccess::message(conflict, clientConnectPacket(second_key, true));
+        assert(conflict.tick());
+        assert(conflict.pendingKey("client").empty());
+        const std::size_t conflicted_queue_size = ViewerSocketTestAccess::queuedMessages(conflict);
+        conflict.sendClientTrusted("client");
+        assert(ViewerSocketTestAccess::queuedMessages(conflict) == conflicted_queue_size);
+
+        ViewerSocketTestAccess::message(conflict, clientConnectPacket(first_key, true));
+        assert(conflict.tick());
+        assert(conflict.pendingKey("client").empty());
+        const std::size_t repeated_queue_size = ViewerSocketTestAccess::queuedMessages(conflict);
+        conflict.sendClientTrusted("client");
+        assert(ViewerSocketTestAccess::queuedMessages(conflict) == repeated_queue_size);
+
+        conflict.close();
+        ViewerSocketTestAccess::beginOpen(conflict);
+        assert(ViewerSocketTestAccess::markOpen(conflict));
+        ViewerSocketTestAccess::message(conflict, clientConnectPacket(first_key, true));
+        assert(conflict.tick());
+        assert(conflict.pendingKey("client") == first_key.public_key_x509);
+        conflict.close();
+    }
+
+    {
         ViewerSocket concurrent({}, {});
         ViewerSocketTestAccess::beginOpen(concurrent);
         assert(ViewerSocketTestAccess::markOpen(concurrent));

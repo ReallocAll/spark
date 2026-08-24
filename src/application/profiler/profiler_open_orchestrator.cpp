@@ -105,7 +105,7 @@ void ProfilerOpenOrchestrator::cmdOpen(CommandSender &sender, const Arguments &a
 void ProfilerOpenOrchestrator::onTick(const std::string &fallback_sender_name)
 {
     if (viewer_worker_ && viewer_worker_->consumeFailure()) {
-        notifier_.notify(viewer_sender_name_.empty() ? fallback_sender_name : viewer_sender_name_,
+        notifyBestEffort(viewer_sender_name_.empty() ? fallback_sender_name : viewer_sender_name_,
                          "Live viewer worker failed.");
         close();
     }
@@ -117,7 +117,7 @@ void ProfilerOpenOrchestrator::onTick(const std::string &fallback_sender_name)
         if (!viewer_socket_->tick()) {
             std::string diagnostic = viewer_socket_->takeDiagnostic();
             if (!diagnostic.empty()) {
-                notifier_.notify(viewer_sender_name_.empty() ? fallback_sender_name : viewer_sender_name_, diagnostic);
+                notifyBestEffort(viewer_sender_name_.empty() ? fallback_sender_name : viewer_sender_name_, diagnostic);
             }
             close();
         }
@@ -146,6 +146,15 @@ void ProfilerOpenOrchestrator::onTick(const std::string &fallback_sender_name)
                 }
             }
         }
+    }
+}
+
+void ProfilerOpenOrchestrator::notifyBestEffort(const std::string &sender_name, const std::string &message) noexcept
+{
+    try {
+        notifier_.notify(sender_name, message);
+    }
+    catch (...) {  // NOLINT(bugprone-empty-catch): viewer notifications are best effort.
     }
 }
 
@@ -261,14 +270,14 @@ void ProfilerOpenOrchestrator::completeViewerOpen(ViewerUpdateWorker::Completion
             completion.socket->close();
         }
         open_comment_.clear();
-        notifier_.notify(completion.sender_name, "Failed to open the live viewer. Check your network connection.");
+        notifyBestEffort(completion.sender_name, "Failed to open the live viewer. Check your network connection.");
         return;
     }
     viewer_socket_ = std::move(completion.socket);
     viewer_sender_name_ = completion.sender_name;
     viewer_schedule_.arm(nowMs());
-    notifier_.notify(completion.sender_name, "Live viewer opened! Open it at: " + completion.url);
-    notifier_.notify(
+    notifyBestEffort(completion.sender_name, "Live viewer opened! Open it at: " + completion.url);
+    notifyBestEffort(
         completion.sender_name,
         "The viewer updates statistics every 10 seconds and sampler data every minute while the profiler is running.");
 }

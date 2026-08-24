@@ -12,7 +12,7 @@ namespace spark::selftest {
 
 bool setCurrentThreadName(const char *name);
 
-#if defined(_WIN32) || defined(__linux__)
+#if defined(__linux__)
 bool exerciseNativeAllocations();
 void allocationBurst(int count = 96);
 bool allocationTreesHaveOnly(const spark::AllocationSampler &sampler,

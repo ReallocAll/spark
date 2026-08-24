@@ -5,6 +5,8 @@
 
 namespace spark {
 
+// NOLINTBEGIN(readability-convert-member-functions-to-static)
+
 struct AllocationSampler::Impl {
     CallTree tree;
     std::map<std::uint64_t, ThreadCallTree> thread_trees;
@@ -19,7 +21,11 @@ AllocationSampler::~AllocationSampler() = default;
 
 bool AllocationSampler::start(const AllocationSamplerConfig &, std::string &error)
 {
+#ifdef _WIN32
+    error = "Windows allocation profiling is temporarily disabled because safe allocator entry patching is unavailable";
+#else
     error = "native allocation profiling is supported only on Windows x64 and Linux x86-64";
+#endif
     return false;
 }
 
@@ -317,5 +323,7 @@ std::size_t AllocationSampler::hookTargetCount() const
 {
     return 0;
 }
+
+// NOLINTEND(readability-convert-member-functions-to-static)
 
 }  // namespace spark

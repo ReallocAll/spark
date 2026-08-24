@@ -22,18 +22,13 @@ find_package(Threads REQUIRED)
 
 include(FetchContent)
 
-# --- x86-64 instruction decoder and Windows hook backend ---
+# --- x86-64 instruction decoder ---
 # funchook 1.1.3 is not available from Conan Center. Fetch the same upstream
 # version used by Endstone. Its small distorm dependency provides the strict
-# instruction-boundary decoder used by both native symbol guessers; Windows
-# additionally links funchook itself for allocation profiling.
+# instruction-boundary decoder used by both native symbol guessers.
 if (WIN32 OR (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64"))
     set(FUNCHOOK_BUILD_SHARED OFF CACHE BOOL "" FORCE)
-    if (WIN32)
-        set(FUNCHOOK_BUILD_STATIC ON CACHE BOOL "" FORCE)
-    else ()
-        set(FUNCHOOK_BUILD_STATIC OFF CACHE BOOL "" FORCE)
-    endif ()
+    set(FUNCHOOK_BUILD_STATIC OFF CACHE BOOL "" FORCE)
     set(FUNCHOOK_BUILD_TESTS OFF CACHE BOOL "" FORCE)
     set(FUNCHOOK_INSTALL OFF CACHE BOOL "" FORCE)
     set(FUNCHOOK_DISASM distorm CACHE STRING "" FORCE)
@@ -107,8 +102,7 @@ if (WIN32)
             src/native/symbol/symbol_guess_windows_strings.cpp
             src/native/symbol/symbol_guess_windows_misc.cpp
             src/native/sampler/capture_windows.cpp
-            src/native/alloc/allocation_sampler_windows.cpp
-            src/native/alloc/windows_thread_suspension.cpp)
+            src/native/alloc/allocation_sampler_stub.cpp)
 elseif (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
     target_sources(spark_native PRIVATE
             src/native/sampler/capture_linux.cpp
@@ -129,7 +123,7 @@ if (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Cl
 endif ()
 if (WIN32)
     target_include_directories(spark_native PRIVATE "${funchook_SOURCE_DIR}/distorm/include")
-    target_link_libraries(spark_native PUBLIC dbghelp psapi advapi32 funchook-static distorm)
+    target_link_libraries(spark_native PUBLIC dbghelp psapi advapi32 distorm)
 elseif (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
     target_include_directories(spark_native PRIVATE "${funchook_SOURCE_DIR}/distorm/include")
     target_link_libraries(spark_native PUBLIC distorm ${CMAKE_DL_LIBS})
@@ -154,6 +148,7 @@ add_library(spark_core STATIC
         src/core/activity/activity_log.cpp
         src/core/command/arguments.cpp
         src/core/profiler/profiler.cpp
+        src/core/profiler/native_attribution.cpp
         src/core/profiler/profiler_export.cpp
         src/core/profiler/profiler_recovery.cpp
         src/core/stats/executable_hash.cpp
@@ -241,6 +236,7 @@ endif ()
 # --- the Endstone plugin (links its application layer + Endstone adapters) ---
 endstone_add_plugin(spark
         src/platform/endstone/adapters.cpp
+        src/platform/endstone/world_gauge_provider.cpp
         src/platform/endstone/native_plugin_attribution.cpp
         src/plugin.cpp)
 target_include_directories(spark PRIVATE src)

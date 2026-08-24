@@ -8,6 +8,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include "core/profiler/native_attribution.h"
 #include "core/profiler/profiler.h"
 #include "core/profiler/thread_grouper.h"
 #include "core/util/monotonic_time.h"
@@ -563,6 +564,8 @@ std::string Profiler::exportData(const ExportContext &ctx, const AllocationSnaps
     auto [threads, owned_trees, owned_labels] = groupThreads(std::move(input), options_.thread_grouper);
     std::vector<FrameKey> keys = collectFrameKeys(threads);
     auto resolved = resolveFrames(sampler_.modules(), keys);
+    filterExecutionTrees(threads, owned_trees, resolved);
+    keys = collectFrameKeys(threads);
     addNativePluginSources(meta, ctx, keys, resolved);
     addSymbolGuessMetadata(meta);
     return buildSamplerData(meta, threads, resolved);

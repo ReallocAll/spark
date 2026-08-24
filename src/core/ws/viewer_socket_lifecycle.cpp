@@ -156,6 +156,8 @@ std::uint64_t ViewerSocket::prepareOpen()
     {
         std::scoped_lock lock(pending_keys_mutex_);
         pending_keys_.clear();
+        conflicted_client_ids_.clear();
+        all_client_ids_conflicted_ = false;
     }
     return generation;
 }
