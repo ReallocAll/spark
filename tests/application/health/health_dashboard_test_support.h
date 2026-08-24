@@ -17,6 +17,8 @@
 namespace spark {
 
 struct HealthDashboardTestAccess {
+    static bool idle(const HealthDashboard &dashboard);
+    static bool shutdownActive(HealthDashboard &dashboard);
     static bool stopping(const HealthDashboard &dashboard);
 };
 
@@ -31,7 +33,14 @@ struct Probe {
     std::vector<spark::HealthDashboard::OpenResult> completions;
     std::optional<spark::SocketChannelInfo> uploaded_channel;
     bool next_open_success = true;
+    bool block_factory = false;
+    bool release_factory = true;
+    bool factory_entered = false;
     std::atomic<bool> close_during_work{false};
+
+    void configureFactory(bool block);
+    void releaseFactory();
+    bool waitFactoryEntered();
 };
 
 class FakeConnection final : public spark::HealthDashboardConnection {
@@ -87,7 +96,8 @@ bool waitFor(Probe &probe, Predicate predicate)
 }
 
 spark::HealthData dataAt(std::int64_t generated_time_ms);
-std::unique_ptr<spark::HealthDashboard> makeDashboard(Probe &probe);
+std::unique_ptr<spark::HealthDashboard> makeDashboard(Probe &probe,
+                                                      spark::HealthDashboard::CompletionCallback completion = {});
 
 }  // namespace health_dashboard_test
 }  // namespace spark

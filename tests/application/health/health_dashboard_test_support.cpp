@@ -5,6 +5,18 @@
 
 namespace spark {
 
+bool HealthDashboardTestAccess::idle(const HealthDashboard &dashboard)
+{
+    std::scoped_lock lock(dashboard.mutex_);
+    return !dashboard.work_.has_value() && !dashboard.work_active_;
+}
+
+bool HealthDashboardTestAccess::shutdownActive(HealthDashboard &dashboard)
+{
+    std::scoped_lock lock(dashboard.lifecycle_mutex_);
+    return dashboard.lifecycle_active_;
+}
+
 bool HealthDashboardTestAccess::stopping(const HealthDashboard &dashboard)
 {
     std::scoped_lock lock(dashboard.mutex_);
@@ -12,6 +24,27 @@ bool HealthDashboardTestAccess::stopping(const HealthDashboard &dashboard)
 }
 
 namespace health_dashboard_test {
+
+void Probe::configureFactory(bool block)
+{
+    std::scoped_lock lock(mutex);
+    block_factory = block;
+    release_factory = !block;
+    factory_entered = false;
+}
+
+void Probe::releaseFactory()
+{
+    std::scoped_lock lock(mutex);
+    release_factory = true;
+    cv.notify_all();
+}
+
+bool Probe::waitFactoryEntered()
+{
+    std::unique_lock lock(mutex);
+    return cv.wait_for(lock, std::chrono::seconds(2), [this] { return factory_entered; });
+}
 
 FakeConnection::FakeConnection(Probe &probe) : probe_(probe) {}
 
@@ -163,9 +196,16 @@ spark::HealthData dataAt(std::int64_t generated_time_ms)
     return data;
 }
 
-std::unique_ptr<spark::HealthDashboard> makeDashboard(Probe &probe)
+std::unique_ptr<spark::HealthDashboard> makeDashboard(Probe &probe,
+                                                      spark::HealthDashboard::CompletionCallback completion)
 {
     auto factory = [&probe] {
+        {
+            std::unique_lock lock(probe.mutex);
+            probe.factory_entered = true;
+            probe.cv.notify_all();
+            probe.cv.wait(lock, [&probe] { return !probe.block_factory || probe.release_factory; });
+        }
         auto connection = std::make_unique<FakeConnection>(probe);
         {
             std::scoped_lock lock(probe.mutex);
@@ -182,11 +222,13 @@ std::unique_ptr<spark::HealthDashboard> makeDashboard(Probe &probe)
         }
         return spark::UploadResult{.ok = true, .key = "initial-key"};
     };
-    auto completion = [&probe](spark::HealthDashboard::OpenResult result) {
-        std::scoped_lock lock(probe.mutex);
-        probe.completions.push_back(std::move(result));
-        probe.cv.notify_all();
-    };
+    if (!completion) {
+        completion = [&probe](spark::HealthDashboard::OpenResult result) {
+            std::scoped_lock lock(probe.mutex);
+            probe.completions.push_back(std::move(result));
+            probe.cv.notify_all();
+        };
+    }
     return std::make_unique<spark::HealthDashboard>(
         std::move(factory), std::move(upload), [](const std::vector<std::uint8_t> &) { return true; },
         std::move(completion));

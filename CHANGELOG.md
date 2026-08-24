@@ -32,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Serialize health-dashboard opening and shutdown without invoking completion callbacks under internal locks.
 - Reject invalid rolling windows and bound metadata and world-statistics edge cases.
 - Synchronize retained-allocation snapshots with lifecycle record reuse.
 - Include world metadata in the initial health report payload.

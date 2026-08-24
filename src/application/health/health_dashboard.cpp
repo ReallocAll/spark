@@ -31,8 +31,15 @@ HealthDashboard::~HealthDashboard()
 
 HealthDashboard::OpenResult HealthDashboard::open(HealthData initial, const std::string &sender_name)
 {
+    std::unique_lock lifecycle_lock(lifecycle_mutex_);
     OpenResult result;
     result.sender_name = sender_name;
+
+    if (lifecycle_active_ && worker_id_ == std::this_thread::get_id()) {
+        result.error = "health dashboard is stopping";
+        return result;
+    }
+    lifecycle_cv_.wait(lifecycle_lock, [this] { return !lifecycle_active_; });
 
     {
         std::scoped_lock lock(mutex_);
@@ -47,7 +54,7 @@ HealthDashboard::OpenResult HealthDashboard::open(HealthData initial, const std:
         callbacks_enabled_ = true;
     }
 
-    if (!startWorker()) {
+    if (!startWorker(lifecycle_lock)) {
         result.error = "health dashboard worker failed to start";
         return result;
     }

@@ -77,8 +77,7 @@ private:
     };
 
     void run() noexcept;
-    bool startWorker();
-    void stopWorker();
+    bool startWorker(std::unique_lock<std::mutex> &lifecycle_lock);
     void markFailure(const std::shared_ptr<HealthDashboardConnection> &connection) noexcept;
     void completeOpen(OpenResult result, const std::shared_ptr<HealthDashboardConnection> &connection,
                       std::int64_t initial_time_ms);
@@ -88,6 +87,10 @@ private:
     IsKeyTrustedCallback is_key_trusted_;
     CompletionCallback completion_;
 
+    std::mutex lifecycle_mutex_;
+    std::condition_variable lifecycle_cv_;
+    bool lifecycle_active_ = false;
+    std::thread::id worker_id_;
     mutable std::mutex mutex_;
     std::condition_variable cv_;
     std::mutex completion_mutex_;
