@@ -156,20 +156,29 @@ struct WebSocketClientTestAccess {
 };
 
 struct ViewerSocketTestAccess {
-    static void markOpen(ViewerSocket &socket)
+    static std::uint64_t beginOpen(ViewerSocket &socket)
     {
         std::scoped_lock transport_lock(socket.transport_mutex_);
-        socket.prepareOpen();
+        const auto generation = socket.prepareOpen();
         if (!socket.ws_) {
             socket.ws_ = std::make_unique<WebSocketClient>();
         }
         WebSocketClientTestAccess::setRunning(*socket.ws_, true);
-        socket.open_.store(true);
+        return generation;
     }
 
-    static void terminate(ViewerSocket &socket, WebSocketClient::TerminationKind kind, const std::string &detail = {})
+    static bool markOpen(ViewerSocket &socket)
     {
-        socket.onTransportClosed({.kind = kind, .detail = detail});
+        std::scoped_lock transport_lock(socket.transport_mutex_);
+        auto expected = ViewerSocket::ConnectionState::Opening;
+        return socket.state_.compare_exchange_strong(expected, ViewerSocket::ConnectionState::Open,
+                                                     std::memory_order_acq_rel, std::memory_order_acquire);
+    }
+
+    static void terminate(ViewerSocket &socket, std::uint64_t generation, WebSocketClient::TerminationKind kind,
+                          const std::string &detail = {})
+    {
+        socket.onTransportClosed(generation, {.kind = kind, .detail = detail});
     }
 
     static bool trustedClient(const ViewerSocket &socket, const WsIncomingPacket &packet)

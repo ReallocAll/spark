@@ -32,13 +32,15 @@ std::size_t accountedBytes(std::initializer_list<std::size_t> sizes)
 bool ViewerSocket::tick()
 {
     try {
-        if (!open_.load()) {
+        if (!isOpen()) {
             return false;
         }
         bool transport_closed = false;
+        std::uint64_t generation = 0;
         WebSocketClient::Termination termination;
         {
             std::scoped_lock transport_lock(transport_mutex_);
+            generation = connection_generation_.load(std::memory_order_acquire);
             if (!ws_ || !ws_->isOpen()) {
                 transport_closed = true;
                 if (ws_) {
@@ -47,7 +49,7 @@ bool ViewerSocket::tick()
             }
         }
         if (transport_closed) {
-            onTransportClosed(termination);
+            onTransportClosed(generation, termination);
             return false;
         }
 
@@ -68,7 +70,7 @@ bool ViewerSocket::tick()
             case WsPacketType::ClientPing:
                 last_ping_ms_.store(nowMs());
                 {
-                    const bool ok = open_.load();
+                    const bool ok = isOpen();
                     const std::int32_t data = packet.ping.data;
                     const auto private_key = key_pair_.private_key_pkcs8;
                     WebSocketClient::DeferredEncoder encoder = [ok, data, private_key]() {
