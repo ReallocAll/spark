@@ -1,6 +1,6 @@
-#include <utility>
+#include "application/health/health_dashboard_connection.h"
 
-#include "application/health/health_dashboard.h"
+#include <utility>
 
 namespace spark {
 namespace {

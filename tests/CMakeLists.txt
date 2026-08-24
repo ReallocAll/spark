@@ -195,7 +195,9 @@ set_target_properties(spark_profiler_service_failure_test PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME spark_profiler_service_failure_test COMMAND spark_profiler_service_failure_test)
 
-add_executable(spark_health_dashboard_test application/health/health_dashboard_test.cpp)
+add_executable(spark_health_dashboard_test
+        application/health/health_dashboard_test.cpp
+        application/health/health_dashboard_test_support.cpp)
 target_link_libraries(spark_health_dashboard_test PRIVATE spark_application)
 set_target_properties(spark_health_dashboard_test PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
