@@ -184,6 +184,7 @@ add_library(spark_application STATIC
         src/application/activity/activity_command.cpp
         src/application/command/command_registry.cpp
         src/application/health/health_command.cpp
+        src/application/health/health_command_report.cpp
         src/application/health/health_report.cpp
         src/application/health/health_dashboard.cpp
         src/application/health/health_dashboard_connection.cpp
