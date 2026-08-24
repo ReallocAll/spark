@@ -17,6 +17,7 @@
 #include "core/stats/ping_statistics.h"
 #include "core/stats/system_stats.h"
 #include "core/util/format.h"
+#include "core/util/monotonic_time.h"
 #include "core/util/world_region.h"
 #include "platform/endstone/native_plugin_attribution.h"
 
@@ -265,8 +266,9 @@ void EndstoneMetadataProvider::gatherWorldMetadata(ExportContext &ctx)
 
 std::int64_t EndstoneMetadataProvider::serverUptimeSeconds()
 {
-    return std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now() - server_.getStartTime())
-        .count();
+    const auto start_ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(server_.getStartTime().time_since_epoch()).count();
+    return (monotonicUnixMillis() - start_ms) / 1000;
 }
 
 std::int64_t EndstoneMetadataProvider::playerCount()
