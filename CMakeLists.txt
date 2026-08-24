@@ -158,6 +158,8 @@ add_library(spark_core STATIC
         src/core/stats/executable_hash.cpp
         src/core/stats/metrics_history.cpp
         src/core/stats/statistics_service.cpp
+        src/core/stats/statistics_service_queries.cpp
+        src/core/stats/statistics_profile_windows.cpp
         src/core/stats/ping_statistics.cpp
         src/core/stats/network_monitor.cpp
         src/core/stats/tick_monitor.cpp
