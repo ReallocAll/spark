@@ -91,7 +91,7 @@ private:
     bool writeMetadataSnapshot();
     void cacheModuleDef(std::uint32_t module_id, std::string_view path);
     void cacheThreadDef(std::uint64_t thread_id, std::uint64_t os_thread_id, std::string_view name);
-    bool allowIo(IoOperation operation) noexcept;
+    bool allowIo(IoOperation operation) const noexcept;
     bool writeFile(std::FILE *file, const void *data, std::size_t size);
     bool syncFile(std::FILE *file);
     bool closeFile(std::FILE *file);
