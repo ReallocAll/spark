@@ -21,11 +21,13 @@ class ViewerUpdateWorker {
 public:
     enum class WorkType {
         Open,
-        Update
+        Statistics,
+        Sampler,
+        Combined
     };
 
     struct WorkItem {
-        WorkType type = WorkType::Update;
+        WorkType type = WorkType::Combined;
         ExportContext context;
         std::shared_ptr<ViewerSocket> socket;
         std::uint64_t generation = 0;
@@ -33,7 +35,7 @@ public:
     };
 
     struct Completion {
-        WorkType type = WorkType::Update;
+        WorkType type = WorkType::Combined;
         std::uint64_t generation = 0;
         std::string url;
         std::shared_ptr<ViewerSocket> socket;
@@ -54,7 +56,9 @@ public:
 
     std::optional<std::uint64_t> enqueueOpen(ExportContext context, std::shared_ptr<ViewerSocket> socket,
                                              std::string sender_name);
-    bool enqueueUpdate(ExportContext context, std::shared_ptr<ViewerSocket> socket, std::uint64_t generation);
+    bool enqueueStatistics(ExportContext context, std::shared_ptr<ViewerSocket> socket, std::uint64_t generation);
+    bool enqueueSampler(ExportContext context, std::shared_ptr<ViewerSocket> socket, std::uint64_t generation);
+    bool enqueueCombined(ExportContext context, std::shared_ptr<ViewerSocket> socket, std::uint64_t generation);
 
     void invalidate();
     bool current(std::uint64_t generation) const;
@@ -65,6 +69,8 @@ public:
     bool completeOpen(std::uint64_t generation);
 
 private:
+    bool enqueueWork(WorkType type, ExportContext context, std::shared_ptr<ViewerSocket> socket,
+                     std::uint64_t generation);
     void run() noexcept;
     void markFailure() noexcept;
 

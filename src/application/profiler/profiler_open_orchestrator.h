@@ -11,6 +11,7 @@
 
 #include "application/command/command_sender.h"
 #include "application/platform_capabilities.h"
+#include "application/profiler/live_viewer_schedule.h"
 #include "application/profiler/viewer_update_worker.h"
 #include "core/command/arguments.h"
 #include "core/config/trusted_viewers.h"
@@ -72,6 +73,7 @@ private:
     }
 
     ExportContext captureLiveContext(std::int64_t now_ms, const std::string &comment = {});
+    ExportContext captureLiveStatisticsContext(std::int64_t now_ms);
     std::string buildLiveSamplerData(const ExportContext &context);
     std::string buildLiveSamplerData(std::int64_t now_ms) { return buildLiveSamplerData(captureLiveContext(now_ms)); }
     std::string uploadSamplerData(const ExportContext &context);
@@ -98,7 +100,7 @@ private:
     std::function<std::map<std::string, NetworkInterfaceSnapshot>()> network_snapshot_provider_;
 
     std::shared_ptr<ViewerSocket> viewer_socket_;
-    std::int64_t last_viewer_upload_ms_ = 0;
+    LiveViewerSchedule viewer_schedule_;
     std::string viewer_sender_name_;
     std::string open_comment_;
 

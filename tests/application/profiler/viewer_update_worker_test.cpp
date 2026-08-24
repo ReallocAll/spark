@@ -7,6 +7,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -32,6 +33,15 @@ bool waitFor(Probe &probe, Predicate predicate)
 {
     std::unique_lock lock(probe.mutex);
     return probe.cv.wait_for(lock, 2s, std::move(predicate));
+}
+
+bool waitUntilAvailable(spark::ViewerUpdateWorker &worker)
+{
+    const auto deadline = std::chrono::steady_clock::now() + 2s;
+    while (!worker.available() && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::yield();
+    }
+    return worker.available();
 }
 
 void resetExecution(Probe &probe, bool block)
@@ -79,7 +89,7 @@ int main()
     assert(first_generation.has_value());
     assert(waitFor(*probe, [&] { return probe->execution_entered; }));
     assert(!worker.enqueueOpen({}, {}, "Second"));
-    assert(!worker.enqueueUpdate({}, {}, *first_generation));
+    assert(!worker.enqueueCombined({}, {}, *first_generation));
 
     {
         std::scoped_lock lock(probe->mutex);
@@ -105,7 +115,7 @@ int main()
 
     resetExecution(*probe, true);
     const auto second_generation = worker.generation();
-    assert(worker.enqueueUpdate({}, {}, second_generation));
+    assert(worker.enqueueCombined({}, {}, second_generation));
     assert(waitFor(*probe, [&] { return probe->execution_entered; }));
     worker.invalidate();
     const auto invalidated_generation = worker.generation();
@@ -113,7 +123,7 @@ int main()
     assert(!worker.current(second_generation));
     assert(worker.current(invalidated_generation));
     assert(!worker.completeOpen(second_generation));
-    assert(!worker.enqueueUpdate({}, {}, second_generation));
+    assert(!worker.enqueueCombined({}, {}, second_generation));
     {
         std::scoped_lock lock(probe->mutex);
         probe->release_execution = true;
@@ -129,11 +139,25 @@ int main()
         std::scoped_lock lock(probe->mutex);
         executed_before_update = probe->executed.size();
     }
-    assert(worker.enqueueUpdate({}, {}, invalidated_generation));
+    assert(worker.enqueueCombined({}, {}, invalidated_generation));
     assert(waitFor(*probe, [&] { return probe->executed.size() > executed_before_update; }));
     {
         std::scoped_lock lock(probe->mutex);
-        assert(probe->executed.back() == spark::ViewerUpdateWorker::WorkType::Update);
+        assert(probe->executed.back() == spark::ViewerUpdateWorker::WorkType::Combined);
+    }
+    assert(waitUntilAvailable(worker));
+    assert(worker.enqueueStatistics({}, {}, invalidated_generation));
+    assert(waitFor(*probe, [&] { return probe->executed.size() > executed_before_update + 1; }));
+    {
+        std::scoped_lock lock(probe->mutex);
+        assert(probe->executed.back() == spark::ViewerUpdateWorker::WorkType::Statistics);
+    }
+    assert(waitUntilAvailable(worker));
+    assert(worker.enqueueSampler({}, {}, invalidated_generation));
+    assert(waitFor(*probe, [&] { return probe->executed.size() > executed_before_update + 2; }));
+    {
+        std::scoped_lock lock(probe->mutex);
+        assert(probe->executed.back() == spark::ViewerUpdateWorker::WorkType::Sampler);
     }
     worker.stop();
     assert(worker.available());
@@ -143,8 +167,8 @@ int main()
         std::scoped_lock lock(probe->mutex);
         probe->fail_next = true;
     }
-    assert(worker.enqueueUpdate({}, {}, invalidated_generation));
-    assert(waitFor(*probe, [&] { return probe->executed.size() > executed_before_update + 1; }));
+    assert(worker.enqueueCombined({}, {}, invalidated_generation));
+    assert(waitFor(*probe, [&] { return probe->executed.size() > executed_before_update + 3; }));
     worker.stop();
     assert(!worker.current(invalidated_generation));
     assert(worker.consumeFailure());
@@ -153,11 +177,11 @@ int main()
     assert(worker.start());
     assert(worker.current(invalidated_generation));
     resetExecution(*probe, false);
-    assert(worker.enqueueUpdate({}, {}, invalidated_generation));
-    assert(waitFor(*probe, [&] { return probe->executed.size() > executed_before_update + 2; }));
+    assert(worker.enqueueCombined({}, {}, invalidated_generation));
+    assert(waitFor(*probe, [&] { return probe->executed.size() > executed_before_update + 4; }));
     worker.stop();
     assert(worker.available());
     assert(!worker.current(invalidated_generation));
-    assert(!worker.enqueueUpdate({}, {}, invalidated_generation));
+    assert(!worker.enqueueCombined({}, {}, invalidated_generation));
     return 0;
 }
