@@ -22,6 +22,12 @@ int main()
     testEmptyToml();
     testTomlWithComments();
     testBoundedAndTrailingInput();
+    testEnvironmentOverrides();
+    testEnvironmentMissingAndExactNames();
+    testEnvironmentInvalidIntegerFallback();
+    testEnvironmentBooleanParsing();
+    testEnvironmentValidationIsAtomic();
+    testEnvironmentLoadOrCreateDoesNotPersist();
     std::printf("All SparkConfig tests passed!\n");
     return 0;
 }

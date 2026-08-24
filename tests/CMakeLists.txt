@@ -240,7 +240,8 @@ add_test(NAME spark_included_ticks_test COMMAND spark_included_ticks_test)
 add_executable(spark_config_test
         core/config/spark_config_test.cpp
         core/config/spark_config_load_test.cpp
-        core/config/spark_config_persistence_test.cpp)
+        core/config/spark_config_persistence_test.cpp
+        core/config/spark_config_environment_test.cpp)
 target_link_libraries(spark_config_test PRIVATE spark_core)
 set_target_properties(spark_config_test PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
