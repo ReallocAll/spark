@@ -57,6 +57,12 @@ set_target_properties(spark_allocation_bounded_event_queue_test PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME spark_allocation_bounded_event_queue_test COMMAND spark_allocation_bounded_event_queue_test)
 
+add_executable(spark_stable_shard_snapshot_test native/alloc/stable_shard_snapshot_test.cpp)
+target_include_directories(spark_stable_shard_snapshot_test PRIVATE "${CMAKE_SOURCE_DIR}/src")
+set_target_properties(spark_stable_shard_snapshot_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME spark_stable_shard_snapshot_test COMMAND spark_stable_shard_snapshot_test)
+
 add_executable(spark_allocation_profile_aggregation_test native/alloc/allocation_profile_aggregation_test.cpp)
 target_link_libraries(spark_allocation_profile_aggregation_test PRIVATE spark_core)
 set_target_properties(spark_allocation_profile_aggregation_test PROPERTIES
