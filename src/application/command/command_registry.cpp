@@ -11,10 +11,19 @@
 namespace spark {
 namespace {
 
+constexpr char KNativeSparkPermission[] = "endstone.command.spark";
+constexpr char KJavaSparkPermission[] = "spark";
+
 std::string lowerCase(std::string value)
 {
     std::ranges::transform(value, value.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
     return value;
+}
+
+bool canUse(const CommandSender &sender, const std::string &permission)
+{
+    return permission.empty() || sender.hasPermission(permission) || sender.hasPermission(KNativeSparkPermission) ||
+           sender.hasPermission(KJavaSparkPermission);
 }
 
 }  // namespace
@@ -42,7 +51,7 @@ bool CommandRegistry::dispatch(CommandSender &sender, const std::vector<std::str
     for (const auto &cmd : commands_) {
         for (const auto &a : cmd.aliases) {
             if (a == alias) {
-                if (!cmd.permission.empty() && !sender.hasPermission(cmd.permission)) {
+                if (!canUse(sender, cmd.permission)) {
                     sender.sendErrorMessage("You do not have permission to use this command.");
                     return true;
                 }
@@ -72,7 +81,7 @@ void CommandRegistry::sendHelp(CommandSender &sender) const
     const auto can_use = [this, &sender](const std::string &alias) {
         for (const auto &command : commands_) {
             if (std::ranges::find(command.aliases, alias) != command.aliases.end()) {
-                return command.permission.empty() || sender.hasPermission(command.permission);
+                return canUse(sender, command.permission);
             }
         }
         return false;
@@ -80,7 +89,7 @@ void CommandRegistry::sendHelp(CommandSender &sender) const
 
     sender.sendMessage(kColorGold + "endstone-spark " + kColorGray + "v" + spark::kVersion);
     for (const auto &cmd : commands_) {
-        if (!cmd.permission.empty() && !sender.hasPermission(cmd.permission)) {
+        if (!canUse(sender, cmd.permission)) {
             continue;
         }
         std::string message = kColorYellow + "/spark ";

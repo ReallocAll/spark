@@ -93,6 +93,16 @@ int main()
         assert(result.options.allocation_interval_bytes == 1);
     }
 
+    {
+        const auto execution = parse({"start", "--interval", "0"});
+        assert(execution.success());
+        assert(execution.options.interval_ms == 4);
+
+        const auto allocation = parse({"start", "--alloc", "--interval", "0"});
+        assert(allocation.success());
+        assert(allocation.options.allocation_interval_bytes == spark::kDefaultAllocationIntervalBytes);
+    }
+
     expectError({"start", "--regex"}, "--regex requires at least one --thread pattern.");
     expectError({"start", "--thread", "*", "--thread", "Worker"},
                 "--thread * cannot be combined with another --thread or --regex.");
@@ -100,8 +110,6 @@ int main()
                 "--thread * cannot be combined with another --thread or --regex.");
     expectError({"start", "--interval"}, "The sampling interval must be a finite number.");
     expectError({"start", "--interval", "not-a-number"}, "The sampling interval must be a finite number.");
-    expectError({"start", "--interval", "0"}, "The sampling interval must be greater than zero.");
-    expectError({"start", "--interval", "-0"}, "The sampling interval must be greater than zero.");
     expectError({"start", "--timeout"}, "The timeout must be a whole number of seconds.");
     expectError({"start", "--timeout", "not-a-number"}, "The timeout must be a whole number of seconds.");
     expectError({"start", "--timeout", "10"},

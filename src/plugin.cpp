@@ -199,6 +199,8 @@ ENDSTONE_PLUGIN("spark", "0.5.3", SparkPlugin)
         .description("Allows use of the spark profiler")
         .default_(endstone::PermissionDefault::Operator);
 
+    permission("spark").description("Allows use of spark commands").default_(endstone::PermissionDefault::Operator);
+
     permission("spark.profiler")
         .description("Allows use of /spark profiler")
         .default_(endstone::PermissionDefault::Operator);
