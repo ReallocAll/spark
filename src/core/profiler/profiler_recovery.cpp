@@ -6,36 +6,52 @@ namespace spark {
 
 void Profiler::stopRecoveryWriter()
 {
-    std::unique_ptr<RecoveryWriter> writer;
+    RecoveryWriter *writer = nullptr;
     {
         std::scoped_lock lock(recovery_mutex_);
         sampler_.setRecoverySink(nullptr);
         allocation_sampler_.setRecoverySink(nullptr);
-        writer = std::move(recovery_writer_);
+        writer = recovery_writer_.get();
     }
     if (!writer) {
         return;
     }
-    // Do NOT journal CleanEnd here.  CleanEnd was previously written before
-    // export, which caused crash-during-export profiles to be silently
-    // discarded on the next startup.  The journal is now deleted only after a
-    // successful export (announceResult), cancel, or clean shutdown.
+
     writer->requestFlush();
-    writer->stop();
+    if (!writer->stop()) {
+        return;
+    }
+
+    std::scoped_lock lock(recovery_mutex_);
+    if (recovery_writer_.get() == writer) {
+        recovery_writer_.reset();
+    }
+}
+
+bool Profiler::reapRecoveryWriter()
+{
+    std::scoped_lock lock(recovery_mutex_);
+    if (!recovery_writer_) {
+        return true;
+    }
+    if (!recovery_writer_->tryReap()) {
+        return false;
+    }
+    recovery_writer_.reset();
+    return true;
+}
+
+bool Profiler::hasPendingRecoveryWriter() const
+{
+    std::scoped_lock lock(recovery_mutex_);
+    return recovery_writer_ != nullptr;
 }
 
 void Profiler::discardRecoveryJournal()
 {
-    std::unique_ptr<RecoveryWriter> writer;
-    {
-        std::scoped_lock lock(recovery_mutex_);
-        sampler_.setRecoverySink(nullptr);
-        allocation_sampler_.setRecoverySink(nullptr);
-        writer = std::move(recovery_writer_);
-    }
-    if (writer) {
-        writer->requestFlush();
-        writer->stop();
+    stopRecoveryWriter();
+    if (hasPendingRecoveryWriter()) {
+        return;
     }
     if (!recovery_dir_.empty()) {
         std::error_code ec;
