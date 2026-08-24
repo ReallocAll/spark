@@ -212,6 +212,7 @@ bool Profiler::start(const ProfilerOptions &options, std::uint64_t main_tid, std
                     static_cast<std::uint8_t>(options.thread_grouper), 0, false, options.creator_name,
                     options.creator_is_player, options.comment, options.threads,
                     profiling_window::windowAdjustmentMs());
+                // Journal the bounded execution module sentinel before samples.
                 writer->journalModuleDef(0, kOtherModulesSentinel);
                 writer->requestFlush();
                 std::scoped_lock lock(recovery_mutex_);
@@ -400,6 +401,7 @@ bool Profiler::cancel(std::string &error)
         return true;
     }
 
+    // A failed aggregator invalidates the data; completed cleanup is a successful cancel.
     std::string backend_error;
     if (!running_.load() && backendFailure(backend_error)) {
         error.clear();
@@ -443,6 +445,8 @@ bool Profiler::shutdown(std::string &error)
         stopRecoveryWriter();
         running_.store(false);
     }
+    // Clean shutdown: discard the journal so the next startup does not treat
+    // it as a crash.  This is safe even if no journal exists.
     discardRecoveryJournal();
     if (hasPendingRecoveryWriter()) {
         error = "recovery writer shutdown timed out";
