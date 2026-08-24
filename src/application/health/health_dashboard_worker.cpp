@@ -17,6 +17,15 @@ std::string exceptionMessage(const std::exception &error)
 
 void HealthDashboard::shutdown()
 {
+    std::unique_lock lifecycle_lock(lifecycle_mutex_);
+    while (lifecycle_active_) {
+        if (worker_id_ == std::this_thread::get_id()) {
+            return;
+        }
+        lifecycle_cv_.wait(lifecycle_lock, [this] { return !lifecycle_active_; });
+    }
+    lifecycle_active_ = true;
+
     std::shared_ptr<HealthDashboardConnection> connection;
     {
         std::scoped_lock completion_lock(completion_mutex_);
@@ -33,7 +42,10 @@ void HealthDashboard::shutdown()
     }
     running_.store(false, std::memory_order_release);
     cv_.notify_all();
-    if (worker_.joinable() && worker_.get_id() != std::this_thread::get_id()) {
+    const bool same_worker = worker_id_ == std::this_thread::get_id();
+    const bool join_worker = !same_worker && worker_.joinable();
+    lifecycle_lock.unlock();
+    if (join_worker) {
         worker_.join();
     }
     if (connection) {
@@ -48,15 +60,39 @@ void HealthDashboard::shutdown()
         work_active_ = false;
         stopping_ = false;
     }
+    lifecycle_lock.lock();
+    lifecycle_active_ = false;
+    if (join_worker) {
+        worker_id_ = {};
+    }
+    lifecycle_lock.unlock();
+    lifecycle_cv_.notify_all();
 }
 
-bool HealthDashboard::startWorker()
+bool HealthDashboard::startWorker(std::unique_lock<std::mutex> &lifecycle_lock)
 {
     if (running_.load(std::memory_order_acquire)) {
         return true;
     }
-    if (worker_.joinable() && worker_.get_id() != std::this_thread::get_id()) {
-        worker_.join();
+    if (worker_.joinable() && worker_id_ == std::this_thread::get_id()) {
+        return false;
+    }
+    if (worker_.joinable()) {
+        lifecycle_active_ = true;
+        lifecycle_lock.unlock();
+        try {
+            worker_.join();
+        }
+        catch (...) {
+            lifecycle_lock.lock();
+            lifecycle_active_ = false;
+            lifecycle_cv_.notify_all();
+            return false;
+        }
+        lifecycle_lock.lock();
+        worker_id_ = {};
+        lifecycle_active_ = false;
+        lifecycle_cv_.notify_all();
     }
     {
         std::scoped_lock lock(mutex_);
@@ -72,16 +108,8 @@ bool HealthDashboard::startWorker()
         running_.store(false, std::memory_order_release);
         return false;
     }
+    worker_id_ = worker_.get_id();
     return true;
-}
-
-void HealthDashboard::stopWorker()
-{
-    running_.store(false, std::memory_order_release);
-    cv_.notify_all();
-    if (worker_.joinable() && worker_.get_id() != std::this_thread::get_id()) {
-        worker_.join();
-    }
 }
 
 void HealthDashboard::markFailure(const std::shared_ptr<HealthDashboardConnection> &connection) noexcept
@@ -136,9 +164,13 @@ void HealthDashboard::completeOpen(OpenResult result, const std::shared_ptr<Heal
         }
     }
     result.completed = true;
-    std::unique_lock completion_lock(completion_mutex_);
-    if (!callbacks_enabled_) {
-        return;
+    CompletionCallback completion;
+    {
+        std::scoped_lock completion_lock(completion_mutex_);
+        if (!callbacks_enabled_) {
+            return;
+        }
+        completion = completion_;
     }
     {
         std::scoped_lock lock(mutex_);
@@ -146,9 +178,9 @@ void HealthDashboard::completeOpen(OpenResult result, const std::shared_ptr<Heal
             return;
         }
     }
-    if (completion_) {
+    if (completion) {
         try {
-            completion_(std::move(result));
+            completion(std::move(result));
         }
         catch (...) {
             markFailure(connection);
