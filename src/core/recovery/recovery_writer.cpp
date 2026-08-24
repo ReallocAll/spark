@@ -191,7 +191,9 @@ bool RecoveryWriter::tryReap()
 void RecoveryWriter::producerDone() noexcept
 {
     active_producers_.fetch_sub(1, std::memory_order_acq_rel);
-    cv_.notify_all();
+    if (stop_requested_.load(std::memory_order_acquire)) {
+        cv_.notify_all();
+    }
 }
 
 void RecoveryWriter::enqueue(RecordType type, const JournalBuffer &payload)
@@ -318,7 +320,7 @@ void RecoveryWriter::requestFlush()
     cv_.notify_one();
 }
 
-bool RecoveryWriter::allowIo(IoOperation operation) noexcept
+bool RecoveryWriter::allowIo(IoOperation operation) const noexcept
 {
     if (!config_.io_hook) {
         return true;
