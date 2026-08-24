@@ -6,6 +6,7 @@
 #include "core/util/base64.h"
 #include "core/ws/crypto.h"
 #include "core/ws/ws_proto.h"
+#include "crypto_test_keys.h"
 #include "proto/proto_reader.h"
 #include "proto/proto_writer.h"
 
@@ -79,8 +80,7 @@ int main()
     assert(update.readMessage().eof());
     assert(!update.nextField(field, wire));
 
-    const spark::Crypto::KeyPair key_pair = spark::Crypto::generateKeyPair();
-    assert(!key_pair.public_key_x509.empty());
+    const auto &key_pair = spark::test::testKeyPair();
     spark::WsIncomingPacket incoming;
     assert(spark::decodeRawPacket(clientConnectPacket(key_pair, true), incoming));
     assert(incoming.type == spark::WsPacketType::ClientConnect);

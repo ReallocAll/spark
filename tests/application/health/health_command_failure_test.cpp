@@ -15,6 +15,8 @@ struct HealthDashboardTestAccess {
     {
         dashboard.generation_ = generation;
     }
+
+    static void markFailure(HealthDashboard &dashboard) { dashboard.failed_.store(true); }
 };
 
 struct HealthCommandTestAccess {
@@ -40,6 +42,13 @@ struct HealthCommandTestAccess {
         command.accepted_dashboard_generation_ = 2;
         command.dashboard_sender_ = "CurrentSender";
         HealthDashboardTestAccess::setGeneration(*command.dashboard_, 2);
+    }
+
+    static void tickAt(HealthCommand &command, std::int64_t now_ms) { command.onTickAt(now_ms); }
+
+    static void markDashboardFailure(HealthCommand &command)
+    {
+        HealthDashboardTestAccess::markFailure(*command.dashboard_);
     }
 
     static void complete(HealthCommand &command, HealthDashboard::OpenResult result)
@@ -125,6 +134,21 @@ void test_current_failed_completion_clears_state_when_notification_throws()
     assert(spark::HealthCommandTestAccess::dashboardSender(command).empty());
 }
 
+void test_tick_failure_clears_state_when_notification_throws()
+{
+    spark::StatisticsService statistics;
+    Metadata metadata;
+    Dispatcher dispatcher;
+    ThrowingNotifier notifier;
+    spark::TrustedViewersState trusted(std::filesystem::temp_directory_path() / "spark-health-tick-failure.json");
+    spark::HealthCommand command(statistics, metadata, {}, {}, {}, trusted, dispatcher, notifier);
+
+    spark::HealthCommandTestAccess::prepareCurrentFailure(command);
+    spark::HealthCommandTestAccess::markDashboardFailure(command);
+    spark::HealthCommandTestAccess::tickAt(command, 0);
+    assert(spark::HealthCommandTestAccess::dashboardSender(command).empty());
+}
+
 }  // namespace
 
 int main()
@@ -132,5 +156,6 @@ int main()
     test_upload_state_clears_before_throwing_notification();
     test_stale_dashboard_completion_is_ignored();
     test_current_failed_completion_clears_state_when_notification_throws();
+    test_tick_failure_clears_state_when_notification_throws();
     return 0;
 }

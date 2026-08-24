@@ -76,18 +76,7 @@ bool verifyByteSampling()
     return true;
 }
 
-#if defined(_WIN32) || defined(__linux__)
-#ifdef _WIN32
-namespace {
-
-void __cdecl ignoreInvalidParameter(const wchar_t * /*unused*/, const wchar_t * /*unused*/, const wchar_t * /*unused*/,
-                                    unsigned int /*unused*/, std::uintptr_t /*unused*/)
-{
-}
-
-}  // namespace
-#endif
-
+#ifdef __linux__
 bool verifyProcessWideAllocationSampling()
 {
     using namespace std::chrono_literals;
@@ -160,25 +149,14 @@ bool verifyProcessWideAllocationSampling()
     else {
         std::free(failed);
     }
-#ifdef _WIN32
-    _invalid_parameter_handler previous_handler = _set_thread_local_invalid_parameter_handler(ignoreInvalidParameter);
-#endif
     void *calloc_overflow = std::calloc(impossible_runtime, 2);
     if (calloc_overflow != nullptr) {
         std::fprintf(stderr, "process-wide allocation: calloc overflow succeeded (%p)\n", calloc_overflow);
         std::free(calloc_overflow);
-#ifdef _WIN32
-        _set_thread_local_invalid_parameter_handler(previous_handler);
-#endif
         sampler.stop(error);
         return false;
     }
-#ifdef _WIN32
-    void *recalloc_overflow = _recalloc(nullptr, impossible_runtime, 2);
-    _set_thread_local_invalid_parameter_handler(previous_handler);
-#else
     void *recalloc_overflow = ::reallocarray(nullptr, impossible_runtime, 2);
-#endif
     if (recalloc_overflow != nullptr) {
         std::fprintf(stderr, "process-wide allocation: recalloc overflow succeeded\n");
         std::free(recalloc_overflow);

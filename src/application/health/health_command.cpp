@@ -98,8 +98,17 @@ void HealthCommand::onTickAt(std::int64_t now_ms)
         dashboard_sender_.clear();
         accepted_dashboard_generation_ = 0;
         if (!sender.empty()) {
-            notifier_.notify(sender, "Health dashboard connection failed.");
+            notifyBestEffort(sender, "Health dashboard connection failed.");
         }
+    }
+}
+
+void HealthCommand::notifyBestEffort(const std::string &sender_name, const std::string &message) noexcept
+{
+    try {
+        notifier_.notify(sender_name, message);
+    }
+    catch (...) {  // NOLINT(bugprone-empty-catch): tick notifications are best effort.
     }
 }
 

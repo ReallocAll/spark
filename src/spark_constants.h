@@ -5,10 +5,7 @@ namespace spark {
 
 inline constexpr const char *kVersion = "0.5.3";
 
-// The spark viewer treats a profile as "supported" (no old-version warning, all
-// features enabled) when platform_metadata.spark_version >= 2. We emit the modern
-// flattened node/time-window format, so advertise a recent spark build number.
-inline constexpr int kSparkFormatVersion = 400;
+inline constexpr int kSparkFormatVersion = 2;
 
 // spark's public infrastructure — the profile uploads here and opens in the real viewer.
 inline constexpr const char *kBytebinUrl = "https://spark-usercontent.lucko.me/";

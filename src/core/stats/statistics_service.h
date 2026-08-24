@@ -149,9 +149,11 @@ private:
     std::int64_t start_steady_ms_ = 0;
     std::int64_t start_unix_ms_ = 0;
     std::int64_t last_observation_steady_ms_ = 0;
+    std::int64_t last_metrics_steady_ms_ = 0;
     std::int64_t next_cpu_sample_steady_ms_ = 0;
     CpuSnapshot previous_cpu_{};
     MetricsHistory metrics_history_;
+    bool metrics_recorded_ = false;
     bool started_ = false;
 };
 

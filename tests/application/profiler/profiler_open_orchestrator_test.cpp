@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <functional>
 #include <mutex>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <utility>
@@ -18,6 +19,7 @@
 #include <sys/syscall.h>
 #endif
 
+#include "../../net/websocket_lifecycle_test_support.h"
 #include "application/profiler/profiler_open_orchestrator.h"
 
 namespace spark {
@@ -31,6 +33,20 @@ struct ProfilerOpenTestAccess {
     }
 
     static const std::string &openComment(const ProfilerOpenOrchestrator &open) { return open.openCommentForTesting(); }
+
+    static bool viewerOpenPending(const ProfilerOpenOrchestrator &open) { return open.viewerOpenPending(); }
+
+    static void onTick(ProfilerOpenOrchestrator &open, const std::string &fallback_sender_name)
+    {
+        open.onTick(fallback_sender_name);
+    }
+
+    static void setViewerSocket(ProfilerOpenOrchestrator &open, std::shared_ptr<ViewerSocket> socket)
+    {
+        open.setViewerSocketForTesting(std::move(socket));
+    }
+
+    static bool hasViewerSocket(const ProfilerOpenOrchestrator &open) { return open.hasViewerSocket(); }
 
     static ExportContext capture(ProfilerOpenOrchestrator &open, std::int64_t now_ms, const std::string &comment)
     {
@@ -76,6 +92,11 @@ public:
 class TestNotifier final : public spark::ResultNotifier {
 public:
     void notify(const std::string &, const std::string &) override {}
+};
+
+class ThrowingNotifier final : public spark::ResultNotifier {
+public:
+    void notify(const std::string &, const std::string &) override { throw std::runtime_error("notify failed"); }
 };
 
 std::uint64_t currentThreadId()
@@ -164,11 +185,77 @@ void testOpenCommentReachesLiveMetadata()
     assert(profiler.cancel(error));
 }
 
+void testWorkerFailureNotificationDoesNotSkipCleanup()
+{
+    spark::Profiler profiler;
+    spark::ProfilerOptions options;
+    options.interval_ms = 1;
+    std::string error;
+    assert(profiler.start(options, currentThreadId(), error));
+
+    spark::StatisticsService statistics;
+    spark::TrustedViewersState trusted_viewers(std::filesystem::temp_directory_path() /
+                                               "spark-profiler-open-worker-failure-viewers.json");
+    TestDispatcher dispatcher;
+    TestMetadataProvider metadata_provider;
+    ThrowingNotifier notifier;
+    spark::ProfilerOpenOrchestrator open(profiler, statistics, {}, {}, {}, {}, trusted_viewers, dispatcher,
+                                         metadata_provider, notifier);
+    spark::ProfilerOpenTestAccess::setOpenFunction(
+        open, [](spark::ViewerSocket &, const spark::ViewerSocket::UploadCallback &) -> std::string {
+            throw std::runtime_error("viewer open failed");
+        });
+
+    TestSender sender;
+    open.cmdOpen(sender, spark::Arguments({"open", "--comment", "cleanup me"}, true));
+    for (int attempt = 0; attempt < 200 && spark::ProfilerOpenTestAccess::viewerOpenPending(open); ++attempt) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    assert(!spark::ProfilerOpenTestAccess::viewerOpenPending(open));
+    spark::ProfilerOpenTestAccess::onTick(open, "Console");
+    assert(spark::ProfilerOpenTestAccess::openComment(open).empty());
+    open.shutdown();
+    assert(profiler.cancel(error));
+}
+
+void testSocketFailureNotificationDoesNotSkipClose()
+{
+    spark::Profiler profiler;
+    spark::ProfilerOptions options;
+    options.interval_ms = 1;
+    std::string error;
+    assert(profiler.start(options, currentThreadId(), error));
+
+    spark::StatisticsService statistics;
+    spark::TrustedViewersState trusted_viewers(std::filesystem::temp_directory_path() /
+                                               "spark-profiler-open-socket-failure-viewers.json");
+    TestDispatcher dispatcher;
+    TestMetadataProvider metadata_provider;
+    ThrowingNotifier notifier;
+    spark::ProfilerOpenOrchestrator open(profiler, statistics, {}, {}, {}, {}, trusted_viewers, dispatcher,
+                                         metadata_provider, notifier);
+
+    spark::ViewerSocket::Config config;
+    auto socket = std::make_shared<spark::ViewerSocket>(config, spark::Crypto::KeyPair{});
+    const std::uint64_t generation = spark::ViewerSocketTestAccess::beginOpen(*socket);
+    assert(spark::ViewerSocketTestAccess::markOpen(*socket));
+    spark::ViewerSocketTestAccess::terminate(*socket, generation, spark::WebSocketClient::TerminationKind::RemoteClose);
+    socket->close();
+    spark::ProfilerOpenTestAccess::setViewerSocket(open, std::move(socket));
+
+    spark::ProfilerOpenTestAccess::onTick(open, "Console");
+    assert(!spark::ProfilerOpenTestAccess::hasViewerSocket(open));
+    open.shutdown();
+    assert(profiler.cancel(error));
+}
+
 }  // namespace
 
 int main()
 {
     testOpenWithoutCompletedProfile();
     testOpenCommentReachesLiveMetadata();
+    testWorkerFailureNotificationDoesNotSkipCleanup();
+    testSocketFailureNotificationDoesNotSkipClose();
     return 0;
 }

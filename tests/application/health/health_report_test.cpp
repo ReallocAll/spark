@@ -29,10 +29,18 @@ private:
 class Metadata final : public spark::ProfileMetadataProvider {
 public:
     void gatherServerMetadata(spark::ExportContext &, std::int64_t) override {}
-    void gatherWorldMetadata(spark::ExportContext &) override {}
+    void gatherWorldMetadata(spark::ExportContext &context) override
+    {
+        ++world_gather_calls;
+        context.world.present = true;
+        context.world.total_entities = 8;
+        context.world.entity_counts["minecraft:zombie"] = 3;
+    }
     std::int64_t serverUptimeSeconds() override { return 1; }
     std::int64_t playerCount() override { return 2; }
     spark::PlayerPingProvider *playerPingProvider() override { return nullptr; }
+
+    int world_gather_calls = 0;
 };
 
 spark::NetworkRateValues rate(double mean)
@@ -74,5 +82,11 @@ int main()
     assert(detailed.contains("active TX"));
     assert(detailed.contains("idle RX"));
     assert(detailed.contains("idle TX"));
+
+    const spark::HealthData data = spark::captureHealthData(statistics, metadata, "Console", false, 1000, {}, {});
+    assert(metadata.world_gather_calls == 1);
+    assert(data.world.present);
+    assert(data.world.total_entities == 8);
+    assert(data.world.entity_counts.at("minecraft:zombie") == 3);
     return 0;
 }

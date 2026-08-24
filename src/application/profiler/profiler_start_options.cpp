@@ -38,19 +38,15 @@ ProfilerStartOptionsResult parseProfilerStartOptions(const Arguments &args)
         result.error = "The sampling interval must be a finite number.";
         return result;
     }
-    if (interval && *interval <= 0.0) {
-        result.error = "The sampling interval must be greater than zero.";
-        return result;
-    }
-
     if (options.alloc) {
         if (interval && *interval > static_cast<double>(kMaxAllocationIntervalBytes)) {
             result.error =
                 "The allocation interval must not exceed " + std::to_string(kMaxAllocationIntervalBytes) + " bytes.";
             return result;
         }
-        options.allocation_interval_bytes =
-            interval ? static_cast<std::int32_t>(std::lround(*interval)) : kDefaultAllocationIntervalBytes;
+        options.allocation_interval_bytes = interval && *interval != 0.0
+                                              ? static_cast<std::int32_t>(std::lround(*interval))
+                                              : kDefaultAllocationIntervalBytes;
         options.allocation_interval_bytes = std::max(options.allocation_interval_bytes, 1);
     }
     else {
@@ -58,7 +54,7 @@ ProfilerStartOptionsResult parseProfilerStartOptions(const Arguments &args)
             result.error = "The sampling interval must not exceed " + std::to_string(kMaxSamplingIntervalMs) + "ms.";
             return result;
         }
-        options.interval_ms = interval ? static_cast<int>(std::lround(*interval)) : 4;
+        options.interval_ms = interval && *interval != 0.0 ? static_cast<int>(std::lround(*interval)) : 4;
         options.interval_ms = std::max(options.interval_ms, 1);
     }
 

@@ -130,6 +130,16 @@ int main()
         return 1;
     }
 
+    const bool platform_metadata_version =
+        spark::proto_test::findMessageBytes(profile, 1, [](std::string_view metadata_bytes) {
+            return spark::proto_test::findMessageBytes(metadata_bytes, 7, [](std::string_view platform_metadata_bytes) {
+                return spark::proto_test::hasVarint(platform_metadata_bytes, 7, 2);
+            });
+        });
+    if (!check(platform_metadata_version, "platform metadata version was not encoded")) {
+        return 1;
+    }
+
     const bool tick_filter_values =
         spark::proto_test::findMessageBytes(profile, 1, [](std::string_view metadata_bytes) {
             return spark::proto_test::findMessageBytes(metadata_bytes, 5, [](std::string_view aggregator) {

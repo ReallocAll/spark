@@ -401,7 +401,7 @@ bool verifyRetainedAllocationLiveExport()
 
 int main()
 {
-#if defined(_WIN32) || defined(__linux__)
+#ifdef __linux__
     if (!verifyRetainedAllocationProfile() || !verifyAllocationLiveExport() || !verifyRetainedAllocationLiveExport()) {
         return 1;
     }

@@ -20,6 +20,7 @@ struct HealthData {
     std::string endstone_version;
     std::string minecraft_version;
     PlatformStats platform_stats;
+    WorldInfo world;
     SystemStats system_stats;
     StatisticsSnapshot statistics;
     MetricsSnapshot metrics;

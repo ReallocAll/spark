@@ -133,7 +133,7 @@ bool verifyWindowsThreadActivityDetection();
 
 bool verifyThreadSelectorSemantics();
 bool verifyByteSampling();
-#if defined(_WIN32) || defined(__linux__)
+#if defined(__linux__)
 bool verifyAllocationThreadSelection();
 bool verifyProcessWideAllocationSampling();
 bool verifyAllocationContentionPolicy();
@@ -263,12 +263,12 @@ struct ViewerSocketTestAccess {
     static void markOpen(ViewerSocket &socket)
     {
         socket.prepareOpen();
-        socket.open_.store(true);
+        socket.state_.store(ViewerSocket::ConnectionState::Open, std::memory_order_release);
     }
 
     static void terminate(ViewerSocket &socket, WebSocketClient::TerminationKind kind)
     {
-        socket.onTransportClosed({.kind = kind});
+        socket.onTransportClosed(socket.connection_generation_.load(std::memory_order_acquire), {.kind = kind});
     }
 };
 

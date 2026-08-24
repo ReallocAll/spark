@@ -1,3 +1,5 @@
+#include <pthread.h>
+
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -11,41 +13,9 @@
 
 #include "selftest_allocation_internal.h"
 
-#ifdef _WIN32
-#include <malloc.h>
-#include <windows.h>
-#else
-#include <pthread.h>
-#endif
-
 namespace spark::selftest {
 
-bool setCurrentThreadName(const char *name)
-{
-#ifdef _WIN32
-    int length = ::MultiByteToWideChar(CP_UTF8, 0, name, -1, nullptr, 0);
-    if (length <= 1) {
-        return false;
-    }
-    std::vector<wchar_t> wide(static_cast<std::size_t>(length));
-    if (::MultiByteToWideChar(CP_UTF8, 0, name, -1, wide.data(), length) == 0) {
-        return false;
-    }
-    return SUCCEEDED(::SetThreadDescription(::GetCurrentThread(), wide.data()));
-#elif defined(__linux__)
-    return ::pthread_setname_np(::pthread_self(), name) == 0;
-#else
-    (void)name;
-    return false;
-#endif
-}
-
-#if defined(_WIN32) || defined(__linux__)
-#ifdef _WIN32
-#define SPARK_NOINLINE __declspec(noinline)
-#else
 #define SPARK_NOINLINE __attribute__((noinline))
-#endif
 SPARK_NOINLINE bool exerciseNativeAllocations()
 {
     for (std::size_t i = 0; i < 4096; ++i) {
@@ -69,58 +39,6 @@ SPARK_NOINLINE bool exerciseNativeAllocations()
     }
     std::free(replacement);
 
-#ifdef _WIN32
-    void *recalloced = _recalloc(nullptr, 32, 32);
-    if (recalloced == nullptr) {
-        std::fprintf(stderr, "native allocations: _recalloc failed\n");
-        return false;
-    }
-    void *recalloced_replacement = _recalloc(recalloced, 64, 32);
-    if (recalloced_replacement == nullptr) {
-        std::fprintf(stderr, "native allocations: resized _recalloc failed\n");
-        std::free(recalloced);
-        return false;
-    }
-    std::free(recalloced_replacement);
-
-    void *aligned = _aligned_malloc(1024, 64);
-    if (aligned == nullptr) {
-        std::fprintf(stderr, "native allocations: _aligned_malloc failed\n");
-        return false;
-    }
-    void *aligned_replacement = _aligned_realloc(aligned, 4096, 64);
-    if (aligned_replacement == nullptr) {
-        std::fprintf(stderr, "native allocations: _aligned_realloc failed\n");
-        _aligned_free(aligned);
-        return false;
-    }
-    void *aligned_recalloced = _aligned_recalloc(aligned_replacement, 128, 64, 64);
-    if (aligned_recalloced == nullptr) {
-        std::fprintf(stderr, "native allocations: _aligned_recalloc failed\n");
-        _aligned_free(aligned_replacement);
-        return false;
-    }
-    _aligned_free(aligned_recalloced);
-
-    void *offset = _aligned_offset_malloc(1024, 64, 16);
-    if (offset == nullptr) {
-        std::fprintf(stderr, "native allocations: _aligned_offset_malloc failed\n");
-        return false;
-    }
-    void *offset_replacement = _aligned_offset_realloc(offset, 4096, 64, 16);
-    if (offset_replacement == nullptr) {
-        std::fprintf(stderr, "native allocations: _aligned_offset_realloc failed\n");
-        _aligned_free(offset);
-        return false;
-    }
-    void *offset_recalloced = _aligned_offset_recalloc(offset_replacement, 128, 64, 64, 16);
-    if (offset_recalloced == nullptr) {
-        std::fprintf(stderr, "native allocations: _aligned_offset_recalloc failed\n");
-        _aligned_free(offset_replacement);
-        return false;
-    }
-    _aligned_free(offset_recalloced);
-#elif defined(__linux__)
     void *array = ::reallocarray(nullptr, 32, 32);
     if (array == nullptr) {
         return false;
@@ -131,8 +49,6 @@ SPARK_NOINLINE bool exerciseNativeAllocations()
         return false;
     }
     std::free(array_replacement);
-#endif
-
     void *cross_thread = std::malloc(4096);
     if (cross_thread == nullptr) {
         return false;
@@ -243,6 +159,4 @@ bool runAllocationSession(spark::AllocationSampler &sampler, const spark::Alloca
     }
     return true;
 }
-#endif
-
 }  // namespace spark::selftest

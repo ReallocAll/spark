@@ -7,6 +7,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -67,7 +68,7 @@ public:
     // Close the socket and signal the viewer.
     void close() noexcept;
 
-    bool isOpen() const { return open_.load(); }
+    bool isOpen() const { return state_.load(std::memory_order_acquire) == ConnectionState::Open; }
     CloseReason closeReason() const;
     std::string takeDiagnostic();
 
@@ -94,9 +95,15 @@ public:
 private:
     friend struct ViewerSocketTestAccess;
 
+    enum class ConnectionState : std::uint8_t {
+        Closed,
+        Opening,
+        Open,
+    };
+
     void onMessage(const std::string &data);
-    void prepareOpen();
-    void onTransportClosed(const WebSocketClient::Termination &termination);
+    std::uint64_t prepareOpen();
+    void onTransportClosed(std::uint64_t generation, const WebSocketClient::Termination &termination);
     void setCloseState(CloseReason reason, std::string diagnostic = {});
     [[nodiscard]] bool isTrustedClient(const WsIncomingPacket &packet) const;
     bool enqueueDeferredLocked(WebSocketClient::DeferredEncoder encoder, std::size_t accounted_input_bytes) noexcept;
@@ -105,10 +112,12 @@ private:
 
     Config config_;
     Crypto::KeyPair key_pair_;
+    std::mutex open_mutex_;
     mutable std::mutex transport_mutex_;
     std::unique_ptr<WebSocketClient> ws_;
 
-    std::atomic<bool> open_{false};
+    std::atomic<ConnectionState> state_{ConnectionState::Closed};
+    std::atomic<std::uint64_t> connection_generation_{0};
     std::int64_t open_time_ms_ = 0;
     std::atomic<std::int64_t> last_ping_ms_{0};
     std::string last_payload_id_;
@@ -120,6 +129,8 @@ private:
     // Pending client keys awaiting trust approval.
     mutable std::mutex pending_keys_mutex_;
     std::map<std::string, std::vector<std::uint8_t>> pending_keys_;
+    std::set<std::string> conflicted_client_ids_;
+    bool all_client_ids_conflicted_ = false;
 
     // Incoming messages are queued for processing on the main thread.
     std::mutex queue_mutex_;
@@ -134,6 +145,7 @@ private:
     static constexpr std::int64_t kEstablishedTimeoutMs = 30000;  // 30s
     static constexpr std::size_t kMaxQueuedPackets = 64;
     static constexpr std::size_t kMaxPendingKeys = 64;
+    static constexpr std::size_t kMaxConflictedClientIds = 64;
 };
 
 }  // namespace spark

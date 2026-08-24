@@ -3,12 +3,14 @@
 #include <string>
 #include <utility>
 
+#include "application/profiler/live_statistics_payload.h"
 #include "core/stats/system_stats.h"
 #include "core/util/base64.h"
 #include "core/util/format.h"
 #include "core/util/monotonic_time.h"
 #include "net/bytebin.h"
 #include "net/gzip.h"
+#include "profiling_window.h"
 #include "spark_constants.h"
 
 namespace spark {
@@ -31,7 +33,8 @@ ProfilerOpenOrchestrator::ProfilerOpenOrchestrator(Profiler &profiler, Statistic
     : profiler_(profiler), statistics_(statistics), bds_executable_sha256_(std::move(bds_executable_sha256)),
       bytebin_url_(std::move(bytebin_url)), viewer_url_(std::move(viewer_url)),
       bytesocks_host_(std::move(bytesocks_host)), trusted_viewers_(trusted_viewers), dispatcher_(dispatcher),
-      metadata_provider_(metadata_provider), notifier_(notifier)
+      metadata_provider_(metadata_provider), notifier_(notifier),
+      viewer_schedule_(profiling_window::windowAdjustmentMs())
 {
     viewer_open_fn_ = [](ViewerSocket &socket, const ViewerSocket::UploadCallback &upload) {
         return socket.open(upload);
@@ -71,6 +74,8 @@ void ProfilerOpenOrchestrator::cmdOpen(CommandSender &sender, const Arguments &a
     config.bytebin_url = bytebin_url_;
     config.viewer_url = viewer_url_;
     config.user_agent = std::string("endstone-spark/") + kVersion;
+    config.sampler_interval = 60;
+    config.statistics_interval = 10;
 
     auto socket = std::make_shared<ViewerSocket>(std::move(config), std::move(key_pair));
     socket->setIsKeyTrustedCallback([this](const std::vector<std::uint8_t> &key) {
@@ -100,7 +105,7 @@ void ProfilerOpenOrchestrator::cmdOpen(CommandSender &sender, const Arguments &a
 void ProfilerOpenOrchestrator::onTick(const std::string &fallback_sender_name)
 {
     if (viewer_worker_ && viewer_worker_->consumeFailure()) {
-        notifier_.notify(viewer_sender_name_.empty() ? fallback_sender_name : viewer_sender_name_,
+        notifyBestEffort(viewer_sender_name_.empty() ? fallback_sender_name : viewer_sender_name_,
                          "Live viewer worker failed.");
         close();
     }
@@ -112,23 +117,44 @@ void ProfilerOpenOrchestrator::onTick(const std::string &fallback_sender_name)
         if (!viewer_socket_->tick()) {
             std::string diagnostic = viewer_socket_->takeDiagnostic();
             if (!diagnostic.empty()) {
-                notifier_.notify(viewer_sender_name_.empty() ? fallback_sender_name : viewer_sender_name_, diagnostic);
+                notifyBestEffort(viewer_sender_name_.empty() ? fallback_sender_name : viewer_sender_name_, diagnostic);
             }
             close();
         }
         else if (viewer_socket_->isOpen()) {
             const auto now = nowMs();
-            if (now - last_viewer_upload_ms_ >= 10000) {
+            const LiveViewerDue due = viewer_schedule_.due(now);
+            if (due.statistics || due.sampler) {
                 const bool available = viewer_worker_ && viewer_worker_->available();
                 const std::uint64_t generation = viewer_worker_ ? viewer_worker_->generation() : 0;
                 if (available) {
-                    ExportContext context = captureLiveContext(now, open_comment_);
-                    if (viewer_worker_->enqueueUpdate(std::move(context), viewer_socket_, generation)) {
-                        last_viewer_upload_ms_ = now;
+                    ExportContext context =
+                        due.sampler ? captureLiveContext(now, open_comment_) : captureLiveStatisticsContext(now);
+                    bool queued = false;
+                    if (due.statistics && due.sampler) {
+                        queued = viewer_worker_->enqueueCombined(std::move(context), viewer_socket_, generation);
+                    }
+                    else if (due.statistics) {
+                        queued = viewer_worker_->enqueueStatistics(std::move(context), viewer_socket_, generation);
+                    }
+                    else {
+                        queued = viewer_worker_->enqueueSampler(std::move(context), viewer_socket_, generation);
+                    }
+                    if (queued) {
+                        viewer_schedule_.commit(now, due);
                     }
                 }
             }
         }
+    }
+}
+
+void ProfilerOpenOrchestrator::notifyBestEffort(const std::string &sender_name, const std::string &message) noexcept
+{
+    try {
+        notifier_.notify(sender_name, message);
+    }
+    catch (...) {  // NOLINT(bugprone-empty-catch): viewer notifications are best effort.
     }
 }
 
@@ -141,7 +167,7 @@ void ProfilerOpenOrchestrator::close()
     if (socket) {
         socket->close();
     }
-    last_viewer_upload_ms_ = 0;
+    viewer_schedule_.disarm();
     viewer_sender_name_.clear();
     open_comment_.clear();
 }
@@ -189,6 +215,17 @@ std::string ProfilerOpenOrchestrator::executeViewerWork(const ViewerUpdateWorker
                                });
     }
 
+    if (work.type == ViewerUpdateWorker::WorkType::Statistics) {
+        const LiveStatisticsPayload payload = buildLiveStatisticsPayload(work.context);
+        work.socket->sendStatistics(payload.platform, payload.system, payload.metrics);
+        return {};
+    }
+
+    if (work.type == ViewerUpdateWorker::WorkType::Combined) {
+        const LiveStatisticsPayload payload = buildLiveStatisticsPayload(work.context);
+        work.socket->sendStatistics(payload.platform, payload.system, payload.metrics);
+    }
+
     std::string bytebin_key = uploadSamplerData(work.context);
     if (!bytebin_key.empty() && viewerGenerationCurrent(work.generation)) {
         work.socket->sendUpdate(bytebin_key);
@@ -233,14 +270,16 @@ void ProfilerOpenOrchestrator::completeViewerOpen(ViewerUpdateWorker::Completion
             completion.socket->close();
         }
         open_comment_.clear();
-        notifier_.notify(completion.sender_name, "Failed to open the live viewer. Check your network connection.");
+        notifyBestEffort(completion.sender_name, "Failed to open the live viewer. Check your network connection.");
         return;
     }
     viewer_socket_ = std::move(completion.socket);
     viewer_sender_name_ = completion.sender_name;
-    last_viewer_upload_ms_ = nowMs();
-    notifier_.notify(completion.sender_name, "Live viewer opened! Open it at: " + completion.url);
-    notifier_.notify(completion.sender_name, "The viewer updates every 10 seconds while the profiler is running.");
+    viewer_schedule_.arm(nowMs());
+    notifyBestEffort(completion.sender_name, "Live viewer opened! Open it at: " + completion.url);
+    notifyBestEffort(
+        completion.sender_name,
+        "The viewer updates statistics every 10 seconds and sampler data every minute while the profiler is running.");
 }
 
 ExportContext ProfilerOpenOrchestrator::captureLiveContext(std::int64_t now_ms, const std::string &comment)
@@ -257,6 +296,23 @@ ExportContext ProfilerOpenOrchestrator::captureLiveContext(std::int64_t now_ms, 
     context.window_stats = statistics_.profileWindows(profiler_.startTimeMs(), now_ms);
     context.system_stats = spark::gatherSystemStats(".");
     metadata_provider_.gatherWorldMetadata(context);
+    if (ping_samples_provider_) {
+        context.ping_samples = ping_samples_provider_();
+    }
+    if (network_snapshot_provider_) {
+        context.net_snapshots = network_snapshot_provider_();
+    }
+    return context;
+}
+
+ExportContext ProfilerOpenOrchestrator::captureLiveStatisticsContext(std::int64_t now_ms)
+{
+    ExportContext context;
+    context.bds_executable_sha256 = bds_executable_sha256_;
+    metadata_provider_.gatherServerMetadata(context, now_ms);
+    context.statistics = statistics_.snapshot();
+    context.metrics = statistics_.metricsSnapshot();
+    context.system_stats = spark::gatherSystemStats(".");
     if (ping_samples_provider_) {
         context.ping_samples = ping_samples_provider_();
     }

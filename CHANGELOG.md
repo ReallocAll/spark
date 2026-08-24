@@ -9,9 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Match upstream live-viewer cadence with standalone statistics every 10 seconds
+  and globally aligned sampler payload rotation every minute.
 - Record upstream-compatible rolling TPS, tick-duration, CPU, world, and ping metric series in health and sampler data.
 - Use globally aligned profiling windows and stop timed profiles on a monotonic deadline even while server ticks are stalled.
+- Measure server uptime from the monotonic clock anchor so wall-clock adjustments cannot skew health reports.
+- Poll ping and network metrics on monotonic deadlines so server lag does not stretch their sampling cadence.
 - Align command argument parsing with Java spark and hide inaccessible commands from help output.
+- Align profiler action precedence, umbrella permissions, and zero-interval mode defaults with Java spark.
 - Add Java-compatible health report commands and a live health dashboard with
   background uploads, rolling statistics updates, and trusted viewer clients.
 - Allow `/spark profiler open --comment <text>` to override live profile comments.
@@ -23,9 +28,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Java spark-compatible TPS, tick-duration, and process/system CPU placeholders
   from Spark's live rolling statistics. Spark continues normally when PAPI is not
   installed or active.
+- Support Java-compatible Spark configuration environment variables.
 
 ### Fixed
 
+- Avoid recalculating and sorting rolling TPS and tick-duration metrics on every server tick when the history is only
+  recorded every 10 seconds.
+- Prevent stale or concurrently closed live-viewer transports from restoring an open connection state, and run initial
+  uploads without holding the transport lock.
+- Serialize health-dashboard opening and shutdown without invoking completion callbacks under internal locks.
+- Reject invalid rolling windows and bound metadata and world-statistics edge cases.
+- Synchronize retained-allocation snapshots with lifecycle record reuse.
+- Include world metadata in the initial health report payload.
 - Require a valid signature before accepting a trusted live-viewer client,
   reject malformed WebSocket protobuf/base64 input, and bound live-viewer
   receive and send queues.

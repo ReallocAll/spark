@@ -17,6 +17,7 @@
 #include "core/stats/ping_statistics.h"
 #include "core/stats/system_stats.h"
 #include "core/util/format.h"
+#include "core/util/monotonic_time.h"
 #include "core/util/world_region.h"
 #include "platform/endstone/native_plugin_attribution.h"
 
@@ -265,8 +266,9 @@ void EndstoneMetadataProvider::gatherWorldMetadata(ExportContext &ctx)
 
 std::int64_t EndstoneMetadataProvider::serverUptimeSeconds()
 {
-    return std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now() - server_.getStartTime())
-        .count();
+    const auto start_ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(server_.getStartTime().time_since_epoch()).count();
+    return (monotonicUnixMillis() - start_ms) / 1000;
 }
 
 std::int64_t EndstoneMetadataProvider::playerCount()
@@ -320,82 +322,6 @@ std::map<std::string, int> EndstonePlayerPingProvider::poll()
         result.emplace(player->getName(), static_cast<int>(player->getPing().count()));
     }
     return result;
-}
-
-// --- EndstoneWorldGaugeProvider ---
-
-namespace {
-
-constexpr std::int64_t KReconcileIntervalMs = 30000;
-
-std::int64_t steadyNowMs()
-{
-    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch())
-        .count();
-}
-
-}  // namespace
-
-void EndstoneWorldGaugeProvider::init()
-{
-    if (initialized_) {
-        return;
-    }
-    initialized_ = true;
-
-    plugin_.registerEvent<::endstone::ActorSpawnEvent>(
-        [this](::endstone::ActorSpawnEvent &event) {
-            if (!event.getActor().is<::endstone::Player>()) {
-                entity_count_.fetch_add(1, std::memory_order_relaxed);
-            }
-        },
-        ::endstone::EventPriority::Monitor);
-
-    plugin_.registerEvent<::endstone::ActorRemoveEvent>(
-        [this](::endstone::ActorRemoveEvent &event) {
-            if (!event.getActor().is<::endstone::Player>()) {
-                entity_count_.fetch_sub(1, std::memory_order_relaxed);
-            }
-        },
-        ::endstone::EventPriority::Monitor);
-
-    plugin_.registerEvent<::endstone::ChunkLoadEvent>(
-        [this](::endstone::ChunkLoadEvent &) { chunk_count_.fetch_add(1, std::memory_order_relaxed); },
-        ::endstone::EventPriority::Monitor);
-
-    plugin_.registerEvent<::endstone::ChunkUnloadEvent>(
-        [this](::endstone::ChunkUnloadEvent &) { chunk_count_.fetch_sub(1, std::memory_order_relaxed); },
-        ::endstone::EventPriority::Monitor);
-
-    reconcile();
-}
-
-std::pair<int, int> EndstoneWorldGaugeProvider::worldGauges()
-{
-    std::int64_t now = steadyNowMs();
-    if (now - last_reconcile_steady_ms_ >= KReconcileIntervalMs) {
-        reconcile();
-    }
-    return {entity_count_.load(std::memory_order_relaxed), chunk_count_.load(std::memory_order_relaxed)};
-}
-
-void EndstoneWorldGaugeProvider::reconcile()
-{
-    last_reconcile_steady_ms_ = steadyNowMs();
-
-    int entities = 0;
-    int chunks = 0;
-    ::endstone::Level &level = server_.getLevel();
-    for (const auto &dimension : level.getDimensions()) {
-        for (const auto &actor : dimension->getActors()) {
-            if (!actor->is<::endstone::Player>()) {
-                ++entities;
-            }
-        }
-        chunks += static_cast<int>(dimension->getLoadedChunks().size());
-    }
-    entity_count_.store(entities, std::memory_order_relaxed);
-    chunk_count_.store(chunks, std::memory_order_relaxed);
 }
 
 }  // namespace spark::endstone_adapter

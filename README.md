@@ -128,7 +128,9 @@ Run the command again to disable the monitor.
 
 `/spark profiler open` opens a real-time spark viewer while an execution or
 allocation profiler is running. It connects to the spark WebSocket relay,
-uploads sampler data every 10 seconds, and displays the viewer URL in chat. A
+uploads sampler data every minute and sends standalone rolling statistics every
+10 seconds, then displays the viewer URL in chat. Sampler rotations follow the
+globally aligned profiling windows. A
 normal `--alloc` viewer is cumulative from session start; an
 `--alloc-live-only` viewer shows sampled allocations retained at each update.
 The viewer stays live until the profiler is stopped, cancelled, or times out.
@@ -347,6 +349,16 @@ Unknown fields are silently ignored.
 | `backgroundProfilerThreadGrouper` | string | `"by-pool"` | Thread grouping mode: `by-pool`, `by-name`, or `as-one`. |
 | `backgroundProfilerThreadDumper` | string | `"default"` | Thread selection: `default` (server thread) or `all`. |
 | `disableResponseBroadcast` | bool | `false` | Restrict result notifications to the originating player. |
+
+The native plugin also accepts the Java-compatible environment variables
+`SPARK_VIEWERURL`, `SPARK_BYTEBINURL`, `SPARK_BYTESOCKSHOST`,
+`SPARK_BACKGROUNDPROFILER`, `SPARK_BACKGROUNDPROFILERINTERVAL`,
+`SPARK_BACKGROUNDPROFILERTHREADGROUPER`, `SPARK_BACKGROUNDPROFILERTHREADDUMPER`,
+and `SPARK_DISABLERESPONSEBROADCAST`. Environment values override TOML values
+in memory and are not written to `config.toml`. Boolean values follow Java's
+`Boolean.parseBoolean` behavior; invalid interval text leaves the TOML value
+unchanged, while endpoint, thread-mode, and out-of-range interval values make
+startup reject the configuration.
 
 Trusted viewer public keys are stored separately in `trusted-viewers.json` (a
 JSON array of base64-encoded X.509 keys). The `trust-viewer` command appends to

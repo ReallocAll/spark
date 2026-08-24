@@ -17,7 +17,7 @@ int main(int argc, char **argv)
         !windows_test::testInvalidRttiAndThunk() || !windows_test::testAslrIndependence() ||
         !windows_test::testDecodedStringsAndScoring() || !windows_test::testInstructionMiddleAndSharedString() ||
         !windows_test::testChainedRootStringUniqueness() || !windows_test::testLargeRangeLookup() ||
-        !windows_test::testSymbolGuessApplicationPolicy()) {
+        !windows_test::testShortReadOnlySectionBounds() || !windows_test::testSymbolGuessApplicationPolicy()) {
         return 1;
     }
     std::puts("Windows symbol guess tests passed");

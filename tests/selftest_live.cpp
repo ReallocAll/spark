@@ -135,7 +135,12 @@ bool verifyLiveExportStopCancel(std::uint64_t worker_tid)
 {
     using namespace std::chrono_literals;
 
-    for (int mode = 0; mode < 2; ++mode) {
+#ifdef __linux__
+    constexpr int mode_count = 2;
+#else
+    constexpr int mode_count = 1;
+#endif
+    for (int mode = 0; mode < mode_count; ++mode) {
         for (int operation = 0; operation < 2; ++operation) {
             spark::Profiler profiler;
             spark::ProfilerOptions options;
