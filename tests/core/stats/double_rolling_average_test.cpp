@@ -1,10 +1,21 @@
 #include <cassert>
 #include <cmath>
+#include <stdexcept>
 
 #include "core/stats/network_monitor.h"
 
 int main()
 {
+    {
+        bool rejected = false;
+        try {
+            spark::DoubleRollingAverage average(0);
+        }
+        catch (const std::invalid_argument &) {
+            rejected = true;
+        }
+        assert(rejected);
+    }
     {
         spark::DoubleRollingAverage average(5);
         assert(average.samples() == 0);

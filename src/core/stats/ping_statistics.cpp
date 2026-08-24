@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <stdexcept>
 #include <utility>
 
 namespace spark {
@@ -66,6 +67,14 @@ int PingSummary::max() const
 }
 
 // --- PingRollingAverage ---
+
+PingRollingAverage::PingRollingAverage(std::size_t window_size) : capacity_(window_size)
+{
+    if (window_size == 0) {
+        throw std::invalid_argument("rolling average window must be positive");
+    }
+    samples_.reserve(window_size);
+}
 
 void PingRollingAverage::add(int value)
 {
