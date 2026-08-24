@@ -4,10 +4,11 @@ else ()
     add_compile_options(-UNDEBUG)
 endif ()
 
-add_executable(spark_selftest
+set(SPARK_SELFTEST_SOURCES
         selftest.cpp
         selftest_internal.cpp
         selftest_support.cpp
+        selftest_thread_name.cpp
         selftest_basic.cpp
         selftest_capture.cpp
         selftest_sampler.cpp
@@ -15,12 +16,16 @@ add_executable(spark_selftest
         selftest_viewer.cpp
         selftest_async.cpp
         selftest_statistics.cpp
-        selftest_allocation_common.cpp
         selftest_allocation_selection.cpp
-        selftest_allocation_sampling.cpp
-        selftest_allocation_pressure.cpp
-        selftest_allocation_lifecycle.cpp
-        selftest_allocation_linux.cpp)
+        selftest_allocation_sampling.cpp)
+if (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+    list(APPEND SPARK_SELFTEST_SOURCES
+            selftest_allocation_common.cpp
+            selftest_allocation_pressure.cpp
+            selftest_allocation_lifecycle.cpp
+            selftest_allocation_linux.cpp)
+endif ()
+add_executable(spark_selftest ${SPARK_SELFTEST_SOURCES})
 target_link_libraries(spark_selftest PRIVATE spark_application)
 set_target_properties(spark_selftest PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
@@ -425,15 +430,12 @@ if (WIN32)
             RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
     add_test(NAME spark_symbol_guess_windows_test COMMAND spark_symbol_guess_windows_test)
 
-    add_library(spark_windows_allocation_fixture MODULE
-            native/alloc/windows_allocation_fixture.cpp)
-    set_target_properties(spark_windows_allocation_fixture PROPERTIES
-            LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+    add_executable(spark_windows_allocation_unavailable_test
+            native/alloc/windows_allocation_unavailable_test.cpp)
+    target_link_libraries(spark_windows_allocation_unavailable_test PRIVATE spark_core)
+    set_target_properties(spark_windows_allocation_unavailable_test PROPERTIES
             RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
-    add_dependencies(spark_selftest spark_windows_allocation_fixture)
-    target_compile_definitions(
-            spark_selftest PRIVATE
-            SPARK_WINDOWS_ALLOCATION_FIXTURE_PATH="$<TARGET_FILE:spark_windows_allocation_fixture>")
+    add_test(NAME spark_windows_allocation_unavailable_test COMMAND spark_windows_allocation_unavailable_test)
 elseif (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
     add_executable(spark_symbol_guess_linux_test native/symbol/symbol_guess_linux_test.cpp)
     target_link_libraries(spark_symbol_guess_linux_test PRIVATE spark_core)

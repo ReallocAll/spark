@@ -44,6 +44,11 @@ int main()
                    bytes, 1,
                    [&](spark::ProtoReader metadata_reader) {
                        return spark::proto_test::hasVarint(metadata_reader, 5, 1234) &&
+                              spark::proto_test::findMessage(metadata_reader, 2,
+                                                             [](spark::ProtoReader platform_metadata_reader) {
+                                                                 return spark::proto_test::hasVarint(
+                                                                     platform_metadata_reader, 7, 2);
+                                                             }) &&
                               spark::proto_test::findMessage(
                                   metadata_reader, 3,
                                   [](spark::ProtoReader platform_reader) {

@@ -74,6 +74,7 @@ private:
     void onTickAt(std::int64_t now_ms);
     UploadResult uploadHealthData(const HealthData &data);
     void runHealthUpload(const HealthData &data, std::string sender_name, bool sender_is_player, std::int64_t now_ms);
+    void notifyBestEffort(const std::string &sender_name, const std::string &message) noexcept;
     void announceHealthUpload() noexcept;
     void completeHealthDashboard(HealthDashboard::OpenResult result);
 

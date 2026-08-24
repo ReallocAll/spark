@@ -84,12 +84,27 @@ bool ViewerSocket::tick()
                 const bool trusted = isTrustedClient(packet);
                 if (packet.verified && !packet.public_key.empty()) {
                     std::scoped_lock lock(pending_keys_mutex_);
-                    const auto existing = pending_keys_.find(packet.connect.client_id);
-                    if (existing != pending_keys_.end()) {
-                        existing->second = packet.public_key;
+                    const std::string &client_id = packet.connect.client_id;
+                    if (all_client_ids_conflicted_ || conflicted_client_ids_.contains(client_id)) {
+                        pending_keys_.erase(client_id);
                     }
-                    else if (pending_keys_.size() < kMaxPendingKeys) {
-                        pending_keys_.emplace(packet.connect.client_id, packet.public_key);
+                    else {
+                        const auto existing = pending_keys_.find(client_id);
+                        if (existing != pending_keys_.end()) {
+                            if (existing->second != packet.public_key) {
+                                pending_keys_.erase(existing);
+                                if (conflicted_client_ids_.size() < kMaxConflictedClientIds) {
+                                    conflicted_client_ids_.insert(client_id);
+                                }
+                                else {
+                                    all_client_ids_conflicted_ = true;
+                                    pending_keys_.clear();
+                                }
+                            }
+                        }
+                        else if (!all_client_ids_conflicted_ && pending_keys_.size() < kMaxPendingKeys) {
+                            pending_keys_.emplace(client_id, packet.public_key);
+                        }
                     }
                 }
                 int state = trusted ? 0 : 1;  // 0=ACCEPTED, 1=UNTRUSTED
@@ -169,6 +184,9 @@ void ViewerSocket::sendClientTrusted(const std::string &client_id)
         std::vector<std::uint8_t> pending_key;
         {
             std::scoped_lock lock(pending_keys_mutex_);
+            if (all_client_ids_conflicted_ || conflicted_client_ids_.contains(client_id)) {
+                return;
+            }
             const auto pending = pending_keys_.find(client_id);
             if (pending == pending_keys_.end()) {
                 return;

@@ -77,6 +77,7 @@ private:
     std::string buildLiveSamplerData(const ExportContext &context);
     std::string buildLiveSamplerData(std::int64_t now_ms) { return buildLiveSamplerData(captureLiveContext(now_ms)); }
     std::string uploadSamplerData(const ExportContext &context);
+    void notifyBestEffort(const std::string &sender_name, const std::string &message) noexcept;
     bool viewerGenerationCurrent(std::uint64_t generation) const;
     bool startViewerWorker();
     void stopViewerWorker();

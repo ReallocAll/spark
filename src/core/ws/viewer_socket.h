@@ -7,6 +7,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -128,6 +129,8 @@ private:
     // Pending client keys awaiting trust approval.
     mutable std::mutex pending_keys_mutex_;
     std::map<std::string, std::vector<std::uint8_t>> pending_keys_;
+    std::set<std::string> conflicted_client_ids_;
+    bool all_client_ids_conflicted_ = false;
 
     // Incoming messages are queued for processing on the main thread.
     std::mutex queue_mutex_;
@@ -142,6 +145,7 @@ private:
     static constexpr std::int64_t kEstablishedTimeoutMs = 30000;  // 30s
     static constexpr std::size_t kMaxQueuedPackets = 64;
     static constexpr std::size_t kMaxPendingKeys = 64;
+    static constexpr std::size_t kMaxConflictedClientIds = 64;
 };
 
 }  // namespace spark

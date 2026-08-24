@@ -79,9 +79,9 @@ void testStatisticsRecordingDelayAndAnchors()
 void testStatisticsCadenceOverflow()
 {
     spark::StatisticsService statistics;
-    constexpr std::int64_t start = (std::numeric_limits<std::int64_t>::max)() - 5'000;
+    constexpr std::int64_t start = std::numeric_limits<std::int64_t>::max() - 5'000;
     statistics.startAt(start, 5'000'000, initialCpu());
-    statistics.recordTickAt(10.0, (std::numeric_limits<std::int64_t>::max)());
+    statistics.recordTickAt(10.0, std::numeric_limits<std::int64_t>::max());
     assert(statistics.metricsSnapshot().empty());
 }
 

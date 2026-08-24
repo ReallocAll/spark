@@ -1,12 +1,15 @@
+#include <algorithm>
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
+#include "core/profiler/native_attribution.h"
 #include "core/profiler/profiler.h"
 
 namespace spark {
@@ -101,6 +104,60 @@ std::map<std::string, std::string> classSources(const std::string &payload)
     return result;
 }
 
+struct NodeFields {
+    std::string class_name;
+    std::string method_name;
+    std::uint64_t rva = 0;
+};
+
+NodeFields nodeFields(const std::string &node)
+{
+    NodeFields result;
+    std::size_t offset = 0;
+    while (offset < node.size()) {
+        const std::uint64_t tag = readVarint(node, offset);
+        if ((tag >> 3) == 3) {
+            result.class_name = readBytes(node, offset);
+        }
+        else if ((tag >> 3) == 4) {
+            result.method_name = readBytes(node, offset);
+        }
+        else if ((tag >> 3) == 1001) {
+            result.rva = readVarint(node, offset);
+        }
+        else {
+            skipField(node, offset, tag & 7);
+        }
+    }
+    return result;
+}
+
+std::vector<NodeFields> serializedNodes(const std::string &payload)
+{
+    std::vector<NodeFields> result;
+    std::size_t payload_offset = 0;
+    while (payload_offset < payload.size()) {
+        const std::uint64_t payload_tag = readVarint(payload, payload_offset);
+        if ((payload_tag >> 3) != 2) {
+            skipField(payload, payload_offset, payload_tag & 7);
+            continue;
+        }
+
+        const std::string thread = readBytes(payload, payload_offset);
+        std::size_t thread_offset = 0;
+        while (thread_offset < thread.size()) {
+            const std::uint64_t thread_tag = readVarint(thread, thread_offset);
+            if ((thread_tag >> 3) == 3) {
+                result.push_back(nodeFields(readBytes(thread, thread_offset)));
+            }
+            else {
+                skipField(thread, thread_offset, thread_tag & 7);
+            }
+        }
+    }
+    return result;
+}
+
 spark::FrameKey frame(std::uint32_t module, std::uintptr_t base, std::uint64_t rva)
 {
     return {.module = module, .rva = rva, .raw_address = base + rva};
@@ -110,29 +167,95 @@ spark::FrameKey frame(std::uint32_t module, std::uintptr_t base, std::uint64_t r
 
 int main()
 {
+    assert(spark::isNativeAllocationInstrumentation("spark::AllocationSampler::Impl::hookMalloc(unsigned long)"));
+    assert(spark::isNativeAllocationInstrumentation("spark::AllocationSampler::Impl::hookHeapAlloc"));
+    assert(spark::isNativeAllocationInstrumentation("spark::AllocationSampler::Impl::hookMalloc"));
+    assert(spark::isNativeAllocationInstrumentation("spark::AllocationSampler::Impl::hookMallocBase"));
+    assert(!spark::isNativeAllocationInstrumentation("spark::AllocationSampler::Impl::hookMallocExtra(unsigned long)"));
+    assert(!spark::isNativeAllocationInstrumentation("plugin::AllocationSampler::Impl::hookMalloc(unsigned long)"));
+
     spark::ExportContext context;
     context.native_plugin_sources = {
         {.module_base = 0x100000, .module_path = "plugin-a", .source_id = "plugin_a"},
         {.module_base = 0x200000, .module_path = "plugin-b", .source_id = "plugin_b"},
     };
 
-    const spark::FrameKey plugin_a = frame(1, 0x100000, 0x120);
-    const spark::FrameKey plugin_a_duplicate = frame(1, 0x100000, 0x220);
-    const spark::FrameKey unrelated = frame(2, 0x300000, 0x120);
-    std::unordered_map<spark::FrameKey, spark::ResolvedFrame, spark::FrameKeyHash> resolved = {
-        {plugin_a, {.class_name = "plugin-a.dll", .method_name = "run"}},
-        {plugin_a_duplicate, {.class_name = "plugin-a.dll", .method_name = "tick"}},
-        {unrelated, {.class_name = "bedrock_server", .method_name = "tick"}},
+    const spark::FrameKey root_frame = frame(1, 0x100000, 0x100);
+    const spark::FrameKey parent_frame = frame(1, 0x100000, 0x200);
+    const spark::FrameKey instrumentation = frame(1, 0x100000, 0x300);
+    const spark::FrameKey instrumentation_leaf = frame(1, 0x100000, 0x310);
+    const spark::FrameKey ordinary_leaf = frame(1, 0x100000, 0x400);
+    const spark::FrameKey sibling = frame(1, 0x100000, 0x500);
+    const spark::FrameKey sibling_leaf = frame(1, 0x100000, 0x510);
+    spark::ResolvedFrameMap resolved = {
+        {root_frame, {.class_name = "plugin-a.dll", .method_name = "root"}},
+        {parent_frame, {.class_name = "plugin-a.dll", .method_name = "ordinaryParent"}},
+        {instrumentation, {.class_name = "plugin-a.dll", .method_name = "spark::AllocationSampler::Impl::hookMalloc"}},
+        {instrumentation_leaf, {.class_name = "plugin-a.dll", .method_name = "hookDescendant"}},
+        {ordinary_leaf, {.class_name = "plugin-a.dll", .method_name = "ordinaryLeaf"}},
+        {sibling, {.class_name = "plugin-a.dll", .method_name = "ordinarySibling"}},
+        {sibling_leaf, {.class_name = "plugin-a.dll", .method_name = "siblingLeaf"}},
     };
 
+    spark::CallTree tree;
+    tree.log({parent_frame, root_frame}, 1, 2);
+    tree.log({ordinary_leaf, parent_frame, root_frame}, 1, 3);
+    tree.log({instrumentation_leaf, instrumentation, parent_frame, root_frame}, 1, 5);
+    tree.log({sibling_leaf, sibling, root_frame}, 1, 11);
+    tree.log({parent_frame, root_frame}, 2, 4);
+    tree.log({ordinary_leaf, parent_frame, root_frame}, 2, 6);
+    tree.log({instrumentation_leaf, instrumentation, parent_frame, root_frame}, 2, 7);
+    tree.log({sibling_leaf, sibling, root_frame}, 2, 5);
+
+    spark::CallTree filtered;
+    assert(spark::filterExecutionTree(filtered, tree, resolved));
+    assert(filtered.root().times.at(1) == 16);
+    assert(filtered.root().times.at(2) == 15);
+    const auto &filtered_root = *filtered.root().children.at(root_frame);
+    assert(filtered_root.times.at(1) == 16);
+    assert(filtered_root.times.at(2) == 15);
+    const auto &filtered_parent = *filtered_root.children.at(parent_frame);
+    assert(filtered_parent.times.at(1) == 5);
+    assert(filtered_parent.times.at(2) == 10);
+    assert(!filtered_parent.children.contains(instrumentation));
+    assert(filtered_parent.children.at(ordinary_leaf)->times.at(1) == 3);
+    assert(filtered_parent.children.at(ordinary_leaf)->times.at(2) == 6);
+    assert(filtered_root.children.at(sibling)->times.at(1) == 11);
+    assert(filtered_root.children.at(sibling)->times.at(2) == 5);
+
+    const auto filtered_keys = spark::collectFrameKeys(filtered);
+    assert(std::ranges::find(filtered_keys, instrumentation) == filtered_keys.end());
+    assert(std::ranges::find(filtered_keys, instrumentation_leaf) == filtered_keys.end());
+    assert(std::ranges::find(filtered_keys, sibling) != filtered_keys.end());
+
     spark::ProfileMetadata metadata;
-    spark::ProfilerTestAccess::addNativePluginSources(metadata, context, {plugin_a, plugin_a_duplicate, unrelated},
-                                                      resolved);
+    spark::ProfilerTestAccess::addNativePluginSources(metadata, context, filtered_keys, resolved);
     const std::map<std::string, std::string> expected_sources{{"plugin-a.dll", "plugin_a"}};
     assert(metadata.class_sources == expected_sources);
 
-    const std::string payload = spark::buildSamplerData(metadata, spark::CallTree{}, resolved);
+    spark::ProfileMetadata allocation_metadata;
+    spark::ProfilerTestAccess::addNativePluginSources(allocation_metadata, context, spark::collectFrameKeys(tree),
+                                                      resolved);
+    assert(allocation_metadata.class_sources == expected_sources);
+
+    const std::string payload = spark::buildSamplerData(metadata, filtered, resolved);
     assert(classSources(payload) == metadata.class_sources);
+    const auto nodes = serializedNodes(payload);
+    assert(nodes.size() == 5);
+    for (const NodeFields &node : nodes) {
+        assert(node.method_name != resolved.at(instrumentation).method_name);
+        assert(node.rva != instrumentation.rva);
+    }
+
+    spark::CallTree malformed;
+    malformed.root().times.emplace(1, 1);
+    auto malformed_child = std::make_unique<spark::CallTree::Node>();
+    malformed_child->key = root_frame;
+    malformed_child->times.emplace(1, 2);
+    malformed.root().children.emplace(root_frame, std::move(malformed_child));
+    spark::CallTree malformed_filtered;
+    assert(!spark::filterExecutionTree(malformed_filtered, malformed, resolved));
+    assert(malformed_filtered.root().times.empty());
 
     const spark::FrameKey conflicting = frame(3, 0x200000, 0x320);
     resolved.emplace(conflicting, spark::ResolvedFrame{.class_name = "plugin-a.dll", .method_name = "conflict"});

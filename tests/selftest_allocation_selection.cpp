@@ -73,7 +73,7 @@ bool verifyThreadSelectorSemantics()
     return true;
 }
 
-#if defined(_WIN32) || defined(__linux__)
+#ifdef __linux__
 bool verifyAllocationThreadSelection()
 {
     std::string error;
