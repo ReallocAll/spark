@@ -88,6 +88,7 @@ add_library(spark_native STATIC
         src/native/alloc/allocation_thread_filter.cpp
         src/native/sampler/call_tree.cpp
         src/native/sampler/sampler.cpp
+        src/native/sampler/sampler_aggregation.cpp
         src/native/sampler/thread_selector.cpp
         src/native/sampler/thread_info.cpp
         src/native/symbol/symbol_guess_dwarf.cpp

@@ -423,10 +423,38 @@ std::string Profiler::exportData(const ExportContext &ctx, const AllocationSnaps
     }
     else {
         meta.extra_platform_metadata["Execution samples dropped"] = std::to_string(sampler_.droppedSamples());
+        meta.extra_platform_metadata["Execution queue samples dropped"] =
+            std::to_string(sampler_.droppedQueueSamples());
+        meta.extra_platform_metadata["Execution pending samples dropped"] =
+            std::to_string(sampler_.droppedPendingSamples());
+        meta.extra_platform_metadata["Execution profile samples dropped"] =
+            std::to_string(sampler_.droppedProfileSamples());
         meta.extra_platform_metadata["Execution tick events dropped"] = std::to_string(sampler_.droppedTickEvents());
         meta.extra_platform_metadata["Execution sample queue capacity"] =
             std::to_string(Sampler::sampleQueueCapacity());
         meta.extra_platform_metadata["Execution tick event capacity"] = std::to_string(Sampler::tickQueueCapacity());
+        meta.extra_platform_metadata["Execution module entries"] = std::to_string(sampler_.modules().size());
+        meta.extra_platform_metadata["Execution module capacity"] = std::to_string(Sampler::moduleCapacity());
+        meta.extra_platform_metadata["Execution module overflow frames"] =
+            std::to_string(sampler_.moduleOverflowFrames());
+        meta.extra_platform_metadata["Execution sampled thread roots"] = std::to_string(sampler_.threadTrees().size());
+        meta.extra_platform_metadata["Execution thread root capacity"] = std::to_string(Sampler::threadRootCapacity());
+        meta.extra_platform_metadata["Execution overflow thread samples"] =
+            std::to_string(sampler_.overflowThreadSamples());
+        meta.extra_platform_metadata["Execution pending sample capacity"] =
+            std::to_string(Sampler::pendingSampleCapacity());
+        meta.extra_platform_metadata["Execution profile node capacity"] =
+            std::to_string(Sampler::profileNodeCapacity());
+        meta.extra_platform_metadata["Execution profile time entry capacity"] =
+            std::to_string(Sampler::profileTimeEntryCapacity());
+        meta.extra_platform_metadata["Execution profile storage exhausted"] =
+            sampler_.profileStorageExhausted() ? "true" : "false";
+        meta.extra_platform_metadata["Execution retained history windows"] =
+            std::to_string(sampler_.retainedHistoryWindows());
+        meta.extra_platform_metadata["Execution history samples pruned"] =
+            std::to_string(sampler_.historySamplesPruned());
+        meta.extra_platform_metadata["Execution history truncated"] = sampler_.historyTruncated() ? "true" : "false";
+        meta.extra_platform_metadata["Execution data incomplete"] = sampler_.dataIncomplete() ? "true" : "false";
     }
 
     meta.platform_stats.present = true;
