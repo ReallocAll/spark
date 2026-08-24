@@ -227,6 +227,9 @@ void testNetworkMonitorInterfaceLifecycle()
     poller.addReading(
         {{"eth0", makeInfo("eth0", 1100, 11, 1100, 11)}, {"wlan0", makeInfo("wlan0", 1000000, 1000, 1000000, 1000)}});
     poller.addReading({});
+    for (int i = 0; i < NetworkMonitor::kWindowSize - 1; ++i) {
+        poller.addReading({});
+    }
     poller.addReading({{"wlan0", makeInfo("wlan0", 2000000, 2000, 2000000, 2000)}});
     poller.addReading({{"wlan0", makeInfo("wlan0", 2000100, 2001, 2000100, 2001)}});
 
@@ -237,10 +240,19 @@ void testNetworkMonitorInterfaceLifecycle()
     require(monitor.poll(), "existing interface delta was rejected");
     require(!monitor.snapshot().contains("wlan0"), "new interface absolute counter was accepted");
     clock.advance(std::chrono::seconds(10));
-    require(!monitor.poll(), "disappeared interface produced a rate");
-    require(!monitor.snapshot().contains("eth0"), "disappeared interface retained stale rates");
+    require(monitor.poll(), "disappeared interface zero sample was rejected");
+    require(std::abs(monitor.snapshot().at("eth0").rx_bytes_per_second.mean - 5.0) < 0.001,
+            "disappeared interface did not retain its prior rate");
+    for (int i = 0; i < NetworkMonitor::kWindowSize - 1; ++i) {
+        clock.advance(std::chrono::seconds(10));
+        require(monitor.poll(), "repeated interface absence was rejected");
+    }
+    require(std::abs(monitor.snapshot().at("eth0").rx_bytes_per_second.mean) < 0.001,
+            "repeated interface absence did not roll toward zero");
     clock.advance(std::chrono::seconds(10));
-    require(!monitor.poll(), "reappeared interface absolute counter was accepted");
+    require(monitor.poll(), "reappeared interface baseline was not accompanied by the absent zero sample");
+    require(std::abs(monitor.snapshot().at("eth0").rx_bytes_per_second.mean) < 0.001,
+            "reappeared interface changed the absent zero history");
     clock.advance(std::chrono::seconds(10));
     require(monitor.poll(), "reappeared interface delta was rejected");
     require(std::abs(monitor.snapshot().at("wlan0").rx_bytes_per_second.mean - 10.0) < 0.001,

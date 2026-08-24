@@ -164,10 +164,14 @@ add_library(spark_core STATIC
         src/net/websocket.cpp)
 target_include_directories(spark_core PUBLIC src)
 if (WIN32)
-    target_sources(spark_core PRIVATE src/core/ws/crypto_cng.cpp)
+    target_sources(spark_core PRIVATE
+            src/core/stats/network_monitor_windows.cpp
+            src/core/ws/crypto_cng.cpp)
     target_link_libraries(spark_core PUBLIC spark_native ZLIB::ZLIB CURL::libcurl tomlplusplus::tomlplusplus bcrypt)
 else ()
-    target_sources(spark_core PRIVATE src/core/ws/crypto.cpp)
+    target_sources(spark_core PRIVATE
+            src/core/stats/network_monitor_linux.cpp
+            src/core/ws/crypto.cpp)
     target_link_libraries(spark_core PUBLIC spark_native ZLIB::ZLIB CURL::libcurl tomlplusplus::tomlplusplus OpenSSL::Crypto)
 endif ()
 if (WIN32)
