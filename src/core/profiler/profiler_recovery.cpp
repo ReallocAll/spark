@@ -17,8 +17,12 @@ void Profiler::stopRecoveryWriter()
         return;
     }
 
+    // Do NOT journal CleanEnd here. CleanEnd before export would make a crash during
+    // export look clean on the next startup. The journal is deleted only after a
+    // successful export, cancel, or clean shutdown.
     writer->requestFlush();
     if (!writer->stop()) {
+        // Keep ownership: the worker may still be executing Spark code or file I/O.
         return;
     }
 
