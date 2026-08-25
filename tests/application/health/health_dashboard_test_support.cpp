@@ -46,6 +46,12 @@ bool Probe::waitFactoryEntered()
     return cv.wait_for(lock, std::chrono::seconds(2), [this] { return factory_entered; });
 }
 
+bool Probe::waitConnectionReady()
+{
+    std::unique_lock lock(mutex);
+    return cv.wait_for(lock, std::chrono::seconds(2), [this] { return static_cast<bool>(latest); });
+}
+
 void Probe::configureUpload(bool block)
 {
     std::scoped_lock lock(mutex);
@@ -77,6 +83,7 @@ std::string FakeConnection::open(const UploadCallback &upload, spark::Cancellati
         work_active_ = true;
         open_entered_ = true;
         cv_.notify_all();
+        probe_.cv.notify_all();
         cv_.wait(lock, [this, &cancellation] {
             return !block_open_ || release_open_ || stop_requested_ || cancellation.stopRequested();
         });
@@ -157,6 +164,7 @@ bool FakeConnection::sendStatistics(const std::string &, const std::string &, co
     work_active_ = true;
     send_entered_ = true;
     cv_.notify_all();
+    probe_.cv.notify_all();
     cv_.wait(lock, [this] { return !block_send_ || release_send_ || stop_requested_; });
     if (stop_requested_) {
         work_active_ = false;
@@ -180,7 +188,9 @@ void FakeConnection::sendClientTrusted(const std::string &client_id)
 {
     std::scoped_lock lock(mutex_);
     trusted_client_ = client_id;
+    probe_.trusted_send_count.fetch_add(1, std::memory_order_acq_rel);
     cv_.notify_all();
+    probe_.cv.notify_all();
 }
 
 void FakeConnection::setIsKeyTrustedCallback(IsKeyTrustedCallback callback)
@@ -244,6 +254,12 @@ int FakeConnection::sendCount() const
     return send_count_;
 }
 
+std::string FakeConnection::trustedClient() const
+{
+    std::scoped_lock lock(mutex_);
+    return trusted_client_;
+}
+
 spark::HealthData dataAt(std::int64_t generated_time_ms)
 {
     spark::HealthData data;
@@ -257,17 +273,22 @@ std::unique_ptr<spark::HealthDashboard> makeDashboard(Probe &probe,
                                                       spark::HealthDashboard::CompletionCallback completion)
 {
     auto factory = [&probe] {
+        bool open_success = true;
+        bool open_block = false;
         {
             std::unique_lock lock(probe.mutex);
             probe.factory_entered = true;
             probe.cv.notify_all();
             probe.cv.wait(lock, [&probe] { return !probe.block_factory || probe.release_factory; });
+            open_success = probe.next_open_success;
+            open_block = probe.next_open_block;
         }
         auto connection = std::make_unique<FakeConnection>(probe);
+        connection->configureOpen(open_success, open_block);
         {
             std::scoped_lock lock(probe.mutex);
-            connection->configureOpen(probe.next_open_success, false);
             probe.latest = std::shared_ptr<FakeConnection>(connection.get(), [](FakeConnection *) {});
+            probe.cv.notify_all();
         }
         return std::unique_ptr<spark::HealthDashboardConnection>(std::move(connection));
     };
