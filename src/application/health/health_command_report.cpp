@@ -141,8 +141,8 @@ void HealthCommand::uploadHealthReport(CommandSender &sender)
             upload_worker_exited_ = false;
         }
         try {
-            upload_thread_ =
-                std::thread([this, data = std::move(data), sender_name, sender_is_player, now_ms, cancellation]() mutable {
+            upload_thread_ = std::thread(
+                [this, data = std::move(data), sender_name, sender_is_player, now_ms, cancellation]() mutable {
                     try {
                         runHealthUpload(data, sender_name, sender_is_player, now_ms, cancellation);
                     }
