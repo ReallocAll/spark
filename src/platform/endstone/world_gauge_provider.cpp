@@ -1,4 +1,5 @@
 #include <chrono>
+#include <string>
 
 #include "platform/endstone/adapters.h"
 
@@ -14,6 +15,11 @@ std::int64_t steadyNowMs()
         .count();
 }
 
+WorldGaugeChunkKey chunkKey(const ::endstone::Chunk &chunk)
+{
+    return {.dimension = std::string(chunk.getDimension()->getId()), .x = chunk.getX(), .z = chunk.getZ()};
+}
+
 }  // namespace
 
 void EndstoneWorldGaugeProvider::init()
@@ -24,19 +30,27 @@ void EndstoneWorldGaugeProvider::init()
     initialized_ = true;
 
     plugin_.registerEvent<::endstone::ActorSpawnEvent>(
-        [this](::endstone::ActorSpawnEvent &) { entity_count_.fetch_add(1, std::memory_order_relaxed); },
-        ::endstone::EventPriority::Monitor);
+        [this](::endstone::ActorSpawnEvent &event) { state_.actorSpawned(event.getActor()->getId()); },
+        ::endstone::EventPriority::Monitor, true);
 
     plugin_.registerEvent<::endstone::ActorRemoveEvent>(
-        [this](::endstone::ActorRemoveEvent &) { entity_count_.fetch_sub(1, std::memory_order_relaxed); },
+        [this](::endstone::ActorRemoveEvent &event) { state_.actorRemoved(event.getActor()->getId()); },
+        ::endstone::EventPriority::Monitor);
+
+    plugin_.registerEvent<::endstone::PlayerJoinEvent>(
+        [this](::endstone::PlayerJoinEvent &event) { state_.playerSpawned(event.getPlayer()->getId()); },
+        ::endstone::EventPriority::Monitor);
+
+    plugin_.registerEvent<::endstone::PlayerQuitEvent>(
+        [this](::endstone::PlayerQuitEvent &event) { state_.playerRemoved(event.getPlayer()->getId()); },
         ::endstone::EventPriority::Monitor);
 
     plugin_.registerEvent<::endstone::ChunkLoadEvent>(
-        [this](::endstone::ChunkLoadEvent &) { chunk_count_.fetch_add(1, std::memory_order_relaxed); },
+        [this](::endstone::ChunkLoadEvent &event) { state_.chunkLoaded(chunkKey(event.getChunk())); },
         ::endstone::EventPriority::Monitor);
 
     plugin_.registerEvent<::endstone::ChunkUnloadEvent>(
-        [this](::endstone::ChunkUnloadEvent &) { chunk_count_.fetch_sub(1, std::memory_order_relaxed); },
+        [this](::endstone::ChunkUnloadEvent &event) { state_.chunkUnloaded(chunkKey(event.getChunk())); },
         ::endstone::EventPriority::Monitor);
 
     reconcile();
@@ -44,28 +58,32 @@ void EndstoneWorldGaugeProvider::init()
 
 std::pair<int, int> EndstoneWorldGaugeProvider::worldGauges()
 {
-    std::int64_t now = steadyNowMs();
+    const std::int64_t now = steadyNowMs();
     if (now - last_reconcile_steady_ms_ >= KReconcileIntervalMs) {
         reconcile();
     }
-    return {entity_count_.load(std::memory_order_relaxed), chunk_count_.load(std::memory_order_relaxed)};
+    const WorldGaugeCounts counts = state_.counts();
+    return {counts.entities, counts.chunks};
 }
 
 void EndstoneWorldGaugeProvider::reconcile()
 {
     last_reconcile_steady_ms_ = steadyNowMs();
 
-    int entities = 0;
-    int chunks = 0;
+    WorldGaugeSnapshot snapshot;
     ::endstone::Level &level = server_.getLevel();
     for (const auto &dimension : level.getDimensions()) {
         for (const auto &actor : dimension->getActors()) {
-            ++entities;
+            snapshot.actor_ids.push_back(actor->getId());
         }
-        chunks += static_cast<int>(dimension->getLoadedChunks().size());
+        for (const auto &chunk : dimension->getLoadedChunks()) {
+            snapshot.chunks.push_back(chunkKey(*chunk));
+        }
     }
-    entity_count_.store(entities, std::memory_order_relaxed);
-    chunk_count_.store(chunks, std::memory_order_relaxed);
+    for (const auto &player : server_.getOnlinePlayers()) {
+        snapshot.player_ids.push_back(player->getId());
+    }
+    state_.reconcile(snapshot);
 }
 
 }  // namespace spark::endstone_adapter
