@@ -58,6 +58,12 @@ private:
 
 using CurlEasyPtr = std::unique_ptr<CURL, CurlEasyDeleter>;
 
+int cancelTransfer(void *userdata, curl_off_t, curl_off_t, curl_off_t, curl_off_t) noexcept
+{
+    const auto *cancellation = static_cast<const CancellationToken *>(userdata);
+    return cancellation != nullptr && cancellation->stopRequested() ? 1 : 0;
+}
+
 // Parse {"key":"<channelId>"} from the /create response.
 std::string parseChannelKey(const std::string &json)
 {
@@ -113,26 +119,16 @@ std::size_t WebSocketClient::writeCallback(char *ptr, std::size_t size, std::siz
     return bytes;
 }
 
-std::string WebSocketClient::connect(const std::string &host, const std::string &user_agent)
+std::string WebSocketClient::createChannel(const std::string &host, const std::string &user_agent,
+                                           const CancellationToken &cancellation)
 {
-    if (thread_.joinable()) {
-        close();
+    if (create_channel_for_testing_) {
+        return create_channel_for_testing_(cancellation);
     }
-    {
-        std::scoped_lock lock(termination_mutex_);
-        termination_ = {};
+    if (cancellation.stopRequested()) {
+        return {};
     }
-    {
-        std::scoped_lock lock(send_mutex_);
-        send_queue_ = {};
-        queued_send_bytes_ = 0;
-        pending_send_.reset();
-        pending_send_offset_ = 0;
-    }
-    host_ = host;
-    user_agent_ = user_agent;
 
-    // Step 1: Create a channel via HTTP GET.
     CURL *curl = curl_easy_init();
     if (!curl) {
         return {};
@@ -153,21 +149,47 @@ std::string WebSocketClient::connect(const std::string &host, const std::string 
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
+    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+    curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, cancelTransfer);
+    curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &cancellation);
+    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
 
-    CURLcode rc = curl_easy_perform(curl);
+    const CURLcode rc = curl_easy_perform(curl);
     curl_slist_free_all(headers);
     curl_easy_cleanup(curl);
 
-    if (rc != CURLE_OK) {
+    if (rc != CURLE_OK || cancellation.stopRequested()) {
+        return {};
+    }
+    return parseChannelKey(response);
+}
+
+std::string WebSocketClient::connect(const std::string &host, const std::string &user_agent,
+                                     CancellationToken cancellation)
+{
+    if (thread_.joinable() && !closeWithin(std::chrono::seconds(2))) {
+        return {};
+    }
+    {
+        std::scoped_lock lock(termination_mutex_);
+        termination_ = {};
+    }
+    {
+        std::scoped_lock lock(send_mutex_);
+        send_queue_ = {};
+        queued_send_bytes_ = 0;
+        pending_send_.reset();
+        pending_send_offset_ = 0;
+    }
+    host_ = host;
+    user_agent_ = user_agent;
+    cancellation_ = std::move(cancellation);
+
+    channel_id_ = createChannel(host_, user_agent_, cancellation_);
+    if (channel_id_.empty() || cancellation_.stopRequested()) {
         return {};
     }
 
-    channel_id_ = parseChannelKey(response);
-    if (channel_id_.empty()) {
-        return {};
-    }
-
-    // Step 2: Connect via WebSocket.
     local_close_requested_.store(false);
     running_.store(true);
     if (!startReceiveWorker()) {
@@ -175,10 +197,12 @@ std::string WebSocketClient::connect(const std::string &host, const std::string 
         return {};
     }
 
-    // Give the connection a brief moment to establish.
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    if (!running_.load()) {
-        thread_.join();
+    {
+        std::unique_lock lock(worker_exit_mutex_);
+        worker_exit_cv_.wait_for(lock, std::chrono::milliseconds(100), [this] { return worker_exited_; });
+    }
+    if (!running_.load() || cancellation_.stopRequested()) {
+        closeWithin(std::chrono::seconds(1));
         return {};
     }
 
@@ -187,6 +211,10 @@ std::string WebSocketClient::connect(const std::string &host, const std::string 
 
 bool WebSocketClient::startReceiveWorker()
 {
+    {
+        std::scoped_lock lock(worker_exit_mutex_);
+        worker_exited_ = false;
+    }
     try {
         thread_ = std::thread([this] {
             try {
@@ -200,13 +228,29 @@ bool WebSocketClient::startReceiveWorker()
             }
             running_.store(false);
             notifyTermination();
+            signalWorkerExit();
         });
     }
     catch (...) {
+        running_.store(false);
+        {
+            std::scoped_lock lock(worker_exit_mutex_);
+            worker_exited_ = true;
+        }
+        worker_exit_cv_.notify_all();
         recordTermination(TerminationKind::WorkerFailure, "failed to start worker");
         return false;
     }
     return true;
+}
+
+void WebSocketClient::signalWorkerExit() noexcept
+{
+    {
+        std::scoped_lock lock(worker_exit_mutex_);
+        worker_exited_ = true;
+    }
+    worker_exit_cv_.notify_all();
 }
 
 void WebSocketClient::send(const std::string &message) noexcept
@@ -301,7 +345,7 @@ void WebSocketClient::recordSendFailure(const char *detail) noexcept
     send_cv_.notify_all();
 }
 
-void WebSocketClient::close() noexcept
+void WebSocketClient::requestStop() noexcept
 {
     if (running_.load()) {
         local_close_requested_.store(true);
@@ -309,11 +353,39 @@ void WebSocketClient::close() noexcept
             recordTermination(TerminationKind::LocalClose);
         }
         catch (...) {
-            running_.store(false);
         }
     }
     running_.store(false);
     send_cv_.notify_all();
+}
+
+bool WebSocketClient::closeWithin(std::chrono::milliseconds timeout) noexcept
+{
+    requestStop();
+    if (!thread_.joinable()) {
+        return true;
+    }
+    if (thread_.get_id() == std::this_thread::get_id()) {
+        return false;
+    }
+    {
+        std::unique_lock lock(worker_exit_mutex_);
+        if (!worker_exit_cv_.wait_for(lock, timeout, [this] { return worker_exited_; })) {
+            return false;
+        }
+    }
+    try {
+        thread_.join();
+    }
+    catch (...) {
+        return false;
+    }
+    return true;
+}
+
+void WebSocketClient::close() noexcept
+{
+    requestStop();
     if (thread_.joinable() && thread_.get_id() != std::this_thread::get_id()) {
         try {
             thread_.join();
@@ -427,7 +499,10 @@ bool WebSocketClient::drainLocalClose(const SendFunction &send_function)
 
 void WebSocketClient::handleReceiveFailure(int code)
 {
-    if (code == CURLE_GOT_NOTHING) {
+    if (cancellation_.stopRequested()) {
+        recordTermination(TerminationKind::LocalClose);
+    }
+    else if (code == CURLE_GOT_NOTHING) {
         recordTermination(TerminationKind::RemoteClose);
     }
     else {
@@ -455,14 +530,22 @@ void WebSocketClient::runReceiveLoop()
     curl_easy_setopt(curl.get(), CURLOPT_CONNECTTIMEOUT, 10L);
     curl_easy_setopt(curl.get(), CURLOPT_TIMEOUT, 10L);
     curl_easy_setopt(curl.get(), CURLOPT_CONNECT_ONLY, 2L);  // WebSocket mode
+    curl_easy_setopt(curl.get(), CURLOPT_NOSIGNAL, 1L);
+    curl_easy_setopt(curl.get(), CURLOPT_XFERINFOFUNCTION, cancelTransfer);
+    curl_easy_setopt(curl.get(), CURLOPT_XFERINFODATA, &cancellation_);
+    curl_easy_setopt(curl.get(), CURLOPT_NOPROGRESS, 0L);
 
     if (!incoming_message_for_testing_.empty() && message_cb_) {
         message_cb_(incoming_message_for_testing_);
     }
 
-    CURLcode rc = curl_easy_perform(curl.get());
+    const CURLcode rc = curl_easy_perform(curl.get());
     if (rc != CURLE_OK) {
         handleReceiveFailure(rc);
+        return;
+    }
+    if (cancellation_.stopRequested()) {
+        recordTermination(TerminationKind::LocalClose);
         return;
     }
 
@@ -471,7 +554,7 @@ void WebSocketClient::runReceiveLoop()
     char recv_buf[4096];
     std::string pending_recv;  // buffered partial message
 
-    while (running_.load()) {
+    while (running_.load() && !cancellation_.stopRequested()) {
         const SendStep send_step = processNextSend([&curl](const char *data, std::size_t size) {
             std::size_t sent = 0;
             const CURLcode code = curl_ws_send(curl.get(), data, size, &sent, 0, CURLWS_TEXT);
@@ -484,8 +567,8 @@ void WebSocketClient::runReceiveLoop()
         // Try to receive.
         size_t recv = 0;
         const struct curl_ws_frame *frame = nullptr;
-        CURLcode r = curl_ws_recv(curl.get(), recv_buf, sizeof(recv_buf), &recv, &frame);
-        if (r == CURLE_OK && frame) {
+        const CURLcode receive_result = curl_ws_recv(curl.get(), recv_buf, sizeof(recv_buf), &recv, &frame);
+        if (receive_result == CURLE_OK && frame) {
             if ((frame->flags & CURLWS_CLOSE) != 0) {
                 recordTermination(TerminationKind::RemoteClose);
                 break;
@@ -510,19 +593,24 @@ void WebSocketClient::runReceiveLoop()
                 }
             }
         }
-        else if (r == CURLE_AGAIN) {
+        else if (receive_result == CURLE_AGAIN) {
             std::unique_lock<std::mutex> lock(send_mutex_);
-            send_cv_.wait_for(lock, std::chrono::milliseconds(k_poll_interval_ms),
-                              [this]() { return !running_.load() || (!pending_send_ && !send_queue_.empty()); });
+            send_cv_.wait_for(lock, std::chrono::milliseconds(k_poll_interval_ms), [this]() {
+                return !running_.load() || cancellation_.stopRequested() || (!pending_send_ && !send_queue_.empty());
+            });
         }
-        else if (r == CURLE_OK) {
+        else if (receive_result == CURLE_OK) {
             recordTermination(TerminationKind::ReceiveError, "missing frame metadata");
             break;
         }
         else {
-            handleReceiveFailure(r);
+            handleReceiveFailure(receive_result);
             break;
         }
+    }
+
+    if (cancellation_.stopRequested()) {
+        recordTermination(TerminationKind::LocalClose);
     }
 
     const SendFunction send_function = [&curl](const char *data, std::size_t size) {
