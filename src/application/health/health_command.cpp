@@ -84,7 +84,7 @@ bool HealthCommand::shutdownWithin(std::chrono::milliseconds timeout)
 {
     const auto deadline = std::chrono::steady_clock::now() + std::max(timeout, std::chrono::milliseconds::zero());
     stopping_.store(true, std::memory_order_release);
-    lifetime_.store({}, std::memory_order_release);
+    std::atomic_store_explicit(&lifetime_, std::shared_ptr<int>{}, std::memory_order_release);
     upload_cancellation_.requestStop();
     if (dashboard_) {
         dashboard_->requestStop();
