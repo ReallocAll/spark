@@ -1,7 +1,9 @@
 #ifndef SPARK_PLATFORM_ENDSTONE_WORLD_GAUGE_STATE_H
 #define SPARK_PLATFORM_ENDSTONE_WORLD_GAUGE_STATE_H
 
+#include <algorithm>
 #include <cstdint>
+#include <limits>
 #include <map>
 #include <mutex>
 #include <set>
@@ -122,13 +124,13 @@ public:
             }
         }
         std::int64_t tile_entity_count = 0;
-        for (const auto &[chunk, count] : tile_entities_by_chunk_) {
-            (void)chunk;
-            tile_entity_count += count;
+        for (const auto &entry : tile_entities_by_chunk_) {
+            tile_entity_count += entry.second;
         }
         return {.players = static_cast<int>(player_ids_.size()),
                 .entities = static_cast<int>(entity_count),
-                .tile_entities = static_cast<int>((std::min)(tile_entity_count, static_cast<std::int64_t>(INT32_MAX))),
+                .tile_entities = static_cast<int>((std::min)(tile_entity_count,
+                                                              static_cast<std::int64_t>(std::numeric_limits<int>::max()))),
                 .chunks = static_cast<int>(chunks_.size())};
     }
 
