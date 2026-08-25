@@ -120,7 +120,8 @@ int main()
     // reused base), discover the new import slot, and never dereference freed memory.
     ::FreeLibrary(consumer);
     consumer = load(L".\\windows_iat_consumer.dll");
-    if (consumer == nullptr || !require(hooks.refresh(error), error.empty() ? "refresh after reload failed" : error.c_str()) ||
+    if (consumer == nullptr ||
+        !require(hooks.refresh(error), error.empty() ? "refresh after reload failed" : error.c_str()) ||
         !require(hooks.activeSlotCount() == 1, "reload should converge to one owned slot") ||
         !exerciseConsumer(consumer, 1)) {
         std::string ignored;

@@ -264,7 +264,8 @@ bool WindowsIatHooks::reconcile(bool initial_install, std::string &error)
             active_slots_.push_back(slot);
             continue;
         }
-        if (exchange.status == WindowsIatExchangeStatus::Mismatch || exchange.status == WindowsIatExchangeStatus::Stale) {
+        if (exchange.status == WindowsIatExchangeStatus::Mismatch ||
+            exchange.status == WindowsIatExchangeStatus::Stale) {
             continue;
         }
 
@@ -355,8 +356,8 @@ bool WindowsIatHooks::restoreSlot(const WindowsIatSlot &slot, std::string &error
         return true;
     }
     const std::string reason = !exchange_error.empty()
-                                   ? exchange_error
-                                   : (!read_error.empty() ? read_error : "Windows IAT slot still points at the hook");
+                                 ? exchange_error
+                                 : (!read_error.empty() ? read_error : "Windows IAT slot still points at the hook");
     markUnsafe(reason, error);
     return false;
 }
@@ -374,9 +375,8 @@ bool WindowsIatHooks::requiredCoverageSatisfied(std::string &error) const
         if (!targets_[target_index].required) {
             continue;
         }
-        const bool covered = std::ranges::any_of(active_slots_, [target_index](const WindowsIatSlot &slot) {
-            return slot.target_index == target_index;
-        });
+        const bool covered = std::ranges::any_of(
+            active_slots_, [target_index](const WindowsIatSlot &slot) { return slot.target_index == target_index; });
         if (!covered) {
             error = "required Windows IAT hook has no owned import slot: " + targets_[target_index].import_name;
             return false;

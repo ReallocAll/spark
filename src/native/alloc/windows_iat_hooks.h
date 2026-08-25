@@ -62,7 +62,7 @@ public:
                            std::string &error) = 0;
     virtual WindowsIatAccessStatus read(const WindowsIatSlot &slot, void *&value, std::string &error) noexcept = 0;
     virtual WindowsIatExchangeResult compareExchange(const WindowsIatSlot &slot, void *expected, void *desired,
-                                                      std::string &error) noexcept = 0;
+                                                     std::string &error) noexcept = 0;
 };
 
 class WindowsIatHooks {

@@ -65,8 +65,9 @@ bool providerAllowed(const char *provider, const WindowsIatHookTarget &target) n
     if (target.import_modules.empty()) {
         return true;
     }
-    return std::ranges::any_of(target.import_modules,
-                               [provider](const std::string &candidate) { return equalsIgnoreCase(provider, candidate); });
+    return std::ranges::any_of(target.import_modules, [provider](const std::string &candidate) {
+        return equalsIgnoreCase(provider, candidate);
+    });
 }
 
 class PinnedModule {
@@ -106,10 +107,9 @@ private:
 PinnedModule pinAddress(std::uintptr_t address) noexcept
 {
     HMODULE module = nullptr;
-    if (address == 0 ||
-        ::GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
-                             reinterpret_cast<LPCWSTR>(address),  // NOLINT(performance-no-int-to-ptr)
-                             &module) == FALSE) {
+    if (address == 0 || ::GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+                                             reinterpret_cast<LPCWSTR>(address),  // NOLINT(performance-no-int-to-ptr)
+                                             &module) == FALSE) {
         return {};
     }
     return PinnedModule(module);
@@ -237,12 +237,13 @@ public:
         }
 
         std::atomic_ref<std::uintptr_t> atomic_slot(*address);
-        value = reinterpret_cast<void *>(atomic_slot.load(std::memory_order_acquire));  // NOLINT(performance-no-int-to-ptr)
+        value =
+            reinterpret_cast<void *>(atomic_slot.load(std::memory_order_acquire));  // NOLINT(performance-no-int-to-ptr)
         return WindowsIatAccessStatus::Accessible;
     }
 
     WindowsIatExchangeResult compareExchange(const WindowsIatSlot &slot, void *expected, void *desired,
-                                              std::string &error) noexcept override
+                                             std::string &error) noexcept override
     {
         error.clear();
         std::uintptr_t *address = nullptr;
@@ -270,8 +271,8 @@ public:
         std::atomic_ref<std::uintptr_t> atomic_slot(*address);
         std::uintptr_t expected_value = reinterpret_cast<std::uintptr_t>(expected);
         const std::uintptr_t desired_value = reinterpret_cast<std::uintptr_t>(desired);
-        const bool exchanged = atomic_slot.compare_exchange_strong(expected_value, desired_value, std::memory_order_acq_rel,
-                                                                    std::memory_order_acquire);
+        const bool exchanged = atomic_slot.compare_exchange_strong(
+            expected_value, desired_value, std::memory_order_acq_rel, std::memory_order_acquire);
         void *observed = reinterpret_cast<void *>(expected_value);  // NOLINT(performance-no-int-to-ptr)
 
         DWORD ignored = 0;
@@ -326,8 +327,7 @@ private:
                 return false;
             }
 
-            const std::size_t original_capacity =
-                (identity.image_size - original_rva) / sizeof(IMAGE_THUNK_DATA64);
+            const std::size_t original_capacity = (identity.image_size - original_rva) / sizeof(IMAGE_THUNK_DATA64);
             const std::size_t first_capacity = (identity.image_size - first_rva) / sizeof(IMAGE_THUNK_DATA64);
             const std::size_t thunk_capacity = (std::min)(original_capacity, first_capacity);
             const auto *original = reinterpret_cast<const IMAGE_THUNK_DATA64 *>(base + original_rva);

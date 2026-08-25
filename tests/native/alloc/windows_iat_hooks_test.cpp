@@ -51,7 +51,8 @@ public:
     std::size_t add(const spark::WindowsIatModuleIdentity &identity, std::uintptr_t rva, std::size_t target_index,
                     void *value)
     {
-        states_.push_back({.slot = {.module = identity, .slot_rva = rva, .target_index = target_index}, .value = value});
+        states_.push_back(
+            {.slot = {.module = identity, .slot_rva = rva, .target_index = target_index}, .value = value});
         return states_.size() - 1;
     }
 
@@ -99,7 +100,7 @@ public:
     }
 
     spark::WindowsIatExchangeResult compareExchange(const spark::WindowsIatSlot &slot, void *expected, void *desired,
-                                                     std::string &error) noexcept override
+                                                    std::string &error) noexcept override
     {
         State *entry = find(slot);
         if (entry == nullptr || entry->stale) {
@@ -195,7 +196,8 @@ bool testInstallUninstallAndIdempotence()
     const std::size_t slot = fixture.raw->add(module(0x100000, 1), 0x280, 0, pointer(KOriginalAddress));
     if (!require(fixture.configure(), "configure failed") ||
         !require(fixture.hooks.install(fixture.error), "install failed") ||
-        !require(fixture.hooks.installed() && fixture.hooks.activeSlotCount() == 1, "install state was not published") ||
+        !require(fixture.hooks.installed() && fixture.hooks.activeSlotCount() == 1,
+                 "install state was not published") ||
         !require(fixture.raw->state(slot).value == pointer(KReplacementAddress), "slot was not patched")) {
         return false;
     }
@@ -207,7 +209,8 @@ bool testInstallUninstallAndIdempotence()
     }
 
     return require(fixture.hooks.uninstall(fixture.error), "uninstall failed") &&
-           require(!fixture.hooks.installed() && fixture.hooks.activeSlotCount() == 0, "uninstall retained ownership") &&
+           require(!fixture.hooks.installed() && fixture.hooks.activeSlotCount() == 0,
+                   "uninstall retained ownership") &&
            require(fixture.raw->state(slot).value == pointer(KOriginalAddress), "uninstall did not restore slot") &&
            require(fixture.hooks.uninstall(fixture.error), "idempotent uninstall failed");
 }
@@ -224,7 +227,8 @@ bool testPartialFailureRollsBack()
            require(!fixture.hooks.install(fixture.error), "partial install failure was reported as success") &&
            require(fixture.raw->state(first).value == pointer(KOriginalAddress), "first slot was not rolled back") &&
            require(fixture.raw->state(second).value == pointer(KOriginalAddress), "failed slot was modified") &&
-           require(!fixture.hooks.installed() && fixture.hooks.activeSlotCount() == 0, "rollback retained active slots") &&
+           require(!fixture.hooks.installed() && fixture.hooks.activeSlotCount() == 0,
+                   "rollback retained active slots") &&
            require(!fixture.hooks.unsafeState(), "recoverable rollback was marked permanently unsafe");
 }
 
@@ -236,7 +240,8 @@ bool testPostWriteFailureRollsBackKnownOwnership()
 
     return require(fixture.configure(), "configure failed for post-write rollback") &&
            require(!fixture.hooks.install(fixture.error), "post-write failure was reported as success") &&
-           require(fixture.raw->state(slot).value == pointer(KOriginalAddress), "known post-write hook was not rolled back") &&
+           require(fixture.raw->state(slot).value == pointer(KOriginalAddress),
+                   "known post-write hook was not rolled back") &&
            require(fixture.hooks.activeSlotCount() == 0 && !fixture.hooks.unsafeState(),
                    "known post-write rollback retained unsafe state");
 }
@@ -270,8 +275,7 @@ bool testForeignHookIsNeverOverwritten()
 bool testRequiredTargetWithoutOwnershipFailsClosed()
 {
     Fixture fixture;
-    const std::size_t foreign =
-        fixture.raw->add(module(0x500000, 5), 0x360, 0, pointer(KForeignAddress));
+    const std::size_t foreign = fixture.raw->add(module(0x500000, 5), 0x360, 0, pointer(KForeignAddress));
 
     return require(fixture.configure(), "configure failed for required coverage test") &&
            require(!fixture.hooks.install(fixture.error), "required target without ownership succeeded") &&
@@ -304,7 +308,8 @@ bool testModuleUnloadAndAddressReuse()
     }
 
     return require(fixture.hooks.uninstall(fixture.error), "uninstall after address reuse failed") &&
-           require(fixture.raw->state(reused).value == pointer(KOriginalAddress), "reused module slot was not restored");
+           require(fixture.raw->state(reused).value == pointer(KOriginalAddress),
+                   "reused module slot was not restored");
 }
 
 bool testRestoreFailureRetainsOwnershipUntilRetry()
@@ -320,14 +325,17 @@ bool testRestoreFailureRetainsOwnershipUntilRetry()
     if (!require(!fixture.hooks.uninstall(fixture.error), "restore failure was reported as detached") ||
         !require(fixture.hooks.installed() && fixture.hooks.activeSlotCount() == 1 && fixture.hooks.unsafeState(),
                  "restore failure forgot active ownership") ||
-        !require(fixture.raw->state(slot).value == pointer(KReplacementAddress), "restore failure unexpectedly changed slot")) {
+        !require(fixture.raw->state(slot).value == pointer(KReplacementAddress),
+                 "restore failure unexpectedly changed slot")) {
         return false;
     }
 
     fixture.raw->state(slot).exchange_error_before = false;
     return require(fixture.hooks.uninstall(fixture.error), "detach retry did not recover") &&
-           require(fixture.raw->state(slot).value == pointer(KOriginalAddress), "detach retry did not restore original") &&
-           require(!fixture.hooks.installed() && !fixture.hooks.unsafeState(), "successful retry did not clear unsafe state");
+           require(fixture.raw->state(slot).value == pointer(KOriginalAddress),
+                   "detach retry did not restore original") &&
+           require(!fixture.hooks.installed() && !fixture.hooks.unsafeState(),
+                   "successful retry did not clear unsafe state");
 }
 
 bool testUnknownPostExchangeStateCannotBeForgotten()
@@ -348,8 +356,10 @@ bool testUnknownPostExchangeStateCannotBeForgotten()
     fixture.raw->state(slot).exchange_error_after = false;
     fixture.raw->state(slot).poison_reads_after_exchange = false;
     return require(fixture.hooks.uninstall(fixture.error), "unknown-state recovery detach failed") &&
-           require(fixture.raw->state(slot).value == pointer(KOriginalAddress), "unknown-state recovery did not restore slot") &&
-           require(!fixture.hooks.installed() && !fixture.hooks.unsafeState(), "unknown-state recovery did not clear state");
+           require(fixture.raw->state(slot).value == pointer(KOriginalAddress),
+                   "unknown-state recovery did not restore slot") &&
+           require(!fixture.hooks.installed() && !fixture.hooks.unsafeState(),
+                   "unknown-state recovery did not clear state");
 }
 
 bool testEnumerationFailureDoesNotDisturbInstalledHooks()
