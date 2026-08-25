@@ -4,6 +4,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -96,6 +97,7 @@ private:
     std::mutex lifecycle_mutex_;
     std::condition_variable lifecycle_cv_;
     bool lifecycle_active_ = false;
+    std::size_t open_calls_active_ = 0;
     std::thread::id worker_id_;
     mutable std::mutex mutex_;
     std::condition_variable cv_;
