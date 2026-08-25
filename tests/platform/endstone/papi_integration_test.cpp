@@ -9,7 +9,7 @@
 #include <endstone/plugin/plugin_description.h>
 
 #include "platform/endstone/papi_integration.h"
-#include "platform/endstone/world_gauge_state.h"
+#include "platform/endstone/world_gauge_event_adapter.h"
 
 namespace {
 
@@ -93,7 +93,7 @@ public:
     std::shared_ptr<papi::PlaceholderExpansion> expansion;
 };
 
-using spark::endstone_adapter::EndstoneWorldGaugeState;
+using spark::endstone_adapter::EndstoneWorldGaugeEventAdapter;
 using spark::endstone_adapter::WorldGaugeChunkKey;
 using spark::endstone_adapter::WorldGaugeCounts;
 using spark::endstone_adapter::WorldGaugeSnapshot;
@@ -103,10 +103,10 @@ WorldGaugeChunkKey chunk(std::string dimension, int x, int z)
     return {.dimension = std::move(dimension), .x = x, .z = z};
 }
 
-void expectGaugeCounts(const EndstoneWorldGaugeState &state, int players, int entities, int chunks)
+void expectGaugeCounts(const EndstoneWorldGaugeEventAdapter &adapter, int players, int entities, int chunks)
 {
     const WorldGaugeCounts expected{.players = players, .entities = entities, .chunks = chunks};
-    assert(state.counts() == expected);
+    assert(adapter.counts() == expected);
 }
 
 void testWorldGaugeLifecycle()
@@ -115,7 +115,7 @@ void testWorldGaugeLifecycle()
     constexpr std::int64_t k_entity = 200;
     constexpr std::int64_t k_second_entity = 300;
 
-    EndstoneWorldGaugeState lifecycle;
+    EndstoneWorldGaugeEventAdapter lifecycle;
     expectGaugeCounts(lifecycle, 0, 0, 0);
 
     lifecycle.playerSpawned(k_player);
@@ -150,7 +150,7 @@ void testWorldGaugeLifecycle()
     lifecycle.chunkUnloaded(nether_same_coordinates);
     expectGaugeCounts(lifecycle, 0, 0, 0);
 
-    EndstoneWorldGaugeState reconciled;
+    EndstoneWorldGaugeEventAdapter reconciled;
     reconciled.playerSpawned(k_player);
     reconciled.actorSpawned(k_player);
     reconciled.actorSpawned(k_entity);
@@ -170,10 +170,10 @@ void testWorldGaugeLifecycle()
     initial_scan.player_ids = {k_player};
     initial_scan.chunks = {overworld, nether_same_coordinates};
 
-    EndstoneWorldGaugeState from_scan;
+    EndstoneWorldGaugeEventAdapter from_scan;
     from_scan.reconcile(initial_scan);
 
-    EndstoneWorldGaugeState from_events;
+    EndstoneWorldGaugeEventAdapter from_events;
     from_events.playerSpawned(k_player);
     from_events.actorSpawned(k_player);
     from_events.actorSpawned(k_entity);
