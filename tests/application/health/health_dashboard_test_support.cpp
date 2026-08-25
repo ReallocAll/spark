@@ -94,7 +94,7 @@ std::string FakeConnection::open(const UploadCallback &upload, spark::Cancellati
             return {};
         }
     }
-    const spark::UploadResult result = upload();
+    const spark::UploadResult result = upload(cancellation);
     std::scoped_lock lock(mutex_);
     work_active_ = false;
     cv_.notify_all();
