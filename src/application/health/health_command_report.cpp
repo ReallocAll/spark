@@ -16,6 +16,10 @@ namespace spark {
 
 void HealthCommand::openHealthDashboard(CommandSender &sender)
 {
+    if (stopping_.load(std::memory_order_acquire)) {
+        sender.sendMessage("Health services are shutting down.");
+        return;
+    }
     if (!dashboard_) {
         sender.sendErrorMessage("Health dashboard is unavailable.");
         return;
@@ -92,13 +96,36 @@ void HealthCommand::trustViewer(CommandSender &sender, const Arguments &args)
     }
 }
 
+void HealthCommand::signalUploadWorkerExit() noexcept
+{
+    {
+        std::scoped_lock lock(upload_exit_mutex_);
+        upload_worker_exited_ = true;
+    }
+    upload_exit_cv_.notify_all();
+}
+
 void HealthCommand::uploadHealthReport(CommandSender &sender)
 {
+    if (stopping_.load(std::memory_order_acquire)) {
+        sender.sendMessage("Health services are shutting down.");
+        return;
+    }
     if (uploading_.exchange(true)) {
         sender.sendMessage("A health report upload is already in progress.");
         return;
     }
     if (upload_thread_.joinable()) {
+        bool exited = false;
+        {
+            std::scoped_lock lock(upload_exit_mutex_);
+            exited = upload_worker_exited_;
+        }
+        if (!exited || upload_thread_.get_id() == std::this_thread::get_id()) {
+            uploading_.store(false, std::memory_order_release);
+            sender.sendMessage("The previous health report upload is still finishing.");
+            return;
+        }
         upload_thread_.join();
     }
 
@@ -107,18 +134,37 @@ void HealthCommand::uploadHealthReport(CommandSender &sender)
         HealthData data = captureHealthData(sender, now_ms);
         const std::string sender_name = sender.getName();
         const bool sender_is_player = sender.isPlayer();
-        upload_thread_ = std::thread([this, data = std::move(data), sender_name, sender_is_player, now_ms]() mutable {
-            try {
-                runHealthUpload(data, sender_name, sender_is_player, now_ms);
-            }
-            catch (...) {
-                uploading_.store(false);
-            }
-        });
+        upload_cancellation_.reset();
+        const CancellationToken cancellation = upload_cancellation_.token();
+        {
+            std::scoped_lock lock(upload_exit_mutex_);
+            upload_worker_exited_ = false;
+        }
+        try {
+            upload_thread_ =
+                std::thread([this, data = std::move(data), sender_name, sender_is_player, now_ms, cancellation]() mutable {
+                    try {
+                        runHealthUpload(data, sender_name, sender_is_player, now_ms, cancellation);
+                    }
+                    catch (...) {
+                        uploading_.store(false, std::memory_order_release);
+                    }
+                    signalUploadWorkerExit();
+                });
+        }
+        catch (...) {
+            signalUploadWorkerExit();
+            throw;
+        }
     }
     catch (const std::exception &error) {
-        uploading_.store(false);
+        uploading_.store(false, std::memory_order_release);
         sender.sendErrorMessage("Health report generation failed: {}", error.what());
+        return;
+    }
+    catch (...) {
+        uploading_.store(false, std::memory_order_release);
+        sender.sendErrorMessage("Health report generation failed.");
         return;
     }
     sender.sendMessage("{}Health report upload started.{}", kColorGold, kColorGray);
@@ -136,13 +182,22 @@ HealthData HealthCommand::captureHealthDataForSender(const std::string &sender_n
                                     pingSamples(), networkSnapshots());
 }
 
-UploadResult HealthCommand::uploadHealthData(const HealthData &data)
+UploadResult HealthCommand::uploadHealthData(const HealthData &data, CancellationToken cancellation)
 {
     UploadResult result;
+    if (cancellation.stopRequested()) {
+        result.error = "health report upload cancelled";
+        return result;
+    }
     try {
         const std::string body = buildHealthData(data);
         const std::string compressed = gzipCompress(body);
-        result = upload_fn_(compressed, bytebin_url_, kHealthContentType, std::string("endstone-spark/") + kVersion);
+        if (cancellation.stopRequested()) {
+            result.error = "health report upload cancelled";
+            return result;
+        }
+        result = upload_fn_(compressed, bytebin_url_, kHealthContentType, std::string("endstone-spark/") + kVersion,
+                            std::move(cancellation));
     }
     catch (const std::exception &error) {
         result.error = std::string("health report generation failed: ") + error.what();
@@ -154,9 +209,9 @@ UploadResult HealthCommand::uploadHealthData(const HealthData &data)
 }
 
 void HealthCommand::runHealthUpload(const HealthData &data, std::string sender_name, bool sender_is_player,
-                                    std::int64_t now_ms)
+                                    std::int64_t now_ms, CancellationToken cancellation)
 {
-    UploadResult result = uploadHealthData(data);
+    UploadResult result = uploadHealthData(data, std::move(cancellation));
     {
         std::scoped_lock lock(upload_mutex_);
         upload_result_ = std::move(result);
@@ -174,19 +229,19 @@ void HealthCommand::runHealthUpload(const HealthData &data, std::string sender_n
         });
     }
     catch (...) {
-        uploading_.store(false);
+        uploading_.store(false, std::memory_order_release);
     }
 }
 
 void HealthCommand::completeHealthDashboard(HealthDashboard::OpenResult result)
 {
     const std::weak_ptr<int> lifetime = lifetime_;
-    if (lifetime.expired()) {
+    if (stopping_.load(std::memory_order_acquire) || lifetime.expired()) {
         return;
     }
     try {
         dispatcher_.runOnMainThread([this, lifetime, result = std::move(result)]() mutable {
-            if (lifetime.expired()) {
+            if (stopping_.load(std::memory_order_acquire) || lifetime.expired()) {
                 return;
             }
             if (!dashboard_ || result.generation == 0 || result.generation != accepted_dashboard_generation_ ||
@@ -227,7 +282,7 @@ void HealthCommand::completeHealthDashboard(HealthDashboard::OpenResult result)
 
 void HealthCommand::announceHealthUpload() noexcept
 {
-    uploading_.store(false);
+    uploading_.store(false, std::memory_order_release);
     UploadResult result;
     std::string sender_name;
     bool sender_is_player = false;
