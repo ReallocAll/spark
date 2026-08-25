@@ -1351,6 +1351,12 @@ struct AllocationSampler::Impl {
         if (config.fail_aggregator_for_testing) {
             throw std::runtime_error("injected allocation aggregator failure");
         }
+        if (config.hold_aggregator_until_event_drop_for_testing) {
+            while (aggregator_running.load(std::memory_order_acquire) &&
+                   dropped_events.load(std::memory_order_acquire) == 0) {
+                std::this_thread::yield();
+            }
+        }
         if (config.aggregator_delay_ms_for_testing != 0) {
             std::this_thread::sleep_for(std::chrono::milliseconds(config.aggregator_delay_ms_for_testing));
         }
