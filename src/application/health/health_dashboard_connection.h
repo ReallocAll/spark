@@ -16,12 +16,12 @@ namespace spark {
 
 class HealthDashboardConnection {
 public:
-    using UploadCallback = std::function<UploadResult(CancellationToken)>;
+    using UploadCallback = std::function<UploadResult(const CancellationToken &)>;
     using IsKeyTrustedCallback = std::function<bool(const std::vector<std::uint8_t> &)>;
 
     virtual ~HealthDashboardConnection() = default;
 
-    virtual std::string open(const UploadCallback &upload, CancellationToken cancellation) = 0;
+    virtual std::string open(const UploadCallback &upload, const CancellationToken &cancellation) = 0;
     virtual bool tick() = 0;
     virtual bool isOpen() const = 0;
     virtual bool hasClient() const = 0;
