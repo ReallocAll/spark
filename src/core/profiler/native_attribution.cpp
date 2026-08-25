@@ -105,7 +105,7 @@ struct LinuxImageView {
 
 struct LinuxRelocationView {
     const LinuxImageView &image;
-    const ElfW(Sym) *symbols;
+    const ElfW(Sym) *symbols = nullptr;
     const char *strings;
     std::size_t string_size;
     LinuxDiscoveryContext &context;
