@@ -37,14 +37,15 @@ jobs:
         uses: TheMrMilchmann/setup-msvc-dev@v4
         with:
           arch: x64
-      - name: Compile deterministic lifecycle test
+      - name: Compile deterministic lifecycle + native PE backend
         shell: pwsh
         run: |
           $llvmBin = "C:\Program Files\LLVM\bin"
           & "$llvmBin\clang-cl.exe" /nologo /std:c++20 /EHsc /W4 /WX /I src `
             src/native/alloc/windows_iat_hooks.cpp `
+            src/native/alloc/windows_iat_hooks_windows.cpp `
             tests/native/alloc/windows_iat_hooks_test.cpp `
-            /Fe:windows_iat_hooks_test.exe
+            /Fe:windows_iat_hooks_test.exe /link Psapi.lib
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Run deterministic lifecycle test
         shell: pwsh
