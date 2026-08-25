@@ -1,3 +1,4 @@
+#include <chrono>
 #include <initializer_list>
 #include <limits>
 #include <utility>
@@ -28,6 +29,8 @@ std::size_t accountedBytes(std::initializer_list<std::size_t> sizes)
     return total;
 }
 
+constexpr auto kOpenCleanupBudget = std::chrono::milliseconds(500);
+
 }  // namespace
 
 ViewerSocket::ViewerSocket(Config config, Crypto::KeyPair key_pair)
@@ -48,7 +51,7 @@ SocketChannelInfo ViewerSocket::channelInfo() const
     return info;
 }
 
-std::string ViewerSocket::open(const UploadCallback &upload)
+std::string ViewerSocket::open(const UploadCallback &upload, CancellationToken cancellation)
 {
     std::scoped_lock open_lock(open_mutex_);
     std::uint64_t generation = 0;
@@ -58,7 +61,9 @@ std::string ViewerSocket::open(const UploadCallback &upload)
         {
             std::scoped_lock transport_lock(transport_mutex_);
             if (ws_) {
-                ws_->close();
+                if (!ws_->closeWithin(kOpenCleanupBudget)) {
+                    return {};
+                }
                 ws_.reset();
             }
             generation = prepareOpen();
@@ -69,12 +74,17 @@ std::string ViewerSocket::open(const UploadCallback &upload)
                 onTransportClosed(generation, termination);
             });
 
-            channel_id_ = ws_->connect(config_.bytesocks_host, config_.user_agent);
+            channel_id_ = ws_->connect(config_.bytesocks_host, config_.user_agent, cancellation);
             if (channel_id_.empty()) {
                 state_.store(ConnectionState::Closed, std::memory_order_release);
                 return {};
             }
             channel_id = channel_id_;
+        }
+
+        if (cancellation.stopRequested()) {
+            requestStop();
+            return {};
         }
 
         // Build SocketChannelInfo proto.
@@ -88,13 +98,17 @@ std::string ViewerSocket::open(const UploadCallback &upload)
 
         {
             std::scoped_lock transport_lock(transport_mutex_);
-            if (generation != connection_generation_.load(std::memory_order_acquire)) {
+            if (generation != connection_generation_.load(std::memory_order_acquire) || cancellation.stopRequested()) {
+                if (ws_) {
+                    ws_->requestStop();
+                }
+                state_.store(ConnectionState::Closed, std::memory_order_release);
                 return {};
             }
             if (bytebin_key.empty() || state_.load(std::memory_order_acquire) != ConnectionState::Opening || !ws_ ||
                 !ws_->isOpen()) {
                 if (ws_) {
-                    ws_->close();
+                    ws_->closeWithin(kOpenCleanupBudget);
                 }
                 state_.store(ConnectionState::Closed, std::memory_order_release);
                 return {};
@@ -107,7 +121,7 @@ std::string ViewerSocket::open(const UploadCallback &upload)
             ConnectionState expected = ConnectionState::Opening;
             if (!state_.compare_exchange_strong(expected, ConnectionState::Open, std::memory_order_acq_rel,
                                                 std::memory_order_acquire)) {
-                ws_->close();
+                ws_->closeWithin(kOpenCleanupBudget);
                 state_.store(ConnectionState::Closed, std::memory_order_release);
                 return {};
             }
@@ -119,7 +133,7 @@ std::string ViewerSocket::open(const UploadCallback &upload)
             std::scoped_lock transport_lock(transport_mutex_);
             if (generation_started && generation == connection_generation_.load(std::memory_order_acquire)) {
                 if (ws_) {
-                    ws_->close();
+                    ws_->closeWithin(kOpenCleanupBudget);
                 }
                 state_.store(ConnectionState::Closed, std::memory_order_release);
             }
@@ -162,12 +176,43 @@ std::uint64_t ViewerSocket::prepareOpen()
     return generation;
 }
 
+void ViewerSocket::requestStop() noexcept
+{
+    state_.store(ConnectionState::Closed, std::memory_order_release);
+    connection_generation_.fetch_add(1, std::memory_order_acq_rel);
+    try {
+        setCloseState(CloseReason::LocalClose);
+    }
+    catch (...) {
+    }
+}
+
+bool ViewerSocket::closeWithin(std::chrono::milliseconds timeout) noexcept
+{
+    requestStop();
+    try {
+        std::scoped_lock transport_lock(transport_mutex_);
+        if (!ws_) {
+            return true;
+        }
+        if (!ws_->closeWithin(timeout)) {
+            return false;
+        }
+        ws_.reset();
+        return true;
+    }
+    catch (...) {
+        return false;
+    }
+}
+
 void ViewerSocket::close() noexcept
 {
     try {
         std::scoped_lock transport_lock(transport_mutex_);
         const bool was_open =
             state_.exchange(ConnectionState::Closed, std::memory_order_acq_rel) == ConnectionState::Open;
+        connection_generation_.fetch_add(1, std::memory_order_acq_rel);
         try {
             setCloseState(CloseReason::LocalClose);
         }
