@@ -90,7 +90,7 @@ class Connection final : public HealthDashboardConnection {
 public:
     explicit Connection(ConnectionProbe &probe) : probe_(probe) {}
 
-    std::string open(const UploadCallback &upload, CancellationToken cancellation) override
+    std::string open(const UploadCallback &upload, const CancellationToken &cancellation) override
     {
         if (cancellation.stopRequested()) {
             return {};
@@ -199,7 +199,7 @@ int main()
 
     int uploads = 0;
     auto upload = [&uploads](const std::string &, const std::string &, const std::string &, const std::string &,
-                             CancellationToken) {
+                             const CancellationToken &) {
         ++uploads;
         return UploadResult{.ok = true, .key = "health-key"};
     };
