@@ -11,29 +11,15 @@
 namespace spark {
 namespace {
 
-template <std::size_t N>
-bool matches(std::string_view method_name, const std::array<std::string_view, N> &known_methods) noexcept
-{
-    return std::ranges::any_of(
-        known_methods, [method_name](const std::string_view known_method) { return method_name == known_method; });
-}
-
-constexpr std::array KLinuxMethods{
-    std::string_view("spark::AllocationSampler::Impl::hookMalloc(unsigned long)"),
-    std::string_view("spark::AllocationSampler::Impl::hookCalloc(unsigned long, unsigned long)"),
-    std::string_view("spark::AllocationSampler::Impl::hookRealloc(void*, unsigned long)"),
-    std::string_view("spark::AllocationSampler::Impl::hookFree(void*)"),
-    std::string_view("spark::AllocationSampler::Impl::hookReallocArray(void*, unsigned long, unsigned long)"),
-    std::string_view("spark::AllocationSampler::Impl::hookAlignedAlloc(unsigned long, unsigned long)"),
-    std::string_view("spark::AllocationSampler::Impl::hookPosixMemalign(void**, unsigned long, unsigned long)"),
-};
-
-constexpr std::array KWindowsMethods{
+constexpr std::array KInstrumentationMethods{
     std::string_view("spark::AllocationSampler::Impl::hookMalloc"),
     std::string_view("spark::AllocationSampler::Impl::hookCalloc"),
     std::string_view("spark::AllocationSampler::Impl::hookRealloc"),
     std::string_view("spark::AllocationSampler::Impl::hookRecalloc"),
     std::string_view("spark::AllocationSampler::Impl::hookFree"),
+    std::string_view("spark::AllocationSampler::Impl::hookReallocArray"),
+    std::string_view("spark::AllocationSampler::Impl::hookAlignedAlloc"),
+    std::string_view("spark::AllocationSampler::Impl::hookPosixMemalign"),
     std::string_view("spark::AllocationSampler::Impl::hookAlignedMalloc"),
     std::string_view("spark::AllocationSampler::Impl::hookAlignedRealloc"),
     std::string_view("spark::AllocationSampler::Impl::hookAlignedRecalloc"),
@@ -56,6 +42,20 @@ enum class NodeResult {
     Malformed,
 };
 
+bool matchesInstrumentationMethod(std::string_view method_name, std::string_view known_method) noexcept
+{
+    if (method_name == known_method) {
+        return true;
+    }
+    return method_name.size() > known_method.size() + 1 && method_name.starts_with(known_method) &&
+           method_name[known_method.size()] == '(' && method_name.back() == ')';
+}
+
+bool unresolvedMethod(std::string_view method_name) noexcept
+{
+    return method_name.empty() || method_name.starts_with("0x");
+}
+
 bool addCounts(std::map<std::int32_t, std::uint64_t> &totals, const std::map<std::int32_t, std::uint64_t> &counts)
 {
     for (const auto &[window, count] : counts) {
@@ -68,16 +68,24 @@ bool addCounts(std::map<std::int32_t, std::uint64_t> &totals, const std::map<std
     return true;
 }
 
-bool isInstrumentation(const FrameKey &key, const ResolvedFrameMap &resolved)
+bool isInstrumentation(const FrameKey &key, const ResolvedFrameMap &resolved,
+                       const std::vector<AllocationInstrumentationRange> &ranges)
 {
+    if (!isNativeAllocationInstrumentationAddress(key.raw_address, ranges)) {
+        return false;
+    }
     const auto frame = resolved.find(key);
-    return frame != resolved.end() && isNativeAllocationInstrumentation(frame->second.method_name);
+    if (frame == resolved.end() || unresolvedMethod(frame->second.method_name)) {
+        return true;
+    }
+    return isNativeAllocationInstrumentation(frame->second.method_name);
 }
 
 // NOLINTNEXTLINE(misc-no-recursion)
-NodeResult copyFilteredNode(const CallTree::Node &source, CallTree::Node &destination, const ResolvedFrameMap &resolved)
+NodeResult copyFilteredNode(const CallTree::Node &source, CallTree::Node &destination, const ResolvedFrameMap &resolved,
+                            const std::vector<AllocationInstrumentationRange> &ranges)
 {
-    if (isInstrumentation(source.key, resolved)) {
+    if (isInstrumentation(source.key, resolved, ranges)) {
         return NodeResult::Dropped;
     }
 
@@ -90,7 +98,7 @@ NodeResult copyFilteredNode(const CallTree::Node &source, CallTree::Node &destin
         }
 
         auto filtered_child = std::make_unique<CallTree::Node>();
-        const NodeResult result = copyFilteredNode(*child, *filtered_child, resolved);
+        const NodeResult result = copyFilteredNode(*child, *filtered_child, resolved, ranges);
         if (result == NodeResult::Malformed) {
             return result;
         }
@@ -144,28 +152,48 @@ NodeResult copyFilteredNode(const CallTree::Node &source, CallTree::Node &destin
 
 bool isNativeAllocationInstrumentation(std::string_view method_name) noexcept
 {
-    return matches(method_name, KLinuxMethods) || matches(method_name, KWindowsMethods);
+    return std::ranges::any_of(KInstrumentationMethods, [method_name](std::string_view known_method) {
+        return matchesInstrumentationMethod(method_name, known_method);
+    });
 }
 
-bool filterExecutionTree(CallTree &filtered, const CallTree &source, const ResolvedFrameMap &resolved)
+bool isNativeAllocationInstrumentationAddress(
+    std::uint64_t raw_address, const std::vector<AllocationInstrumentationRange> &ranges) noexcept
+{
+    if (raw_address == 0) {
+        return false;
+    }
+    return std::ranges::any_of(ranges, [raw_address](const AllocationInstrumentationRange &range) {
+        return range.begin < range.end && raw_address >= range.begin && raw_address < range.end;
+    });
+}
+
+bool filterExecutionTree(CallTree &filtered, const CallTree &source, const ResolvedFrameMap &resolved,
+                         const std::vector<AllocationInstrumentationRange> &ranges)
 {
     CallTree candidate;
-    if (copyFilteredNode(source.root(), candidate.root(), resolved) == NodeResult::Malformed) {
+    if (copyFilteredNode(source.root(), candidate.root(), resolved, ranges) == NodeResult::Malformed) {
         return false;
     }
     filtered = std::move(candidate);
     return true;
 }
 
+bool filterExecutionTree(CallTree &filtered, const CallTree &source, const ResolvedFrameMap &resolved)
+{
+    return filterExecutionTree(filtered, source, resolved, allocationInstrumentationRanges());
+}
+
 void filterExecutionTrees(std::vector<ThreadTreeView> &views, std::vector<std::unique_ptr<CallTree>> &owned_trees,
                           const ResolvedFrameMap &resolved)
 {
+    const auto ranges = allocationInstrumentationRanges();
     for (ThreadTreeView &view : views) {
         if (view.tree == nullptr) {
             continue;
         }
         auto filtered = std::make_unique<CallTree>();
-        if (!filterExecutionTree(*filtered, *view.tree, resolved)) {
+        if (!filterExecutionTree(*filtered, *view.tree, resolved, ranges)) {
             mergeCallTree(*filtered, *view.tree);
         }
         view.tree = filtered.get();
