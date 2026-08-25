@@ -84,7 +84,6 @@ private:
     void notifyTermination() noexcept;
     void signalWorkerExit() noexcept;
     static std::size_t writeCallback(char *ptr, std::size_t size, std::size_t nmemb, void *userdata) noexcept;
-    static int transferProgress(void *userdata, std::int64_t, std::int64_t, std::int64_t, std::int64_t) noexcept;
     bool enqueueSendJob(SendJob job) noexcept;
     void rejectSendQueue() noexcept;
     void recordSendFailure(const char *detail) noexcept;
