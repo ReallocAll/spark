@@ -80,6 +80,7 @@ set_target_properties(spark_profiling_time PROPERTIES POSITION_INDEPENDENT_CODE 
 
 # --- native backend: sampler, symbol guesser, allocation hooks (no Endstone) ---
 add_library(spark_native STATIC
+        src/native/alloc/allocation_instrumentation.cpp
         src/native/alloc/allocation_profile_aggregation.cpp
         src/native/alloc/allocation_thread_filter.cpp
         src/native/sampler/call_tree.cpp
@@ -119,7 +120,7 @@ target_link_libraries(spark_native PUBLIC spark_profiling_time cpptrace::cpptrac
 set_target_properties(spark_native PROPERTIES POSITION_INDEPENDENT_CODE ON)
 if (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_definitions(spark_native PRIVATE _GNU_SOURCE)
-    target_compile_options(spark_native PRIVATE -fvisibility=hidden -fvisibility-inlines-hidden)
+    target_compile_options(spark_native PRIVATE -fvisibility=hidden -fvisibility-inlines-hidden -ffunction-sections)
 endif ()
 if (WIN32)
     target_include_directories(spark_native PRIVATE "${funchook_SOURCE_DIR}/distorm/include")
@@ -127,6 +128,8 @@ if (WIN32)
 elseif (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
     target_include_directories(spark_native PRIVATE "${funchook_SOURCE_DIR}/distorm/include")
     target_link_libraries(spark_native PUBLIC distorm ${CMAKE_DL_LIBS})
+    target_link_options(spark_native INTERFACE
+            "-Wl,-T,${CMAKE_CURRENT_SOURCE_DIR}/src/native/alloc/allocation_instrumentation.ld")
 elseif (CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_link_libraries(spark_native PUBLIC ${CMAKE_DL_LIBS})
 endif ()
