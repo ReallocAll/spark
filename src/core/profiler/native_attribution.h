@@ -21,8 +21,8 @@ struct NativeInstrumentationRange {
 };
 
 bool isNativeAllocationInstrumentation(std::string_view method_name) noexcept;
-bool isNativeAllocationInstrumentationAddress(
-    std::uint64_t raw_address, std::span<const NativeInstrumentationRange> ranges) noexcept;
+bool isNativeAllocationInstrumentationAddress(std::uint64_t raw_address,
+                                              std::span<const NativeInstrumentationRange> ranges) noexcept;
 using ResolvedFrameMap = std::unordered_map<FrameKey, ResolvedFrame, FrameKeyHash>;
 
 bool filterExecutionTree(CallTree &filtered, const CallTree &source, const ResolvedFrameMap &resolved);
