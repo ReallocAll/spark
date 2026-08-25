@@ -219,7 +219,7 @@ void HealthCommand::runHealthUpload(const HealthData &data, std::string sender_n
         upload_sender_is_player_ = sender_is_player;
         upload_time_ms_ = now_ms;
     }
-    const std::weak_ptr<int> lifetime = lifetime_.load(std::memory_order_acquire);
+    const std::weak_ptr<int> lifetime = std::atomic_load_explicit(&lifetime_, std::memory_order_acquire);
     try {
         dispatcher_.runOnMainThread([this, lifetime]() {
             if (lifetime.expired()) {
@@ -235,7 +235,7 @@ void HealthCommand::runHealthUpload(const HealthData &data, std::string sender_n
 
 void HealthCommand::completeHealthDashboard(HealthDashboard::OpenResult result)
 {
-    const std::weak_ptr<int> lifetime = lifetime_.load(std::memory_order_acquire);
+    const std::weak_ptr<int> lifetime = std::atomic_load_explicit(&lifetime_, std::memory_order_acquire);
     if (stopping_.load(std::memory_order_acquire) || lifetime.expired()) {
         return;
     }
