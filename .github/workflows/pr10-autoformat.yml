@@ -1,0 +1,42 @@
+name: PR10 Autoformat
+
+on:
+  push:
+    branches:
+      - fix/windows-allocation-safe-hooks
+    paths:
+      - ".github/workflows/pr10-autoformat.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: fix/windows-allocation-safe-hooks
+      - name: Install clang-format 20
+        run: |
+          wget -qO /tmp/llvm.sh https://apt.llvm.org/llvm.sh
+          chmod +x /tmp/llvm.sh
+          sudo /tmp/llvm.sh 20
+          sudo apt-get install -y clang-format-20
+      - name: Format changed C++ files and commit
+        run: |
+          clang-format-20 -i \
+            src/native/alloc/windows_iat_hooks.cpp \
+            src/native/alloc/windows_iat_hooks.h \
+            src/native/alloc/windows_iat_hooks_windows.cpp \
+            tests/native/alloc/windows_iat_hooks_test.cpp \
+            tests/native/alloc/windows_iat_native_test.cpp
+          if git diff --quiet; then
+            echo "No formatting changes needed"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/native/alloc/windows_iat_hooks.cpp src/native/alloc/windows_iat_hooks.h src/native/alloc/windows_iat_hooks_windows.cpp tests/native/alloc/windows_iat_hooks_test.cpp tests/native/alloc/windows_iat_native_test.cpp
+          git commit -m "style: format Windows IAT safety code"
+          git push origin HEAD:fix/windows-allocation-safe-hooks
