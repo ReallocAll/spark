@@ -36,21 +36,30 @@ struct Probe {
     bool block_factory = false;
     bool release_factory = true;
     bool factory_entered = false;
+    bool block_upload = false;
+    bool release_upload = true;
+    bool upload_entered = false;
+    std::atomic<bool> upload_cancelled{false};
     std::atomic<bool> close_during_work{false};
 
     void configureFactory(bool block);
     void releaseFactory();
     bool waitFactoryEntered();
+    void configureUpload(bool block);
+    void releaseUpload();
+    bool waitUploadEntered();
 };
 
 class FakeConnection final : public spark::HealthDashboardConnection {
 public:
     explicit FakeConnection(Probe &probe);
 
-    std::string open(const UploadCallback &upload) override;
+    std::string open(const UploadCallback &upload, spark::CancellationToken cancellation) override;
     bool tick() override;
     bool isOpen() const override;
     bool hasClient() const override;
+    void requestStop() noexcept override;
+    bool closeWithin(std::chrono::milliseconds timeout) noexcept override;
     void close() override;
     spark::SocketChannelInfo channelInfo() const override;
     bool sendStatistics(const std::string &, const std::string &, const std::string &) override;
@@ -83,6 +92,7 @@ private:
     bool release_send_ = true;
     bool send_entered_ = false;
     bool work_active_ = false;
+    bool stop_requested_ = false;
     int send_count_ = 0;
     int close_count_ = 0;
     std::string trusted_client_;
