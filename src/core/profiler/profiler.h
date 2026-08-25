@@ -154,6 +154,8 @@ private:
     std::uint64_t activeNumberOfTicks() const;
     std::string exportData(const ExportContext &ctx, const AllocationSnapshot *allocation_snapshot) const;
     void stopRecoveryWriter();
+    bool reapRecoveryWriter();
+    bool hasPendingRecoveryWriter() const;
 
     Sampler sampler_;
     AllocationSampler allocation_sampler_;

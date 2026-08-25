@@ -4,6 +4,8 @@
 #include <charconv>
 #include <cstdio>
 #include <cstring>
+#include <exception>
+#include <system_error>
 #include <utility>
 
 #ifdef _WIN32
@@ -41,28 +43,38 @@ RecoveryWriter::RecoveryWriter(Config config) : config_(std::move(config)), queu
 
 RecoveryWriter::~RecoveryWriter()
 {
-    stop();
+    if (!stop()) {
+        std::terminate();
+    }
 }
 
 bool RecoveryWriter::start()
 {
-    if (running_.exchange(true)) {
+    if (running_.load(std::memory_order_acquire)) {
         return true;
     }
+    if (stop_requested_.load(std::memory_order_acquire) || thread_.joinable()) {
+        return false;
+    }
+
+    running_.store(true, std::memory_order_release);
+    accepting_.store(false, std::memory_order_release);
+    worker_exited_.store(false, std::memory_order_release);
 
     std::error_code ec;
     std::filesystem::create_directories(config_.directory, ec);
     if (ec) {
-        enabled_.store(false);
-        running_.store(false);
+        enabled_.store(false, std::memory_order_release);
+        running_.store(false, std::memory_order_release);
+        worker_exited_.store(true, std::memory_order_release);
         return false;
     }
 
-    // Remove leftover segments and snapshots from a previous session.
     for (const auto &entry : std::filesystem::directory_iterator(config_.directory, ec)) {
         if (ec) {
-            enabled_.store(false);
-            running_.store(false);
+            enabled_.store(false, std::memory_order_release);
+            running_.store(false, std::memory_order_release);
+            worker_exited_.store(true, std::memory_order_release);
             return false;
         }
         if (!entry.is_regular_file()) {
@@ -84,19 +96,21 @@ bool RecoveryWriter::start()
         }
         std::filesystem::remove(entry.path(), ec);
         if (ec) {
-            enabled_.store(false);
-            running_.store(false);
+            enabled_.store(false, std::memory_order_release);
+            running_.store(false, std::memory_order_release);
+            worker_exited_.store(true, std::memory_order_release);
             return false;
         }
     }
 
     if (!openSegment(0)) {
-        enabled_.store(false);
-        running_.store(false);
+        enabled_.store(false, std::memory_order_release);
+        running_.store(false, std::memory_order_release);
+        worker_exited_.store(true, std::memory_order_release);
         return false;
     }
 
-    enabled_.store(true);
+    enabled_.store(true, std::memory_order_release);
     last_sync_ = std::chrono::steady_clock::now();
     try {
         thread_ = std::thread([this] {
@@ -104,38 +118,92 @@ bool RecoveryWriter::start()
                 writerLoop();
             }
             catch (...) {
-                running_.store(false, std::memory_order_release);
                 enabled_.store(false, std::memory_order_release);
+                if (file_) {
+                    closeSegment();
+                }
             }
+            running_.store(false, std::memory_order_release);
+            accepting_.store(false, std::memory_order_release);
+            enabled_.store(false, std::memory_order_release);
+            markWorkerExited();
         });
     }
     catch (...) {
-        running_.store(false);
-        enabled_.store(false);
+        running_.store(false, std::memory_order_release);
+        enabled_.store(false, std::memory_order_release);
+        accepting_.store(false, std::memory_order_release);
         closeSegment();
+        worker_exited_.store(true, std::memory_order_release);
         return false;
     }
+    accepting_.store(true, std::memory_order_release);
     return true;
 }
 
-void RecoveryWriter::stop()
+void RecoveryWriter::requestStop() noexcept
 {
-    running_.store(false);
+    accepting_.store(false, std::memory_order_release);
+    stop_requested_.store(true, std::memory_order_release);
+    running_.store(false, std::memory_order_release);
     cv_.notify_all();
-    if (thread_.joinable()) {
-        thread_.join();
+}
+
+bool RecoveryWriter::stop()
+{
+    const int timeout_ms = std::max(config_.shutdown_timeout_ms, 0);
+    return stop(std::chrono::milliseconds(timeout_ms));
+}
+
+bool RecoveryWriter::stop(std::chrono::milliseconds timeout)
+{
+    requestStop();
+    if (!thread_.joinable()) {
+        enabled_.store(false, std::memory_order_release);
+        return true;
     }
-    // Final drain + flush.
-    if (file_) {
-        syncFile();
-        closeSegment();
+
+    if (!worker_exited_.load(std::memory_order_acquire)) {
+        std::unique_lock lock(exit_mutex_);
+        if (!exit_cv_.wait_for(lock, timeout, [this] { return worker_exited_.load(std::memory_order_acquire); })) {
+            return false;
+        }
     }
-    enabled_.store(false);
+    return tryReap();
+}
+
+bool RecoveryWriter::tryReap()
+{
+    std::scoped_lock lock(reap_mutex_);
+    if (!thread_.joinable()) {
+        enabled_.store(false, std::memory_order_release);
+        return true;
+    }
+    if (!worker_exited_.load(std::memory_order_acquire)) {
+        return false;
+    }
+    thread_.join();
+    enabled_.store(false, std::memory_order_release);
+    return true;
+}
+
+void RecoveryWriter::producerDone() noexcept
+{
+    active_producers_.fetch_sub(1, std::memory_order_acq_rel);
+    if (stop_requested_.load(std::memory_order_acquire)) {
+        cv_.notify_all();
+    }
 }
 
 void RecoveryWriter::enqueue(RecordType type, const JournalBuffer &payload)
 {
-    if (!enabled_.load(std::memory_order_acquire)) {
+    if (!enabled_.load(std::memory_order_acquire) || !accepting_.load(std::memory_order_acquire)) {
+        return;
+    }
+
+    active_producers_.fetch_add(1, std::memory_order_acq_rel);
+    if (!accepting_.load(std::memory_order_acquire)) {
+        producerDone();
         return;
     }
 
@@ -144,6 +212,7 @@ void RecoveryWriter::enqueue(RecordType type, const JournalBuffer &payload)
     for (std::size_t attempt = 0; attempt < KMaxQueueReservationAttempts; ++attempt) {
         if (current >= config_.queue_capacity) {
             dropped_.fetch_add(1, std::memory_order_relaxed);
+            producerDone();
             return;
         }
         if (queue_size_.compare_exchange_weak(current, current + 1, std::memory_order_relaxed,
@@ -154,6 +223,7 @@ void RecoveryWriter::enqueue(RecordType type, const JournalBuffer &payload)
     }
     if (!reserved) {
         dropped_.fetch_add(1, std::memory_order_relaxed);
+        producerDone();
         return;
     }
 
@@ -169,6 +239,7 @@ void RecoveryWriter::enqueue(RecordType type, const JournalBuffer &payload)
         queue_size_.fetch_sub(1, std::memory_order_relaxed);
         dropped_.fetch_add(1, std::memory_order_relaxed);
     }
+    producerDone();
 }
 
 void RecoveryWriter::journalModuleDef(std::uint32_t module_id, std::string_view path)
@@ -248,6 +319,49 @@ void RecoveryWriter::requestFlush()
     cv_.notify_one();
 }
 
+bool RecoveryWriter::allowIo(IoOperation operation) const noexcept
+{
+    if (!config_.io_hook) {
+        return true;
+    }
+    try {
+        return config_.io_hook(operation);
+    }
+    catch (...) {
+        return false;
+    }
+}
+
+bool RecoveryWriter::writeFile(std::FILE *file, const void *data, std::size_t size)
+{
+    if (!allowIo(IoOperation::Write)) {
+        return false;
+    }
+    return std::fwrite(data, 1, size, file) == size;
+}
+
+bool RecoveryWriter::syncFile(std::FILE *file)
+{
+    return allowIo(IoOperation::Sync) && syncFileImpl(file);
+}
+
+bool RecoveryWriter::closeFile(std::FILE *file)
+{
+    const bool allowed = allowIo(IoOperation::Close);
+    const bool closed = std::fclose(file) == 0;
+    return allowed && closed;
+}
+
+bool RecoveryWriter::renameFile(const std::filesystem::path &from, const std::filesystem::path &to, std::error_code &ec)
+{
+    if (!allowIo(IoOperation::Rename)) {
+        ec = std::make_error_code(std::errc::io_error);
+        return false;
+    }
+    std::filesystem::rename(from, to, ec);
+    return !ec;
+}
+
 bool RecoveryWriter::openSegment(std::uint32_t segment_number)
 {
     segment_path_ = config_.directory / ("segment-" + std::to_string(segment_number) + ".jnl");
@@ -257,8 +371,8 @@ bool RecoveryWriter::openSegment(std::uint32_t segment_number)
     }
 
     auto header = serializeFileHeader(config_.session_id, monotonicNowNs(), segment_number);
-    if (std::fwrite(header.data(), 1, header.size(), file_) != header.size()) {
-        std::fclose(file_);
+    if (!writeFile(file_, header.data(), header.size())) {
+        closeFile(file_);
         file_ = nullptr;
         return false;
     }
@@ -269,12 +383,14 @@ bool RecoveryWriter::openSegment(std::uint32_t segment_number)
     return true;
 }
 
-void RecoveryWriter::closeSegment()
+bool RecoveryWriter::closeSegment()
 {
-    if (file_) {
-        std::fclose(file_);
-        file_ = nullptr;
+    if (!file_) {
+        return true;
     }
+    std::FILE *file = file_;
+    file_ = nullptr;
+    return closeFile(file);
 }
 
 bool RecoveryWriter::syncFile()
@@ -282,8 +398,7 @@ bool RecoveryWriter::syncFile()
     if (!file_) {
         return false;
     }
-    if (!syncFileImpl(file_)) {
-        // Disable recovery for the rest of the session.
+    if (!syncFile(file_)) {
         enabled_.store(false, std::memory_order_release);
         return false;
     }
@@ -297,10 +412,6 @@ void RecoveryWriter::rotateIfNeeded()
         return;
     }
 
-    // Write a metadata snapshot before deleting any segment so the reader can
-    // recover ModuleDefs/ThreadDefs/SessionConfig from the pruned segments.
-    // If the snapshot cannot be made durable, skip pruning entirely: keeping
-    // extra segments is safe, deleting them without a snapshot is not.
     if (!writeMetadataSnapshot()) {
         return;
     }
@@ -346,27 +457,36 @@ bool RecoveryWriter::writeMetadataSnapshot()
     if (!f) {
         return false;
     }
-    if (std::fwrite(buf.data(), 1, buf.size(), f) != buf.size()) {
-        std::fclose(f);
+    if (!writeFile(f, buf.data(), buf.size())) {
+        closeFile(f);
         std::error_code ec;
         std::filesystem::remove(tmp_path, ec);
         return false;
     }
-    if (!syncFileImpl(f)) {
-        std::fclose(f);
+    if (!syncFile(f)) {
+        closeFile(f);
         std::error_code ec;
         std::filesystem::remove(tmp_path, ec);
         return false;
     }
-    std::fclose(f);
+    if (!closeFile(f)) {
+        std::error_code ec;
+        std::filesystem::remove(tmp_path, ec);
+        return false;
+    }
 
     std::error_code ec;
-    std::filesystem::rename(tmp_path, final_path, ec);
-    if (ec) {
+    if (!renameFile(tmp_path, final_path, ec)) {
         std::filesystem::remove(tmp_path, ec);
         return false;
     }
     return true;
+}
+
+void RecoveryWriter::markWorkerExited() noexcept
+{
+    worker_exited_.store(true, std::memory_order_release);
+    exit_cv_.notify_all();
 }
 
 void RecoveryWriter::writerLoop()
@@ -375,10 +495,46 @@ void RecoveryWriter::writerLoop()
     const auto sync_interval = std::chrono::milliseconds(config_.sync_interval_ms);
     std::vector<std::uint8_t> record;
 
+    const auto drain_record = [this, &record]() -> bool {
+        if (!queue_.try_dequeue(record)) {
+            return false;
+        }
+        queue_size_.fetch_sub(1, std::memory_order_relaxed);
+        if (!file_) {
+            return true;
+        }
+        if (!writeFile(file_, record.data(), record.size())) {
+            enabled_.store(false, std::memory_order_release);
+            return true;
+        }
+        segment_bytes_ += record.size();
+        total_bytes_ += record.size();
+        written_.fetch_add(1, std::memory_order_relaxed);
+
+        if (segment_bytes_ >= config_.max_segment_bytes) {
+            if (!syncFile()) {
+                return true;
+            }
+            if (!closeSegment()) {
+                enabled_.store(false, std::memory_order_release);
+                return true;
+            }
+            if (!openSegment(segment_number_ + 1)) {
+                enabled_.store(false, std::memory_order_release);
+                return true;
+            }
+            rotateIfNeeded();
+        }
+        return true;
+    };
+
     while (running_.load(std::memory_order_acquire)) {
         {
             std::unique_lock<std::mutex> lock(mutex_);
-            cv_.wait_for(lock, flush_interval, [this] { return !running_.load() || flush_requested_.load(); });
+            cv_.wait_for(lock, flush_interval, [this] {
+                return !running_.load(std::memory_order_acquire) || flush_requested_.load(std::memory_order_acquire) ||
+                       queue_size_.load(std::memory_order_relaxed) != 0;
+            });
         }
         flush_requested_.store(false, std::memory_order_release);
 
@@ -387,33 +543,14 @@ void RecoveryWriter::writerLoop()
         }
 
         bool wrote_any = false;
-        while (queue_.try_dequeue(record)) {
-            queue_size_.fetch_sub(1, std::memory_order_relaxed);
-            if (file_) {
-                if (std::fwrite(record.data(), 1, record.size(), file_) != record.size()) {
-                    enabled_.store(false, std::memory_order_release);
-                    break;
-                }
-                segment_bytes_ += record.size();
-                total_bytes_ += record.size();
-                written_.fetch_add(1, std::memory_order_relaxed);
-                wrote_any = true;
-
-                // Segment rotation.
-                if (segment_bytes_ >= config_.max_segment_bytes) {
-                    syncFile();
-                    closeSegment();
-                    if (!openSegment(segment_number_ + 1)) {
-                        enabled_.store(false, std::memory_order_release);
-                        break;
-                    }
-                    rotateIfNeeded();
-                }
+        while (queue_size_.load(std::memory_order_relaxed) != 0 && drain_record()) {
+            wrote_any = true;
+            if (!enabled_.load(std::memory_order_acquire)) {
+                break;
             }
         }
 
-        // Periodic sync.
-        if (wrote_any) {
+        if (wrote_any && enabled_.load(std::memory_order_acquire)) {
             auto now = std::chrono::steady_clock::now();
             if (now - last_sync_ >= sync_interval) {
                 syncFile();
@@ -421,21 +558,34 @@ void RecoveryWriter::writerLoop()
         }
     }
 
-    // Final drain.
-    if (enabled_.load(std::memory_order_acquire)) {
-        while (queue_.try_dequeue(record)) {
-            queue_size_.fetch_sub(1, std::memory_order_relaxed);
-            if (file_) {
-                if (std::fwrite(record.data(), 1, record.size(), file_) != record.size()) {
-                    enabled_.store(false, std::memory_order_release);
-                    break;
-                }
-                segment_bytes_ += record.size();
-                total_bytes_ += record.size();
-                written_.fetch_add(1, std::memory_order_relaxed);
+    while (enabled_.load(std::memory_order_acquire)) {
+        bool drained_any = false;
+        while (queue_size_.load(std::memory_order_relaxed) != 0 && drain_record()) {
+            drained_any = true;
+            if (!enabled_.load(std::memory_order_acquire)) {
+                break;
             }
         }
-        syncFile();
+        if (!enabled_.load(std::memory_order_acquire)) {
+            break;
+        }
+        if (active_producers_.load(std::memory_order_acquire) == 0 &&
+            queue_size_.load(std::memory_order_acquire) == 0) {
+            break;
+        }
+        if (!drained_any) {
+            std::unique_lock<std::mutex> lock(mutex_);
+            cv_.wait_for(lock, std::chrono::milliseconds(1));
+        }
+    }
+
+    if (file_) {
+        if (enabled_.load(std::memory_order_acquire)) {
+            syncFile();
+        }
+        if (!closeSegment()) {
+            enabled_.store(false, std::memory_order_release);
+        }
     }
 }
 
