@@ -100,7 +100,11 @@ private:
 };
 
 #ifdef _WIN32
-std::unique_ptr<WindowsIatHookBackend> makeNativeWindowsIatHookBackend(void *excluded_address = nullptr);
+// included_module_address is a test seam. Null scans all loaded modules except
+// the module containing excluded_address; non-null restricts scanning to the
+// module containing that address.
+std::unique_ptr<WindowsIatHookBackend> makeNativeWindowsIatHookBackend(void *excluded_address = nullptr,
+                                                                      void *included_module_address = nullptr);
 #endif
 
 }  // namespace spark
