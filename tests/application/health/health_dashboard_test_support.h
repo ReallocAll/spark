@@ -57,7 +57,7 @@ class FakeConnection final : public spark::HealthDashboardConnection {
 public:
     explicit FakeConnection(Probe &probe);
 
-    std::string open(const UploadCallback &upload, spark::CancellationToken cancellation) override;
+    std::string open(const UploadCallback &upload, const spark::CancellationToken &cancellation) override;
     bool tick() override;
     bool isOpen() const override;
     bool hasClient() const override;
