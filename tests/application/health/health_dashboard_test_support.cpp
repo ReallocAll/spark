@@ -46,21 +46,52 @@ bool Probe::waitFactoryEntered()
     return cv.wait_for(lock, std::chrono::seconds(2), [this] { return factory_entered; });
 }
 
+void Probe::configureUpload(bool block)
+{
+    std::scoped_lock lock(mutex);
+    block_upload = block;
+    release_upload = !block;
+    upload_entered = false;
+    upload_cancelled.store(false, std::memory_order_release);
+}
+
+void Probe::releaseUpload()
+{
+    std::scoped_lock lock(mutex);
+    release_upload = true;
+    cv.notify_all();
+}
+
+bool Probe::waitUploadEntered()
+{
+    std::unique_lock lock(mutex);
+    return cv.wait_for(lock, std::chrono::seconds(2), [this] { return upload_entered; });
+}
+
 FakeConnection::FakeConnection(Probe &probe) : probe_(probe) {}
 
-std::string FakeConnection::open(const UploadCallback &upload)
+std::string FakeConnection::open(const UploadCallback &upload, spark::CancellationToken cancellation)
 {
     {
         std::unique_lock lock(mutex_);
         work_active_ = true;
         open_entered_ = true;
         cv_.notify_all();
-        cv_.wait(lock, [this] { return !block_open_ || release_open_; });
+        cv_.wait(lock, [this, &cancellation] {
+            return !block_open_ || release_open_ || stop_requested_ || cancellation.stopRequested();
+        });
+        if (stop_requested_ || cancellation.stopRequested()) {
+            work_active_ = false;
+            cv_.notify_all();
+            probe_.cv.notify_all();
+            return {};
+        }
     }
     const spark::UploadResult result = upload();
     std::scoped_lock lock(mutex_);
     work_active_ = false;
-    if (!open_success_) {
+    cv_.notify_all();
+    if (stop_requested_ || cancellation.stopRequested() || !open_success_ || !result.ok) {
         return {};
     }
     open_state_ = true;
@@ -70,19 +101,38 @@ std::string FakeConnection::open(const UploadCallback &upload)
 bool FakeConnection::tick()
 {
     std::scoped_lock lock(mutex_);
-    return open_state_;
+    return open_state_ && !stop_requested_;
 }
 
 bool FakeConnection::isOpen() const
 {
     std::scoped_lock lock(mutex_);
-    return open_state_;
+    return open_state_ && !stop_requested_;
 }
 
 bool FakeConnection::hasClient() const
 {
     std::scoped_lock lock(mutex_);
     return client_;
+}
+
+void FakeConnection::requestStop() noexcept
+{
+    std::scoped_lock lock(mutex_);
+    stop_requested_ = true;
+    cv_.notify_all();
+}
+
+bool FakeConnection::closeWithin(std::chrono::milliseconds timeout) noexcept
+{
+    std::unique_lock lock(mutex_);
+    if (!cv_.wait_for(lock, timeout, [this] { return !work_active_; })) {
+        return false;
+    }
+    open_state_ = false;
+    ++close_count_;
+    cv_.notify_all();
+    return true;
 }
 
 void FakeConnection::close()
@@ -107,9 +157,16 @@ bool FakeConnection::sendStatistics(const std::string &, const std::string &, co
     work_active_ = true;
     send_entered_ = true;
     cv_.notify_all();
-    cv_.wait(lock, [this] { return !block_send_ || release_send_; });
+    cv_.wait(lock, [this] { return !block_send_ || release_send_ || stop_requested_; });
+    if (stop_requested_) {
+        work_active_ = false;
+        cv_.notify_all();
+        probe_.cv.notify_all();
+        return false;
+    }
     ++send_count_;
     work_active_ = false;
+    cv_.notify_all();
     probe_.cv.notify_all();
     return !fail_send_ && open_state_ && client_;
 }
@@ -214,11 +271,22 @@ std::unique_ptr<spark::HealthDashboard> makeDashboard(Probe &probe,
         }
         return std::unique_ptr<spark::HealthDashboardConnection>(std::move(connection));
     };
-    auto upload = [&probe](const spark::HealthData &data) {
+    auto upload = [&probe](const spark::HealthData &data, spark::CancellationToken cancellation) {
+        bool block = false;
         {
             std::scoped_lock lock(probe.mutex);
             probe.uploaded_channel = data.channel_info;
+            probe.upload_entered = true;
+            block = probe.block_upload;
             probe.cv.notify_all();
+        }
+        if (block && cancellation.waitForStop(std::chrono::seconds(2))) {
+            probe.upload_cancelled.store(true, std::memory_order_release);
+            return spark::UploadResult{.error = "cancelled"};
+        }
+        if (cancellation.stopRequested()) {
+            probe.upload_cancelled.store(true, std::memory_order_release);
+            return spark::UploadResult{.error = "cancelled"};
         }
         return spark::UploadResult{.ok = true, .key = "initial-key"};
     };
