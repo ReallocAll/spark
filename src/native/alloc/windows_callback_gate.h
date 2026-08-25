@@ -82,13 +82,17 @@ public:
             const bool exhausted = current_epoch == KMaxEpoch;
             const std::uint64_t next_epoch = exhausted ? current_epoch : current_epoch + 1;
             const std::uint64_t desired = compose(next_epoch, true, count(current));
-            if (state_.compare_exchange_weak(current, desired, std::memory_order_acq_rel, std::memory_order_acquire)) {
+            if (state_.compare_exchange_weak(current, desired, std::memory_order_acq_rel,
+                                             std::memory_order_acquire)) {
                 return !exhausted;
             }
         }
     }
 
-    [[nodiscard]] bool closed() const noexcept { return isClosed(state_.load(std::memory_order_acquire)); }
+    [[nodiscard]] bool closed() const noexcept
+    {
+        return isClosed(state_.load(std::memory_order_acquire));
+    }
 
     [[nodiscard]] bool drained() const noexcept
     {
@@ -96,7 +100,10 @@ public:
         return isClosed(current) && count(current) == 0;
     }
 
-    [[nodiscard]] std::uint32_t activeCount() const noexcept { return count(state_.load(std::memory_order_acquire)); }
+    [[nodiscard]] std::uint32_t activeCount() const noexcept
+    {
+        return count(state_.load(std::memory_order_acquire));
+    }
 
     [[nodiscard]] std::uint32_t generation() const noexcept
     {
@@ -117,9 +124,15 @@ private:
         return static_cast<std::uint32_t>(state & KCountMask);
     }
 
-    [[nodiscard]] static constexpr bool isClosed(std::uint64_t state) noexcept { return (state & KClosedBit) != 0; }
+    [[nodiscard]] static constexpr bool isClosed(std::uint64_t state) noexcept
+    {
+        return (state & KClosedBit) != 0;
+    }
 
-    [[nodiscard]] static constexpr std::uint64_t epoch(std::uint64_t state) noexcept { return state >> KEpochShift; }
+    [[nodiscard]] static constexpr std::uint64_t epoch(std::uint64_t state) noexcept
+    {
+        return state >> KEpochShift;
+    }
 
     [[nodiscard]] static constexpr std::uint64_t compose(std::uint64_t generation, bool closed,
                                                          std::uint32_t active) noexcept
