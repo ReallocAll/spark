@@ -15,8 +15,8 @@ public:
     std::string open(const UploadCallback &upload, CancellationToken cancellation) override
     {
         return socket_.open(
-            [&upload](const std::string &) {
-                const UploadResult result = upload();
+            [&upload, cancellation](const std::string &) {
+                const UploadResult result = upload(cancellation);
                 return result.ok ? result.key : std::string();
             },
             std::move(cancellation));
