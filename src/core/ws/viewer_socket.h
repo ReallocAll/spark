@@ -118,30 +118,39 @@ private:
     Config config_;
     Crypto::KeyPair key_pair_;
     std::mutex open_mutex_;
-    std::mutex transport_mutex_;
+    mutable std::mutex transport_mutex_;
     std::unique_ptr<WebSocketClient> ws_;
+
     std::atomic<ConnectionState> state_{ConnectionState::Closed};
     std::atomic<std::uint64_t> connection_generation_{0};
-    std::string channel_id_;
     std::int64_t open_time_ms_ = 0;
     std::atomic<std::int64_t> last_ping_ms_{0};
-
-    mutable std::mutex payload_mutex_;
     std::string last_payload_id_;
+    std::mutex payload_mutex_;  // protects last_payload_id_ across threads
+    std::string channel_id_;
+
+    IsKeyTrustedCallback is_key_trusted_;
+
+    // Pending client keys awaiting trust approval.
+    mutable std::mutex pending_keys_mutex_;
+    std::map<std::string, std::vector<std::uint8_t>> pending_keys_;
+    std::set<std::string> conflicted_client_ids_;
+    bool all_client_ids_conflicted_ = false;
+
+    // Incoming messages are queued for processing on the main thread.
+    std::mutex queue_mutex_;
+    std::vector<WsIncomingPacket> incoming_queue_;
+    std::atomic<bool> incoming_overflow_{false};
 
     mutable std::mutex close_mutex_;
     CloseReason close_reason_ = CloseReason::None;
     std::string close_diagnostic_;
 
-    mutable std::mutex queue_mutex_;
-    std::vector<std::string> incoming_queue_;
-    std::atomic<bool> incoming_overflow_{false};
-
-    mutable std::mutex pending_keys_mutex_;
-    std::map<std::string, std::vector<std::uint8_t>> pending_keys_;
-    std::set<std::string> conflicted_client_ids_;
-    bool all_client_ids_conflicted_ = false;
-    IsKeyTrustedCallback is_key_trusted_;
+    static constexpr std::int64_t kInitialTimeoutMs = 60000;      // 60s
+    static constexpr std::int64_t kEstablishedTimeoutMs = 30000;  // 30s
+    static constexpr std::size_t kMaxQueuedPackets = 64;
+    static constexpr std::size_t kMaxPendingKeys = 64;
+    static constexpr std::size_t kMaxConflictedClientIds = 64;
 };
 
 }  // namespace spark
