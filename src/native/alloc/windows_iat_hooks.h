@@ -73,7 +73,7 @@ public:
     bool configure(std::vector<WindowsIatHookTarget> targets, std::string &error);
     bool install(std::string &error);
     bool refresh(std::string &error);
-    bool uninstall(std::string &error) noexcept;
+    bool uninstall(std::string &error);
 
     [[nodiscard]] bool installed() const noexcept;
     [[nodiscard]] bool unsafeState() const noexcept;
@@ -83,8 +83,8 @@ public:
 
 private:
     bool reconcile(bool initial_install, std::string &error);
-    bool rollbackInstalled(std::string &error) noexcept;
-    bool restoreSlot(const WindowsIatSlot &slot, std::string &error) noexcept;
+    bool rollbackInstalled(std::string &error);
+    bool restoreSlot(const WindowsIatSlot &slot, std::string &error);
     bool slotAlreadyTracked(const WindowsIatSlot &slot) const noexcept;
     bool requiredCoverageSatisfied(std::string &error) const;
     void markUnsafe(const std::string &reason, std::string &error) noexcept;
