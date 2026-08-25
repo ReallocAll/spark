@@ -12,14 +12,14 @@ public:
     {
     }
 
-    std::string open(const UploadCallback &upload, CancellationToken cancellation) override
+    std::string open(const UploadCallback &upload, const CancellationToken &cancellation) override
     {
         return socket_.open(
-            [&upload, cancellation](const std::string &) {
+            [&upload, &cancellation](const std::string &) {
                 const UploadResult result = upload(cancellation);
                 return result.ok ? result.key : std::string();
             },
-            std::move(cancellation));
+            cancellation);
     }
 
     bool tick() override { return socket_.tick(); }
