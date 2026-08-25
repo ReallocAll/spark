@@ -122,21 +122,7 @@ bool HealthCommand::shutdownWithin(std::chrono::milliseconds timeout)
 
 void HealthCommand::shutdown()
 {
-    if (shutdownWithin(kDefaultShutdownBudget)) {
-        return;
-    }
-    upload_cancellation_.requestStop();
-    if (dashboard_) {
-        dashboard_->shutdown();
-    }
-    if (upload_thread_.joinable() && upload_thread_.get_id() != std::this_thread::get_id()) {
-        try {
-            upload_thread_.join();
-        }
-        catch (...) {
-        }
-    }
-    uploading_.store(false, std::memory_order_release);
+    static_cast<void>(shutdownWithin(kDefaultShutdownBudget));
 }
 
 void HealthCommand::onTick()
