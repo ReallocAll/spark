@@ -177,19 +177,19 @@ void test_upload_shutdown_delivers_cancellation()
     bool entered = false;
     std::atomic<bool> cancelled{false};
 
-    spark::HealthCommand::UploadFunction upload = [&](const std::string &, const std::string &, const std::string &,
-                                                       const std::string &,
-                                                       const spark::CancellationToken &cancellation) {
-        {
-            std::scoped_lock lock(mutex);
-            entered = true;
-            cv.notify_all();
-        }
-        if (cancellation.waitForStop(std::chrono::seconds(2))) {
-            cancelled.store(true, std::memory_order_release);
-        }
-        return spark::UploadResult{.error = "cancelled"};
-    };
+    spark::HealthCommand::UploadFunction upload =
+        [&](const std::string &, const std::string &, const std::string &, const std::string &,
+            const spark::CancellationToken &cancellation) {
+            {
+                std::scoped_lock lock(mutex);
+                entered = true;
+                cv.notify_all();
+            }
+            if (cancellation.waitForStop(std::chrono::seconds(2))) {
+                cancelled.store(true, std::memory_order_release);
+            }
+            return spark::UploadResult{.error = "cancelled"};
+        };
     spark::HealthCommand command(statistics, metadata, {}, "https://viewer/", {}, trusted, dispatcher, notifier, {},
                                  std::move(upload));
     spark::Arguments args({"upload"}, true);
@@ -215,14 +215,15 @@ void test_upload_timeout_retains_worker_for_later_reap()
     bool entered = false;
     bool release = false;
 
-    spark::HealthCommand::UploadFunction upload = [&](const std::string &, const std::string &, const std::string &,
-                                                       const std::string &, const spark::CancellationToken &) {
-        std::unique_lock lock(mutex);
-        entered = true;
-        cv.notify_all();
-        cv.wait(lock, [&] { return release; });
-        return spark::UploadResult{.error = "released"};
-    };
+    spark::HealthCommand::UploadFunction upload =
+        [&](const std::string &, const std::string &, const std::string &, const std::string &,
+            const spark::CancellationToken &) {
+            std::unique_lock lock(mutex);
+            entered = true;
+            cv.notify_all();
+            cv.wait(lock, [&] { return release; });
+            return spark::UploadResult{.error = "released"};
+        };
     spark::HealthCommand command(statistics, metadata, {}, "https://viewer/", {}, trusted, dispatcher, notifier, {},
                                  std::move(upload));
     spark::Arguments args({"upload"}, true);
