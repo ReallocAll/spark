@@ -14,16 +14,13 @@
 
 namespace spark {
 
-// Small connection boundary used by HealthDashboard and its offline tests.
 class HealthDashboardConnection {
 public:
-    using UploadCallback = std::function<UploadResult()>;
+    using UploadCallback = std::function<UploadResult(CancellationToken)>;
     using IsKeyTrustedCallback = std::function<bool(const std::vector<std::uint8_t> &)>;
 
     virtual ~HealthDashboardConnection() = default;
 
-    // Opens the connection and invokes upload for the initial health payload.
-    // The returned string is the viewer URL, or empty on failure.
     virtual std::string open(const UploadCallback &upload, CancellationToken cancellation) = 0;
     virtual bool tick() = 0;
     virtual bool isOpen() const = 0;
@@ -38,7 +35,6 @@ public:
     virtual void setIsKeyTrustedCallback(IsKeyTrustedCallback callback) = 0;
 };
 
-// Creates the production ViewerSocket-backed connection used by the platform integration.
 std::unique_ptr<HealthDashboardConnection> makeHealthDashboardViewerSocketConnection(ViewerSocket::Config config,
                                                                                      Crypto::KeyPair key_pair);
 
