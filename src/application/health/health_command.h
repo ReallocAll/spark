@@ -113,7 +113,7 @@ private:
     bool upload_sender_is_player_ = false;
     std::int64_t upload_time_ms_ = 0;
     UploadFunction upload_fn_;
-    std::atomic<std::shared_ptr<int>> lifetime_{std::make_shared<int>(0)};
+    std::shared_ptr<int> lifetime_{std::make_shared<int>(0)};
 
     static constexpr auto kDefaultShutdownBudget = std::chrono::seconds(2);
 };
