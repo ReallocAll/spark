@@ -280,8 +280,7 @@ struct HealthCommandTestAccess {
     {
         health.upload_fn_ = [upload_function = std::move(upload_function)](
                                 const std::string &bytebin_url, const std::string &viewer_url,
-                                const std::string &payload, const std::string &content_type,
-                                CancellationToken) {
+                                const std::string &payload, const std::string &content_type, CancellationToken) {
             return upload_function(bytebin_url, viewer_url, payload, content_type);
         };
     }
