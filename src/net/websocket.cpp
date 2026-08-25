@@ -353,6 +353,7 @@ void WebSocketClient::requestStop() noexcept
             recordTermination(TerminationKind::LocalClose);
         }
         catch (...) {
+            running_.store(false);
         }
     }
     running_.store(false);
