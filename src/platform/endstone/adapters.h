@@ -11,7 +11,7 @@
 
 #include "application/command/command_sender.h"
 #include "application/platform_capabilities.h"
-#include "platform/endstone/world_gauge_state.h"
+#include "platform/endstone/world_gauge_event_adapter.h"
 
 namespace spark::endstone_adapter {
 
@@ -87,7 +87,7 @@ private:
 
     ::endstone::Plugin &plugin_;
     ::endstone::Server &server_;
-    EndstoneWorldGaugeState state_;
+    EndstoneWorldGaugeEventAdapter event_adapter_;
     std::int64_t last_reconcile_steady_ms_ = 0;
     bool initialized_ = false;
 };
