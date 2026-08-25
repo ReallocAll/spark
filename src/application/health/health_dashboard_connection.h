@@ -1,6 +1,7 @@
 #ifndef SPARK_APPLICATION_HEALTH_HEALTH_DASHBOARD_CONNECTION_H
 #define SPARK_APPLICATION_HEALTH_HEALTH_DASHBOARD_CONNECTION_H
 
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -9,6 +10,7 @@
 
 #include "core/ws/viewer_socket.h"
 #include "net/bytebin.h"
+#include "net/cancellation.h"
 
 namespace spark {
 
@@ -22,10 +24,12 @@ public:
 
     // Opens the connection and invokes upload for the initial health payload.
     // The returned string is the viewer URL, or empty on failure.
-    virtual std::string open(const UploadCallback &upload) = 0;
+    virtual std::string open(const UploadCallback &upload, CancellationToken cancellation) = 0;
     virtual bool tick() = 0;
     virtual bool isOpen() const = 0;
     virtual bool hasClient() const = 0;
+    virtual void requestStop() noexcept = 0;
+    virtual bool closeWithin(std::chrono::milliseconds timeout) noexcept = 0;
     virtual void close() = 0;
     virtual SocketChannelInfo channelInfo() const = 0;
     virtual bool sendStatistics(const std::string &platform, const std::string &system, const std::string &metrics) = 0;
