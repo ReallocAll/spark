@@ -278,7 +278,12 @@ struct HealthCommandTestAccess {
         std::function<UploadResult(const std::string &, const std::string &, const std::string &, const std::string &)>
             upload_function)
     {
-        health.upload_fn_ = std::move(upload_function);
+        health.upload_fn_ = [upload_function = std::move(upload_function)](
+                                const std::string &bytebin_url, const std::string &viewer_url,
+                                const std::string &payload, const std::string &content_type,
+                                CancellationToken) {
+            return upload_function(bytebin_url, viewer_url, payload, content_type);
+        };
     }
 
     static bool uploading(const HealthCommand &health) { return health.uploading_.load(); }
