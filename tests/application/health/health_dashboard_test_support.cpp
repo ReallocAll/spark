@@ -76,7 +76,7 @@ bool Probe::waitUploadEntered()
 
 FakeConnection::FakeConnection(Probe &probe) : probe_(probe) {}
 
-std::string FakeConnection::open(const UploadCallback &upload, spark::CancellationToken cancellation)
+std::string FakeConnection::open(const UploadCallback &upload, const spark::CancellationToken &cancellation)
 {
     {
         std::unique_lock lock(mutex_);
@@ -292,7 +292,7 @@ std::unique_ptr<spark::HealthDashboard> makeDashboard(Probe &probe,
         }
         return std::unique_ptr<spark::HealthDashboardConnection>(std::move(connection));
     };
-    auto upload = [&probe](const spark::HealthData &data, spark::CancellationToken cancellation) {
+    auto upload = [&probe](const spark::HealthData &data, const spark::CancellationToken &cancellation) {
         bool block = false;
         {
             std::scoped_lock lock(probe.mutex);
