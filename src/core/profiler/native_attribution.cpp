@@ -344,7 +344,13 @@ int collectHookTargets(dl_phdr_info *info, std::size_t, void *opaque)
         return 0;
     }
 
-    const LinuxRelocationView relocation_view{image, symbols, strings, string_size, context};
+    const LinuxRelocationView relocation_view{
+        .image = image,
+        .symbols = symbols,
+        .strings = strings,
+        .string_size = string_size,
+        .context = context,
+    };
     visitRelocations(rel, rel_size, relocation_view);
     visitRelocations(rela, rela_size, relocation_view);
     if (plt_type == DT_REL) {
