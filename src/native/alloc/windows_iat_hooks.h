@@ -35,7 +35,7 @@ struct WindowsIatHookTarget {
     std::string import_name;
     // Empty is permitted for deterministic tests. Production targets should
     // list the exact provider DLL/API-set names whose ABI they expect.
-    std::vector<std::string> import_modules;
+    std::vector<std::string> import_modules{};
     void *original = nullptr;
     void *replacement = nullptr;
     bool required = false;
