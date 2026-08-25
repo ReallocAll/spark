@@ -1,3 +1,5 @@
+#include <algorithm>
+#include <chrono>
 #include <exception>
 
 #include "application/health/health_dashboard.h"
@@ -13,103 +15,257 @@ std::string exceptionMessage(const std::exception &error)
     return error.what();
 }
 
+std::chrono::milliseconds remainingUntil(std::chrono::steady_clock::time_point deadline)
+{
+    const auto now = std::chrono::steady_clock::now();
+    if (now >= deadline) {
+        return std::chrono::milliseconds::zero();
+    }
+    return std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now);
+}
+
 }  // namespace
 
-void HealthDashboard::shutdown()
+void HealthDashboard::requestStop() noexcept
 {
-    std::unique_lock lifecycle_lock(lifecycle_mutex_);
-    while (lifecycle_active_) {
-        if (worker_id_ == std::this_thread::get_id()) {
-            return;
-        }
-        lifecycle_cv_.wait(lifecycle_lock, [this] { return !lifecycle_active_; });
-    }
-    lifecycle_active_ = true;
-
     std::shared_ptr<HealthDashboardConnection> connection;
+    try {
+        {
+            std::scoped_lock completion_lock(completion_mutex_);
+            callbacks_enabled_ = false;
+        }
+        {
+            std::scoped_lock lock(mutex_);
+            if (!stopping_) {
+                stopping_ = true;
+                ++generation_;
+            }
+            work_.reset();
+            open_pending_ = false;
+            open_ = false;
+            connection = connection_;
+        }
+        cancellation_source_.requestStop();
+        running_.store(false, std::memory_order_release);
+        cv_.notify_all();
+        if (connection) {
+            connection->requestStop();
+        }
+    }
+    catch (...) {
+        running_.store(false, std::memory_order_release);
+        cancellation_source_.requestStop();
+        cv_.notify_all();
+    }
+}
+
+bool HealthDashboard::shutdownWithin(std::chrono::milliseconds timeout)
+{
+    const auto deadline = std::chrono::steady_clock::now() + std::max(timeout, std::chrono::milliseconds::zero());
+
     {
-        std::scoped_lock completion_lock(completion_mutex_);
-        callbacks_enabled_ = false;
+        std::scoped_lock lifecycle_lock(lifecycle_mutex_);
+        if (worker_.joinable() && worker_id_ == std::this_thread::get_id()) {
+            requestStop();
+            return false;
+        }
+    }
+
+    std::unique_lock lifecycle_lock(lifecycle_mutex_);
+    if (lifecycle_active_) {
+        if (!lifecycle_cv_.wait_until(lifecycle_lock, deadline, [this] { return !lifecycle_active_; })) {
+            return false;
+        }
     }
     {
         std::scoped_lock lock(mutex_);
-        stopping_ = true;
-        ++generation_;
+        if (shutdown_complete_) {
+            return true;
+        }
+    }
+    lifecycle_active_ = true;
+    lifecycle_lock.unlock();
+
+    const auto finish_lifecycle = [this] {
+        {
+            std::scoped_lock lock(lifecycle_mutex_);
+            lifecycle_active_ = false;
+        }
+        lifecycle_cv_.notify_all();
+    };
+
+    requestStop();
+
+    lifecycle_lock.lock();
+    if (!lifecycle_cv_.wait_until(lifecycle_lock, deadline, [this] { return open_calls_active_ == 0; })) {
+        lifecycle_lock.unlock();
+        finish_lifecycle();
+        return false;
+    }
+    lifecycle_lock.unlock();
+
+    if (worker_.joinable()) {
+        {
+            std::unique_lock exit_lock(worker_exit_mutex_);
+            if (!worker_exit_cv_.wait_until(exit_lock, deadline, [this] { return worker_exited_; })) {
+                finish_lifecycle();
+                return false;
+            }
+        }
+        try {
+            worker_.join();
+        }
+        catch (...) {
+            finish_lifecycle();
+            return false;
+        }
+        std::scoped_lock lock(lifecycle_mutex_);
+        worker_id_ = {};
+    }
+
+    std::shared_ptr<HealthDashboardConnection> connection;
+    {
+        std::scoped_lock lock(mutex_);
+        connection = connection_;
+    }
+    if (connection) {
+        const auto remaining = remainingUntil(deadline);
+        if (remaining == std::chrono::milliseconds::zero() || !connection->closeWithin(remaining)) {
+            finish_lifecycle();
+            return false;
+        }
+    }
+
+    {
+        std::scoped_lock lock(mutex_);
+        if (connection_ == connection) {
+            connection_.reset();
+        }
         work_.reset();
+        work_active_ = false;
         open_pending_ = false;
         open_ = false;
-        connection = std::move(connection_);
+        shutdown_complete_ = true;
     }
-    running_.store(false, std::memory_order_release);
-    cv_.notify_all();
-    const bool same_worker = worker_id_ == std::this_thread::get_id();
-    const bool join_worker = !same_worker && worker_.joinable();
-    lifecycle_lock.unlock();
-    if (join_worker) {
-        worker_.join();
+    finish_lifecycle();
+    return true;
+}
+
+void HealthDashboard::shutdown()
+{
+    if (shutdownWithin(kDefaultShutdownBudget)) {
+        return;
+    }
+
+    {
+        std::scoped_lock lifecycle_lock(lifecycle_mutex_);
+        if (worker_.joinable() && worker_id_ == std::this_thread::get_id()) {
+            return;
+        }
+    }
+
+    requestStop();
+    {
+        std::unique_lock lifecycle_lock(lifecycle_mutex_);
+        lifecycle_cv_.wait(lifecycle_lock, [this] { return !lifecycle_active_ && open_calls_active_ == 0; });
+    }
+    if (worker_.joinable()) {
+        try {
+            worker_.join();
+        }
+        catch (...) {
+        }
+    }
+    {
+        std::scoped_lock lock(lifecycle_mutex_);
+        worker_id_ = {};
+    }
+    std::shared_ptr<HealthDashboardConnection> connection;
+    {
+        std::scoped_lock lock(mutex_);
+        connection = connection_;
     }
     if (connection) {
         try {
             connection->close();
         }
-        catch (...) {  // NOLINT(bugprone-empty-catch): connection close is best effort during shutdown.
+        catch (...) {
         }
     }
     {
         std::scoped_lock lock(mutex_);
+        if (connection_ == connection) {
+            connection_.reset();
+        }
+        work_.reset();
         work_active_ = false;
-        stopping_ = false;
+        open_pending_ = false;
+        open_ = false;
+        shutdown_complete_ = true;
     }
-    lifecycle_lock.lock();
-    lifecycle_active_ = false;
-    if (join_worker) {
-        worker_id_ = {};
-    }
-    lifecycle_lock.unlock();
-    lifecycle_cv_.notify_all();
 }
 
-bool HealthDashboard::startWorker(std::unique_lock<std::mutex> &lifecycle_lock)
+bool HealthDashboard::startWorker()
 {
+    std::unique_lock lifecycle_lock(lifecycle_mutex_);
+    if (lifecycle_active_) {
+        return false;
+    }
+    {
+        std::scoped_lock lock(mutex_);
+        if (stopping_ || shutdown_complete_) {
+            return false;
+        }
+    }
     if (running_.load(std::memory_order_acquire)) {
         return true;
     }
-    if (worker_.joinable() && worker_id_ == std::this_thread::get_id()) {
-        return false;
-    }
     if (worker_.joinable()) {
-        lifecycle_active_ = true;
-        lifecycle_lock.unlock();
+        bool exited = false;
+        {
+            std::scoped_lock exit_lock(worker_exit_mutex_);
+            exited = worker_exited_;
+        }
+        if (!exited || worker_id_ == std::this_thread::get_id()) {
+            return false;
+        }
         try {
             worker_.join();
         }
         catch (...) {
-            lifecycle_lock.lock();
-            lifecycle_active_ = false;
-            lifecycle_cv_.notify_all();
             return false;
         }
-        lifecycle_lock.lock();
         worker_id_ = {};
-        lifecycle_active_ = false;
-        lifecycle_cv_.notify_all();
     }
+
     {
-        std::scoped_lock lock(mutex_);
-        if (stopping_) {
-            return false;
-        }
-        running_.store(true, std::memory_order_release);
+        std::scoped_lock exit_lock(worker_exit_mutex_);
+        worker_exited_ = false;
     }
+    running_.store(true, std::memory_order_release);
     try {
         worker_ = std::thread([this] { run(); });
     }
     catch (...) {
         running_.store(false, std::memory_order_release);
+        {
+            std::scoped_lock exit_lock(worker_exit_mutex_);
+            worker_exited_ = true;
+        }
+        worker_exit_cv_.notify_all();
         return false;
     }
     worker_id_ = worker_.get_id();
     return true;
+}
+
+void HealthDashboard::signalWorkerExit() noexcept
+{
+    {
+        std::scoped_lock lock(worker_exit_mutex_);
+        worker_exited_ = true;
+    }
+    worker_exit_cv_.notify_all();
 }
 
 void HealthDashboard::markFailure(const std::shared_ptr<HealthDashboardConnection> &connection) noexcept
@@ -117,9 +273,11 @@ void HealthDashboard::markFailure(const std::shared_ptr<HealthDashboardConnectio
     failed_.store(true, std::memory_order_release);
     running_.store(false, std::memory_order_release);
     bool current = false;
+    bool stopping = false;
     {
         std::scoped_lock lock(mutex_);
         current = connection_ == connection;
+        stopping = stopping_;
         if (current) {
             open_ = false;
             open_pending_ = false;
@@ -128,10 +286,12 @@ void HealthDashboard::markFailure(const std::shared_ptr<HealthDashboardConnectio
         }
     }
     if (connection) {
-        try {
-            connection->close();
-        }
-        catch (...) {  // NOLINT(bugprone-empty-catch): connection close is best effort after failure.
+        connection->requestStop();
+        if (!stopping && connection->closeWithin(kBackgroundCloseBudget)) {
+            std::scoped_lock lock(mutex_);
+            if (connection_ == connection) {
+                connection_.reset();
+            }
         }
     }
     cv_.notify_all();
@@ -141,8 +301,10 @@ void HealthDashboard::completeOpen(OpenResult result, const std::shared_ptr<Heal
                                    std::int64_t initial_time_ms)
 {
     bool current = false;
+    bool stopping = false;
     {
         std::scoped_lock lock(mutex_);
+        stopping = stopping_;
         current = !stopping_ && result.generation == generation_ && connection_ == connection;
         if (current) {
             open_pending_ = false;
@@ -151,16 +313,15 @@ void HealthDashboard::completeOpen(OpenResult result, const std::shared_ptr<Heal
             if (result.ok) {
                 last_update_ms_ = initial_time_ms;
             }
-            else {
-                connection_.reset();
-            }
         }
     }
     if (!current || !result.ok) {
-        try {
-            connection->close();
-        }
-        catch (...) {  // NOLINT(bugprone-empty-catch): connection close is best effort after an unsuccessful open.
+        connection->requestStop();
+        if (!stopping && connection->closeWithin(kBackgroundCloseBudget)) {
+            std::scoped_lock lock(mutex_);
+            if (connection_ == connection) {
+                connection_.reset();
+            }
         }
     }
     result.completed = true;
@@ -216,14 +377,22 @@ void HealthDashboard::run() noexcept
                 bool upload_called = false;
                 try {
                     std::string url;
-                    url = work.connection->open([&] {
-                        HealthData upload_data = work.data;
-                        upload_data.channel_info = work.connection->channelInfo();
-                        upload_called = true;
-                        upload_result = initial_upload_(upload_data);
-                        return upload_result;
-                    });
-                    if (!upload_called) {
+                    url = work.connection->open(
+                        [&] {
+                            if (work.cancellation.stopRequested()) {
+                                return UploadResult{.error = "health dashboard upload cancelled"};
+                            }
+                            HealthData upload_data = work.data;
+                            upload_data.channel_info = work.connection->channelInfo();
+                            upload_called = true;
+                            upload_result = initial_upload_(upload_data, work.cancellation);
+                            return upload_result;
+                        },
+                        work.cancellation);
+                    if (work.cancellation.stopRequested()) {
+                        result.error = "health dashboard open cancelled";
+                    }
+                    else if (!upload_called) {
                         result.error = "health dashboard connection did not request initial upload";
                     }
                     else if (!upload_result.ok || upload_result.key.empty()) {
@@ -249,6 +418,14 @@ void HealthDashboard::run() noexcept
                 continue;
             }
 
+            if (work.cancellation.stopRequested()) {
+                std::scoped_lock lock(mutex_);
+                if (connection_ == work.connection && work.generation == generation_) {
+                    work_active_ = false;
+                }
+                continue;
+            }
+
             std::string platform;
             std::string system;
             std::string metrics;
@@ -266,7 +443,8 @@ void HealthDashboard::run() noexcept
             bool attempted = false;
             {
                 std::scoped_lock lock(mutex_);
-                attempted = !stopping_ && work.generation == generation_ && connection_ == work.connection && open_;
+                attempted = !stopping_ && !work.cancellation.stopRequested() && work.generation == generation_ &&
+                            connection_ == work.connection && open_;
             }
             if (attempted) {
                 sent = work.connection->sendStatistics(platform, system, metrics);
@@ -275,7 +453,7 @@ void HealthDashboard::run() noexcept
             {
                 std::scoped_lock lock(mutex_);
                 current = !stopping_ && work.generation == generation_ && connection_ == work.connection;
-                if (current) {
+                if (connection_ == work.connection) {
                     work_active_ = false;
                 }
             }
@@ -292,6 +470,7 @@ void HealthDashboard::run() noexcept
         }
         markFailure(connection);
     }
+    signalWorkerExit();
 }
 
 }  // namespace spark
