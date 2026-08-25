@@ -436,6 +436,12 @@ if (WIN32)
     set_target_properties(spark_windows_allocation_unavailable_test PROPERTIES
             RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
     add_test(NAME spark_windows_allocation_unavailable_test COMMAND spark_windows_allocation_unavailable_test)
+
+    add_executable(spark_capture_windows_lifecycle_test native/sampler/capture_windows_lifecycle_test.cpp)
+    target_link_libraries(spark_capture_windows_lifecycle_test PRIVATE spark_core)
+    set_target_properties(spark_capture_windows_lifecycle_test PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+    add_test(NAME spark_capture_windows_lifecycle_test COMMAND spark_capture_windows_lifecycle_test)
 elseif (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
     add_executable(spark_symbol_guess_linux_test native/symbol/symbol_guess_linux_test.cpp)
     target_link_libraries(spark_symbol_guess_linux_test PRIVATE spark_core)
