@@ -16,6 +16,7 @@
 #include <cstring>
 #include <fstream>
 #include <limits>
+#include <ranges>
 #include <sstream>
 #include <string_view>
 #include <type_traits>
@@ -43,9 +44,9 @@ struct PinSet {
 
     ~PinSet()
     {
-        for (auto it = handles.rbegin(); it != handles.rend(); ++it) {
-            if (*it != nullptr) {
-                ::dlclose(*it);
+        for (void *handle : std::ranges::reverse_view(handles)) {
+            if (handle != nullptr) {
+                ::dlclose(handle);
             }
         }
     }
@@ -125,13 +126,13 @@ bool pinImage(Image &image, PinSet &pins)
         return false;
     }
     link_map *map = nullptr;
-    if (::dlinfo(handle, RTLD_DI_LINKMAP, &map) != 0 || map == nullptr ||
+    if (::dlinfo(handle, RTLD_DI_LINKMAP, static_cast<void *>(&map)) != 0 || map == nullptr ||
         static_cast<std::uintptr_t>(map->l_addr) != image.base) {
         ::dlclose(handle);
         return false;
     }
     pins.handles.push_back(handle);
-    RefreshContext context{&image, false};
+    RefreshContext context{.image = &image, .found = false};
     ::dl_iterate_phdr(refreshImage, &context);
     return context.found;
 }
