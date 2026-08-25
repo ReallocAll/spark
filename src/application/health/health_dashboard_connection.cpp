@@ -12,17 +12,21 @@ public:
     {
     }
 
-    std::string open(const UploadCallback &upload) override
+    std::string open(const UploadCallback &upload, CancellationToken cancellation) override
     {
-        return socket_.open([&upload](const std::string &) {
-            const UploadResult result = upload();
-            return result.ok ? result.key : std::string();
-        });
+        return socket_.open(
+            [&upload](const std::string &) {
+                const UploadResult result = upload();
+                return result.ok ? result.key : std::string();
+            },
+            std::move(cancellation));
     }
 
     bool tick() override { return socket_.tick(); }
     bool isOpen() const override { return socket_.isOpen(); }
     bool hasClient() const override { return socket_.hasClient(); }
+    void requestStop() noexcept override { socket_.requestStop(); }
+    bool closeWithin(std::chrono::milliseconds timeout) noexcept override { return socket_.closeWithin(timeout); }
     void close() override { socket_.close(); }
     SocketChannelInfo channelInfo() const override { return socket_.channelInfo(); }
     bool sendStatistics(const std::string &platform, const std::string &system, const std::string &metrics) override
