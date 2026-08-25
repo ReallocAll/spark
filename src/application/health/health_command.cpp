@@ -1,5 +1,6 @@
 #include "application/health/health_command.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <string>
 #include <utility>
@@ -15,6 +16,19 @@
 #include "spark_constants.h"
 
 namespace spark {
+
+namespace {
+
+std::chrono::milliseconds remainingUntil(std::chrono::steady_clock::time_point deadline)
+{
+    const auto now = std::chrono::steady_clock::now();
+    if (now >= deadline) {
+        return std::chrono::milliseconds::zero();
+    }
+    return std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now);
+}
+
+}  // namespace
 
 HealthCommand::HealthCommand(StatisticsService &statistics, ProfileMetadataProvider &metadata_provider,
                              std::string bytebin_url, std::string viewer_url, std::string bytesocks_host,
@@ -47,7 +61,10 @@ HealthCommand::HealthCommand(StatisticsService &statistics, ProfileMetadataProvi
         };
     }
     dashboard_ = std::make_unique<HealthDashboard>(
-        std::move(dashboard_factory), [this](const HealthData &data) { return uploadHealthData(data); },
+        std::move(dashboard_factory),
+        [this](const HealthData &data, CancellationToken cancellation) {
+            return uploadHealthData(data, std::move(cancellation));
+        },
         [this](const std::vector<std::uint8_t> &key) {
             return trusted_viewers_.contains(base64Encode(key.data(), key.size()));
         },
@@ -63,15 +80,49 @@ HealthCommand::~HealthCommand()
     shutdown();
 }
 
+bool HealthCommand::shutdownWithin(std::chrono::milliseconds timeout)
+{
+    const auto deadline = std::chrono::steady_clock::now() + std::max(timeout, std::chrono::milliseconds::zero());
+    stopping_.store(true, std::memory_order_release);
+    std::atomic_store_explicit(&lifetime_, std::shared_ptr<int>{}, std::memory_order_release);
+    upload_cancellation_.requestStop();
+    if (dashboard_) {
+        dashboard_->requestStop();
+    }
+
+    bool dashboard_stopped = true;
+    if (dashboard_) {
+        dashboard_stopped = dashboard_->shutdownWithin(remainingUntil(deadline));
+    }
+
+    bool upload_stopped = true;
+    if (upload_thread_.joinable()) {
+        if (upload_thread_.get_id() == std::this_thread::get_id()) {
+            upload_stopped = false;
+        }
+        else {
+            std::unique_lock lock(upload_exit_mutex_);
+            upload_stopped = upload_exit_cv_.wait_until(lock, deadline, [this] { return upload_worker_exited_; });
+            lock.unlock();
+            if (upload_stopped) {
+                try {
+                    upload_thread_.join();
+                }
+                catch (...) {
+                    upload_stopped = false;
+                }
+            }
+        }
+    }
+    if (upload_stopped) {
+        uploading_.store(false, std::memory_order_release);
+    }
+    return dashboard_stopped && upload_stopped;
+}
+
 void HealthCommand::shutdown()
 {
-    if (dashboard_) {
-        dashboard_->shutdown();
-    }
-    lifetime_.reset();
-    if (upload_thread_.joinable() && upload_thread_.get_id() != std::this_thread::get_id()) {
-        upload_thread_.join();
-    }
+    static_cast<void>(shutdownWithin(kDefaultShutdownBudget));
 }
 
 void HealthCommand::onTick()
@@ -81,7 +132,7 @@ void HealthCommand::onTick()
 
 void HealthCommand::onTickAt(std::int64_t now_ms)
 {
-    if (!dashboard_) {
+    if (stopping_.load(std::memory_order_acquire) || !dashboard_) {
         return;
     }
     dashboard_->tick();
@@ -114,6 +165,9 @@ void HealthCommand::notifyBestEffort(const std::string &sender_name, const std::
 
 void HealthCommand::pollPing()
 {
+    if (stopping_.load(std::memory_order_acquire)) {
+        return;
+    }
     if (ping_statistics_ && ping_statistics_->poll()) {
         const PingSummary &summary = ping_statistics_->lastPollSummary();
         statistics_.recordPlayerPing({.mean = summary.mean(),
@@ -134,7 +188,9 @@ std::vector<int> HealthCommand::pingSamples() const
 
 void HealthCommand::pollNetwork()
 {
-    network_monitor_.poll();
+    if (!stopping_.load(std::memory_order_acquire)) {
+        network_monitor_.poll();
+    }
 }
 
 std::map<std::string, NetworkInterfaceSnapshot> HealthCommand::networkSnapshots() const
@@ -193,6 +249,10 @@ void HealthCommand::showHealth(CommandSender &sender, const Arguments &args)
 
 void HealthCommand::cmdHealth(CommandSender &sender, const Arguments &args)
 {
+    if (stopping_.load(std::memory_order_acquire)) {
+        sender.sendMessage("Health services are shutting down.");
+        return;
+    }
     std::string action = args.subCommand();
     if (action == "health") {
         action.clear();
