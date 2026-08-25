@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cstdio>
-#include <fstream>
 #include <limits>
 #include <sstream>
 #include <string>
@@ -11,11 +10,26 @@
 
 #include <curl/curl.h>
 
+#include "core/config/spark_config_environment.h"
+#include "core/util/state_file.h"
+
 namespace spark {
 
 namespace {
 
 constexpr std::int64_t KMaxBackgroundProfilerIntervalMs = 1000;
+constexpr std::size_t KMaxConfigFileBytes = 1U * 1024U * 1024U;
+
+struct ConfigValues {
+    std::string viewer_url;
+    std::string bytebin_url;
+    std::string bytesocks_host;
+    bool background_profiler_enabled;
+    std::int64_t background_profiler_interval;
+    std::string background_profiler_thread_grouper;
+    std::string background_profiler_thread_dumper;
+    bool disable_response_broadcast;
+};
 
 bool hasInvalidEndpointCharacters(std::string_view value)
 {
@@ -114,6 +128,92 @@ std::string escapeString(std::string_view s)
     return out;
 }
 
+void applyEnvironmentOverrides(ConfigValues &values)
+{
+    const SparkConfigEnvironment environment = readSparkConfigEnvironment();
+    if (environment.viewer_url) {
+        values.viewer_url = *environment.viewer_url;
+    }
+    if (environment.bytebin_url) {
+        values.bytebin_url = *environment.bytebin_url;
+    }
+    if (environment.bytesocks_host) {
+        values.bytesocks_host = *environment.bytesocks_host;
+    }
+    if (environment.background_profiler_enabled) {
+        values.background_profiler_enabled = *environment.background_profiler_enabled;
+    }
+    if (environment.background_profiler_interval) {
+        values.background_profiler_interval = *environment.background_profiler_interval;
+    }
+    if (environment.background_profiler_thread_grouper) {
+        values.background_profiler_thread_grouper = *environment.background_profiler_thread_grouper;
+    }
+    if (environment.background_profiler_thread_dumper) {
+        values.background_profiler_thread_dumper = *environment.background_profiler_thread_dumper;
+    }
+    if (environment.disable_response_broadcast) {
+        values.disable_response_broadcast = *environment.disable_response_broadcast;
+    }
+}
+
+bool validateConfigValues(ConfigValues &values, std::string &error)
+{
+    if (!validHttpBaseUrl(values.viewer_url) || !validHttpBaseUrl(values.bytebin_url) ||
+        !validWebSocketAuthority(values.bytesocks_host)) {
+        error = "Invalid Spark network endpoint - using defaults";
+        return false;
+    }
+    if (values.background_profiler_interval < 1 ||
+        values.background_profiler_interval > KMaxBackgroundProfilerIntervalMs ||
+        values.background_profiler_interval > std::numeric_limits<int>::max()) {
+        error = "backgroundProfilerInterval must be between 1 and 1000 milliseconds - using defaults";
+        return false;
+    }
+    if (values.background_profiler_thread_grouper != "by-pool" &&
+        values.background_profiler_thread_grouper != "by-name" &&
+        values.background_profiler_thread_grouper != "as-one") {
+        error = "Invalid backgroundProfilerThreadGrouper - using defaults";
+        return false;
+    }
+    if (values.background_profiler_thread_dumper != "default" && values.background_profiler_thread_dumper != "all") {
+        error = "Invalid backgroundProfilerThreadDumper - using defaults";
+        return false;
+    }
+
+    if (values.viewer_url.back() != '/') {
+        values.viewer_url.push_back('/');
+    }
+    if (values.bytebin_url.back() != '/') {
+        values.bytebin_url.push_back('/');
+    }
+    return true;
+}
+
+ConfigValues currentConfigValues(const SparkConfig &config)
+{
+    return {.viewer_url = config.viewer_url,
+            .bytebin_url = config.bytebin_url,
+            .bytesocks_host = config.bytesocks_host,
+            .background_profiler_enabled = config.background_profiler_enabled,
+            .background_profiler_interval = config.background_profiler_interval,
+            .background_profiler_thread_grouper = config.background_profiler_thread_grouper,
+            .background_profiler_thread_dumper = config.background_profiler_thread_dumper,
+            .disable_response_broadcast = config.disable_response_broadcast};
+}
+
+void commitConfigValues(SparkConfig &config, ConfigValues values)
+{
+    config.viewer_url = std::move(values.viewer_url);
+    config.bytebin_url = std::move(values.bytebin_url);
+    config.bytesocks_host = std::move(values.bytesocks_host);
+    config.background_profiler_enabled = values.background_profiler_enabled;
+    config.background_profiler_interval = static_cast<int>(values.background_profiler_interval);
+    config.background_profiler_thread_grouper = std::move(values.background_profiler_thread_grouper);
+    config.background_profiler_thread_dumper = std::move(values.background_profiler_thread_dumper);
+    config.disable_response_broadcast = values.disable_response_broadcast;
+}
+
 }  // namespace
 
 SparkConfig::SparkConfig(std::filesystem::path file) : file_(std::move(file)) {}
@@ -122,19 +222,10 @@ bool SparkConfig::load()
 {
     last_error_.clear();
 
-    if (!std::filesystem::exists(file_)) {
+    std::string text;
+    if (!readStateFile(file_, KMaxConfigFileBytes, text, last_error_)) {
         return false;
     }
-
-    std::ifstream in(file_);
-    if (!in) {
-        last_error_ = "Unable to open config file for reading";
-        return false;
-    }
-
-    std::ostringstream ss;
-    ss << in.rdbuf();
-    std::string text = ss.str();
 
     toml::parse_result result;
     try {
@@ -145,16 +236,19 @@ bool SparkConfig::load()
         return false;
     }
 
-    auto viewer_url = result["viewerUrl"].value<std::string>().value_or(this->viewer_url);
-    auto bytebin_url = result["bytebinUrl"].value<std::string>().value_or(this->bytebin_url);
-    auto bytesocks_host = result["bytesocksHost"].value<std::string>().value_or(this->bytesocks_host);
-    auto background_enabled = result["backgroundProfiler"].value<bool>().value_or(background_profiler_enabled);
-    auto grouper =
-        result["backgroundProfilerThreadGrouper"].value<std::string>().value_or(background_profiler_thread_grouper);
-    auto dumper =
-        result["backgroundProfilerThreadDumper"].value<std::string>().value_or(background_profiler_thread_dumper);
-    auto broadcast = result["disableResponseBroadcast"].value<bool>().value_or(disable_response_broadcast);
-    auto interval = result["backgroundProfilerInterval"].value<std::int64_t>().value_or(background_profiler_interval);
+    ConfigValues values{
+        .viewer_url = result["viewerUrl"].value<std::string>().value_or(this->viewer_url),
+        .bytebin_url = result["bytebinUrl"].value<std::string>().value_or(this->bytebin_url),
+        .bytesocks_host = result["bytesocksHost"].value<std::string>().value_or(this->bytesocks_host),
+        .background_profiler_enabled = result["backgroundProfiler"].value<bool>().value_or(background_profiler_enabled),
+        .background_profiler_interval =
+            result["backgroundProfilerInterval"].value<std::int64_t>().value_or(background_profiler_interval),
+        .background_profiler_thread_grouper =
+            result["backgroundProfilerThreadGrouper"].value<std::string>().value_or(background_profiler_thread_grouper),
+        .background_profiler_thread_dumper =
+            result["backgroundProfilerThreadDumper"].value<std::string>().value_or(background_profiler_thread_dumper),
+        .disable_response_broadcast =
+            result["disableResponseBroadcast"].value<bool>().value_or(disable_response_broadcast)};
 
     const auto invalid_type = [&result](std::string_view key, const auto &tag) {
         using Value = std::remove_cvref_t<decltype(tag)>;
@@ -169,37 +263,11 @@ bool SparkConfig::load()
         last_error_ = "Invalid type for a spark configuration value - using defaults";
         return false;
     }
-    if (!validHttpBaseUrl(viewer_url) || !validHttpBaseUrl(bytebin_url) || !validWebSocketAuthority(bytesocks_host)) {
-        last_error_ = "Invalid Spark network endpoint - using defaults";
+    applyEnvironmentOverrides(values);
+    if (!validateConfigValues(values, last_error_)) {
         return false;
     }
-    if (interval < 1 || interval > KMaxBackgroundProfilerIntervalMs || interval > std::numeric_limits<int>::max()) {
-        last_error_ = "backgroundProfilerInterval must be between 1 and 1000 milliseconds - using defaults";
-        return false;
-    }
-    if (grouper != "by-pool" && grouper != "by-name" && grouper != "as-one") {
-        last_error_ = "Invalid backgroundProfilerThreadGrouper - using defaults";
-        return false;
-    }
-    if (dumper != "default" && dumper != "all") {
-        last_error_ = "Invalid backgroundProfilerThreadDumper - using defaults";
-        return false;
-    }
-
-    if (viewer_url.back() != '/') {
-        viewer_url.push_back('/');
-    }
-    if (bytebin_url.back() != '/') {
-        bytebin_url.push_back('/');
-    }
-    this->viewer_url = std::move(viewer_url);
-    this->bytebin_url = std::move(bytebin_url);
-    this->bytesocks_host = std::move(bytesocks_host);
-    background_profiler_enabled = background_enabled;
-    background_profiler_interval = static_cast<int>(interval);
-    background_profiler_thread_grouper = std::move(grouper);
-    background_profiler_thread_dumper = std::move(dumper);
-    disable_response_broadcast = broadcast;
+    commitConfigValues(*this, std::move(values));
 
     return true;
 }
@@ -212,7 +280,20 @@ bool SparkConfig::loadOrCreate()
         last_error_ = "Unable to inspect config file: " + error.message();
         return false;
     }
-    return exists ? load() : save();
+    if (exists) {
+        return load();
+    }
+    if (!save()) {
+        return false;
+    }
+
+    auto values = currentConfigValues(*this);
+    applyEnvironmentOverrides(values);
+    if (!validateConfigValues(values, last_error_)) {
+        return false;
+    }
+    commitConfigValues(*this, std::move(values));
+    return true;
 }
 
 void SparkConfig::writeTemplate(std::ostream &out) const
@@ -252,26 +333,8 @@ bool SparkConfig::save() const
     std::ostringstream ss;
     writeTemplate(ss);
 
-    std::error_code ec;
-    std::filesystem::create_directories(file_.parent_path(), ec);
-
-    std::filesystem::path tmp = file_;
-    tmp += ".tmp";
-    {
-        std::ofstream out(tmp, std::ios::binary);
-        if (!out) {
-            last_error_ = "Unable to open config file for writing";
-            return false;
-        }
-        out << ss.str();
-        out.close();
-    }
-    std::filesystem::rename(tmp, file_, ec);
-    if (ec) {
-        last_error_ = "Unable to rename config file: " + ec.message();
-        return false;
-    }
-    return true;
+    const std::string text = ss.str();
+    return writeStateFileAtomically(file_, text, last_error_);
 }
 
 }  // namespace spark

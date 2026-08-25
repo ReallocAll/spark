@@ -1,12 +1,15 @@
 #include "platform/endstone/adapters.h"
 
+#include <array>
 #include <atomic>
+#include <charconv>
 #include <chrono>
 #include <filesystem>
 #include <map>
 #include <memory>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "core/metadata/server_properties.h"
@@ -14,6 +17,7 @@
 #include "core/stats/ping_statistics.h"
 #include "core/stats/system_stats.h"
 #include "core/util/format.h"
+#include "core/util/monotonic_time.h"
 #include "core/util/world_region.h"
 #include "platform/endstone/native_plugin_attribution.h"
 
@@ -78,6 +82,85 @@ int floorDiv(int value, int divisor)
     return remainder < 0 ? quotient - 1 : quotient;
 }
 
+std::string formatGameRuleValue(const endstone::GameRuleValue &value)
+{
+    if (const auto *bool_value = std::get_if<bool>(&value)) {
+        return *bool_value ? "true" : "false";
+    }
+    if (const auto *int_value = std::get_if<int>(&value)) {
+        return std::to_string(*int_value);
+    }
+    const auto *float_value = std::get_if<float>(&value);
+    if (float_value == nullptr) {
+        return {};
+    }
+
+    char buffer[64];
+    const auto result = std::to_chars(buffer, buffer + sizeof(buffer), *float_value, std::chars_format::general);
+    if (result.ec != std::errc{}) {
+        return {};
+    }
+    return {buffer, result.ptr};
+}
+
+constexpr std::array KBooleanGameRules{
+    endstone::GameRule::CommandBlockOutput,
+    endstone::GameRule::CommandBlocksEnabled,
+    endstone::GameRule::DoDayLightCycle,
+    endstone::GameRule::DoEntityDrops,
+    endstone::GameRule::DoFireTick,
+    endstone::GameRule::DoImmediateRespawn,
+    endstone::GameRule::DoInsomnia,
+    endstone::GameRule::DoLimitedCrafting,
+    endstone::GameRule::DoMobLoot,
+    endstone::GameRule::DoMobSpawning,
+    endstone::GameRule::DoTileDrops,
+    endstone::GameRule::DoWeatherCycle,
+    endstone::GameRule::DrowningDamage,
+    endstone::GameRule::FallDamage,
+    endstone::GameRule::FireDamage,
+    endstone::GameRule::FreezeDamage,
+    endstone::GameRule::KeepInventory,
+    endstone::GameRule::LocatorBar,
+    endstone::GameRule::MobGriefing,
+    endstone::GameRule::NaturalRegeneration,
+    endstone::GameRule::ProjectilesCanBreakBlocks,
+    endstone::GameRule::Pvp,
+    endstone::GameRule::RecipesUnlock,
+    endstone::GameRule::RespawnBlocksExplode,
+    endstone::GameRule::SendCommandFeedback,
+    endstone::GameRule::ShowBorderEffect,
+    endstone::GameRule::ShowCoordinates,
+    endstone::GameRule::ShowDaysPlayed,
+    endstone::GameRule::ShowDeathMessages,
+    endstone::GameRule::ShowRecipeMessages,
+    endstone::GameRule::ShowTags,
+    endstone::GameRule::TntExplodes,
+    endstone::GameRule::TntExplosionDropDecay,
+};
+
+constexpr std::array KIntegerGameRules{
+    endstone::GameRule::FunctionCommandLimit,      endstone::GameRule::MaxCommandChainLength,
+    endstone::GameRule::PlayersSleepingPercentage, endstone::GameRule::PlayerWaypoints,
+    endstone::GameRule::RandomTickSpeed,           endstone::GameRule::SpawnRadius,
+};
+
+template <typename T, std::size_t N>
+void appendGameRules(WorldInfo &world, endstone::Level &level, const std::string &world_name,
+                     const std::array<endstone::GameRuleId<T>, N> &rules)
+{
+    for (const auto id : rules) {
+        if (!level.hasGameRule(id)) {
+            continue;
+        }
+
+        GameRuleInfo info;
+        info.name = std::string(id.getKey());
+        info.world_values[world_name] = formatGameRuleValue(endstone::GameRuleValue{level.getGameRule(id)});
+        world.game_rules.push_back(std::move(info));
+    }
+}
+
 }  // namespace
 
 void EndstoneMetadataProvider::gatherServerMetadata(ExportContext &ctx, std::int64_t now_ms)
@@ -134,58 +217,58 @@ std::vector<NativePluginSource> EndstoneMetadataProvider::nativePluginSources()
 void EndstoneMetadataProvider::gatherWorldMetadata(ExportContext &ctx)
 {
     ctx.world = WorldInfo{};
-    if (endstone::Level *level = server_.getLevel()) {
-        for (endstone::Dimension *dimension : level->getDimensions()) {
-            std::map<std::pair<int, int>, WorldChunk> chunks;
-            for (const auto &chunk : dimension->getLoadedChunks()) {
-                if (chunk) {
-                    int x = chunk->getX();
-                    int z = chunk->getZ();
-                    chunks.try_emplace({x, z}, WorldChunk{.x = x, .z = z});
-                }
-            }
-            if (chunks.empty()) {
+    endstone::Level &level = server_.getLevel();
+    for (const auto &dimension : level.getDimensions()) {
+        std::map<std::pair<int, int>, WorldChunk> chunks;
+        for (const auto &chunk : dimension->getLoadedChunks()) {
+            int x = chunk->getX();
+            int z = chunk->getZ();
+            chunks.try_emplace({x, z}, WorldChunk{.x = x, .z = z});
+        }
+        if (chunks.empty()) {
+            continue;
+        }
+
+        for (const auto &actor : dimension->getActors()) {
+            endstone::Location location = actor->getLocation();
+            int chunk_x = floorDiv(location.getBlockX(), 16);
+            int chunk_z = floorDiv(location.getBlockZ(), 16);
+            auto it = chunks.find({chunk_x, chunk_z});
+            if (it == chunks.end()) {
                 continue;
             }
-
-            for (endstone::Actor *actor : dimension->getActors()) {
-                if (!actor) {
-                    continue;
-                }
-                endstone::Location location = actor->getLocation();
-                int chunk_x = floorDiv(location.getBlockX(), 16);
-                int chunk_z = floorDiv(location.getBlockZ(), 16);
-                auto it = chunks.find({chunk_x, chunk_z});
-                if (it == chunks.end()) {
-                    continue;
-                }
-                it->second.total_entities++;
-                it->second.entity_counts[actor->getType()]++;
-            }
-
-            WorldEntry world;
-            world.name = dimension->getName();
-            auto regions = groupChunksIntoRegions(chunks);
-            for (const auto &region : regions) {
-                world.total_entities += region.total_entities;
-                for (const auto &chunk : region.chunks) {
-                    for (const auto &[type, count] : chunk.entity_counts) {
-                        ctx.world.entity_counts[type] += count;
-                    }
-                }
-                world.regions.push_back(region);
-            }
-            ctx.world.total_entities += world.total_entities;
-            ctx.world.worlds.push_back(std::move(world));
+            it->second.total_entities++;
+            it->second.entity_counts[std::string(actor->getType().getId())]++;
         }
-        ctx.world.present = !ctx.world.worlds.empty();
+
+        WorldEntry world;
+        world.name = std::string(dimension->getId());
+        auto regions = groupChunksIntoRegions(chunks);
+        for (const auto &region : regions) {
+            world.total_entities += region.total_entities;
+            for (const auto &chunk : region.chunks) {
+                for (const auto &[type, count] : chunk.entity_counts) {
+                    ctx.world.entity_counts[type] += count;
+                }
+            }
+            world.regions.push_back(region);
+        }
+        ctx.world.total_entities += world.total_entities;
+        ctx.world.worlds.push_back(std::move(world));
     }
+
+    const std::string world_name = level.getName();
+    appendGameRules(ctx.world, level, world_name, KBooleanGameRules);
+    appendGameRules(ctx.world, level, world_name, KIntegerGameRules);
+
+    ctx.world.present = !ctx.world.worlds.empty() || !ctx.world.game_rules.empty();
 }
 
 std::int64_t EndstoneMetadataProvider::serverUptimeSeconds()
 {
-    return std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now() - server_.getStartTime())
-        .count();
+    const auto start_ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(server_.getStartTime().time_since_epoch()).count();
+    return (monotonicUnixMillis() - start_ms) / 1000;
 }
 
 std::int64_t EndstoneMetadataProvider::playerCount()
@@ -216,14 +299,14 @@ void EndstoneNotifier::notify(const std::string &sender_name, const std::string 
 {
     plugin_.getLogger().info("{}", text);
     if (disable_broadcast_) {
-        auto *player = server_.getPlayer(sender_name);
+        auto player = server_.getPlayer(sender_name);
         if (player) {
             player->sendMessage(formatPlayerMessage(text));
         }
     }
     else {
-        for (auto *player : server_.getOnlinePlayers()) {
-            if ((player != nullptr) && player->hasPermission("endstone.command.spark")) {
+        for (const auto &player : server_.getOnlinePlayers()) {
+            if (player->getName() == sender_name || player->hasPermission("endstone.command.spark")) {
                 player->sendMessage(formatPlayerMessage(text));
             }
         }
@@ -236,88 +319,9 @@ std::map<std::string, int> EndstonePlayerPingProvider::poll()
 {
     std::map<std::string, int> result;
     for (const auto &player : server_.getOnlinePlayers()) {
-        if (player) {
-            result.emplace(player->getName(), static_cast<int>(player->getPing().count()));
-        }
+        result.emplace(player->getName(), static_cast<int>(player->getPing().count()));
     }
     return result;
-}
-
-// --- EndstoneWorldGaugeProvider ---
-
-namespace {
-
-constexpr std::int64_t KReconcileIntervalMs = 30000;
-
-std::int64_t steadyNowMs()
-{
-    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch())
-        .count();
-}
-
-}  // namespace
-
-void EndstoneWorldGaugeProvider::init()
-{
-    if (initialized_) {
-        return;
-    }
-    initialized_ = true;
-
-    plugin_.registerEvent<::endstone::ActorSpawnEvent>(
-        [this](::endstone::ActorSpawnEvent &event) {
-            if (event.getActor().asPlayer() == nullptr) {
-                entity_count_.fetch_add(1, std::memory_order_relaxed);
-            }
-        },
-        ::endstone::EventPriority::Monitor);
-
-    plugin_.registerEvent<::endstone::ActorRemoveEvent>(
-        [this](::endstone::ActorRemoveEvent &event) {
-            if (event.getActor().asPlayer() == nullptr) {
-                entity_count_.fetch_sub(1, std::memory_order_relaxed);
-            }
-        },
-        ::endstone::EventPriority::Monitor);
-
-    plugin_.registerEvent<::endstone::ChunkLoadEvent>(
-        [this](::endstone::ChunkLoadEvent &) { chunk_count_.fetch_add(1, std::memory_order_relaxed); },
-        ::endstone::EventPriority::Monitor);
-
-    plugin_.registerEvent<::endstone::ChunkUnloadEvent>(
-        [this](::endstone::ChunkUnloadEvent &) { chunk_count_.fetch_sub(1, std::memory_order_relaxed); },
-        ::endstone::EventPriority::Monitor);
-
-    reconcile();
-}
-
-std::pair<int, int> EndstoneWorldGaugeProvider::worldGauges()
-{
-    std::int64_t now = steadyNowMs();
-    if (now - last_reconcile_steady_ms_ >= KReconcileIntervalMs) {
-        reconcile();
-    }
-    return {entity_count_.load(std::memory_order_relaxed), chunk_count_.load(std::memory_order_relaxed)};
-}
-
-void EndstoneWorldGaugeProvider::reconcile()
-{
-    last_reconcile_steady_ms_ = steadyNowMs();
-
-    int entities = 0;
-    int chunks = 0;
-    if (::endstone::Level *level = server_.getLevel()) {
-        for (::endstone::Dimension *dimension : level->getDimensions()) {
-            for (::endstone::Actor *actor : dimension->getActors()) {
-                if (actor && actor->asPlayer() == nullptr) {
-                    ++entities;
-                }
-            }
-            chunks += static_cast<int>(dimension->getLoadedChunks().size());
-        }
-    }
-    entity_count_.store(entities, std::memory_order_relaxed);
-    chunk_count_.store(chunks, std::memory_order_relaxed);
 }
 
 }  // namespace spark::endstone_adapter

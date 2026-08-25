@@ -10,6 +10,7 @@
 #include "application/command/command_registry.h"
 #include "application/command/command_sender.h"
 #include "application/health/health_command.h"
+#include "application/monitoring/monitoring_schedule.h"
 #include "application/platform_capabilities.h"
 #include "application/profiler/profiler_service.h"
 #include "application/tick_monitor/tick_monitor_command.h"
@@ -43,6 +44,7 @@ public:
 
     // Lifecycle.
     void shutdown();
+    bool shutdown(std::string &error);
     void enable();
     bool shutdownProfilerBackend(std::string &error) { return profiler_.shutdownBackend(error); }
 
@@ -73,7 +75,7 @@ private:
     ActivityCommand activity_command_;
     TickMonitorCommand tick_monitor_;
     CommandRegistry registry_;
-    std::uint64_t tick_counter_ = 0;
+    MonitoringSchedule monitoring_schedule_;
 
     // Stall detection: server heartbeat updated every tick, watchdog runs
     // on its own thread and never calls Endstone APIs.

@@ -27,6 +27,8 @@ struct SessionConfig {
     bool creator_is_player = false;
     std::string comment;
     std::vector<std::string> thread_patterns;
+    bool has_window_adjustment = false;
+    std::int32_t window_adjustment_ms = 0;
 };
 
 // A parsed journal record.
@@ -60,6 +62,7 @@ struct MetadataSnapshot {
 // Result of reading a journal session.
 struct JournalReadResult {
     bool valid = false;  // at least the file header was parsed
+    std::uint16_t version = 0;
     std::uint64_t session_id = 0;
     std::uint64_t created_ns = 0;
     bool has_clean_end = false;
@@ -71,18 +74,40 @@ struct JournalReadResult {
     std::vector<JournalRecord> records;
     std::uint64_t corrupt_records = 0;    // CRC mismatches
     std::uint64_t truncated_records = 0;  // incomplete trailing records
+    std::uint64_t total_bytes = 0;
+    std::uint32_t segment_count = 0;
+    std::uint64_t record_count = 0;
+    bool fatal_error = false;
+    bool tail_truncated = false;
+    bool tail_corrupt = false;
+    bool limit_exceeded = false;
+    bool gap_detected = false;
+    bool unreadable_segment = false;
+    bool malformed_segment = false;
 };
 
-// Reads and validates recovery journal segments. Truncated records are dropped;
-// CRC mismatches terminate the current segment (indicates corruption or interrupted write).
+inline constexpr std::uint64_t kMaxJournalSegmentBytes = 32ULL * 1024 * 1024;
+inline constexpr std::uint64_t kMaxJournalBytes = 256ULL * 1024 * 1024;
+inline constexpr std::uint32_t kMaxJournalSegments = 4096;
+inline constexpr std::uint64_t kMaxJournalRecords = 2'000'000;
+
+struct JournalReaderLimits {
+    std::uint64_t segment_bytes = kMaxJournalSegmentBytes;
+    std::uint64_t total_bytes = kMaxJournalBytes;
+    std::uint32_t segments = kMaxJournalSegments;
+    std::uint64_t records = kMaxJournalRecords;
+};
+
+// Reads and validates recovery journal segments.
 class JournalReader {
 public:
     // Reads all segments in the given directory, ordered by segment number.
-    static JournalReadResult readSession(const std::filesystem::path &directory);
+    static JournalReadResult readSession(const std::filesystem::path &directory, JournalReaderLimits limits = {});
 
     // Reads a single segment file.  Exposed for testing.
     static bool readSegment(const std::filesystem::path &path, JournalReadResult &result,
-                            std::optional<std::uint32_t> expected_segment = std::nullopt);
+                            std::optional<std::uint32_t> expected_segment = std::nullopt,
+                            JournalReaderLimits limits = {});
 
     // Loads and validates the metadata snapshot sidecar.  Returns a snapshot
     // with valid=false if the file is absent, malformed, or fails CRC/session

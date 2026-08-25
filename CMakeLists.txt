@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.23)
+cmake_minimum_required(VERSION 3.29)
 project(spark VERSION 0.5.3 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -22,18 +22,13 @@ find_package(Threads REQUIRED)
 
 include(FetchContent)
 
-# --- x86-64 instruction decoder and Windows hook backend ---
+# --- x86-64 instruction decoder ---
 # funchook 1.1.3 is not available from Conan Center. Fetch the same upstream
 # version used by Endstone. Its small distorm dependency provides the strict
-# instruction-boundary decoder used by both native symbol guessers; Windows
-# additionally links funchook itself for allocation profiling.
+# instruction-boundary decoder used by both native symbol guessers.
 if (WIN32 OR (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64"))
     set(FUNCHOOK_BUILD_SHARED OFF CACHE BOOL "" FORCE)
-    if (WIN32)
-        set(FUNCHOOK_BUILD_STATIC ON CACHE BOOL "" FORCE)
-    else ()
-        set(FUNCHOOK_BUILD_STATIC OFF CACHE BOOL "" FORCE)
-    endif ()
+    set(FUNCHOOK_BUILD_STATIC OFF CACHE BOOL "" FORCE)
     set(FUNCHOOK_BUILD_TESTS OFF CACHE BOOL "" FORCE)
     set(FUNCHOOK_INSTALL OFF CACHE BOOL "" FORCE)
     set(FUNCHOOK_DISASM distorm CACHE STRING "" FORCE)
@@ -49,9 +44,13 @@ endif ()
 # Endstone's root CMake returns right after its include/ target when consumed as a
 # subproject, so this only pulls the headers, not the server. For local iteration,
 # pass -DFETCHCONTENT_SOURCE_DIR_ENDSTONE=<path> to reuse an existing checkout.
+set(ENDSTONE_SPARK_ENDSTONE_GIT_REPOSITORY "https://github.com/EndstoneMC/endstone.git" CACHE STRING
+        "Repository providing the Endstone public plugin API")
+set(ENDSTONE_SPARK_ENDSTONE_GIT_TAG "develop" CACHE STRING
+        "Git ref providing the Endstone public plugin API")
 FetchContent_Declare(endstone
-        GIT_REPOSITORY https://github.com/EndstoneMC/endstone.git
-        GIT_TAG v0.11)
+        GIT_REPOSITORY ${ENDSTONE_SPARK_ENDSTONE_GIT_REPOSITORY}
+        GIT_TAG ${ENDSTONE_SPARK_ENDSTONE_GIT_TAG})
 FetchContent_MakeAvailable(endstone)
 
 # PAPI is optional at runtime; only its public headers are fetched.
@@ -62,8 +61,7 @@ set(ENDSTONE_SPARK_PAPI_GIT_TAG "main" CACHE STRING
 FetchContent_Declare(endstone_papi_headers
         GIT_REPOSITORY ${ENDSTONE_SPARK_PAPI_GIT_REPOSITORY}
         GIT_TAG ${ENDSTONE_SPARK_PAPI_GIT_TAG}
-        GIT_SHALLOW TRUE
-        SOURCE_SUBDIR cmake/headers-only)
+        GIT_SHALLOW TRUE)
 FetchContent_MakeAvailable(endstone_papi_headers)
 add_library(spark_papi_headers INTERFACE)
 target_include_directories(spark_papi_headers INTERFACE "${endstone_papi_headers_SOURCE_DIR}/include")
@@ -73,11 +71,20 @@ if (WIN32)
     add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
 endif ()
 
+# --- shared profiling time primitives (no native or core dependencies) ---
+add_library(spark_profiling_time STATIC
+        src/core/util/monotonic_time.cpp
+        src/core/profiler/profiling_window.cpp)
+target_include_directories(spark_profiling_time PUBLIC src)
+set_target_properties(spark_profiling_time PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
 # --- native backend: sampler, symbol guesser, allocation hooks (no Endstone) ---
 add_library(spark_native STATIC
+        src/native/alloc/allocation_profile_aggregation.cpp
         src/native/alloc/allocation_thread_filter.cpp
         src/native/sampler/call_tree.cpp
         src/native/sampler/sampler.cpp
+        src/native/sampler/sampler_aggregation.cpp
         src/native/sampler/thread_selector.cpp
         src/native/sampler/thread_info.cpp
         src/native/symbol/symbol_guess_dwarf.cpp
@@ -89,8 +96,13 @@ if (WIN32)
     target_sources(spark_native PRIVATE
             src/native/symbol/dbghelp_manager.cpp
             src/native/symbol/symbol_guess_windows.cpp
+            src/native/symbol/symbol_guess_windows_support.cpp
+            src/native/symbol/symbol_guess_windows_core.cpp
+            src/native/symbol/symbol_guess_windows_rtti.cpp
+            src/native/symbol/symbol_guess_windows_strings.cpp
+            src/native/symbol/symbol_guess_windows_misc.cpp
             src/native/sampler/capture_windows.cpp
-            src/native/alloc/allocation_sampler_windows.cpp)
+            src/native/alloc/allocation_sampler_stub.cpp)
 elseif (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
     target_sources(spark_native PRIVATE
             src/native/sampler/capture_linux.cpp
@@ -102,7 +114,7 @@ else ()
             src/native/alloc/allocation_sampler_stub.cpp)
 endif ()
 target_include_directories(spark_native PUBLIC src)
-target_link_libraries(spark_native PUBLIC cpptrace::cpptrace concurrentqueue::concurrentqueue
+target_link_libraries(spark_native PUBLIC spark_profiling_time cpptrace::cpptrace concurrentqueue::concurrentqueue
         Threads::Threads)
 set_target_properties(spark_native PROPERTIES POSITION_INDEPENDENT_CODE ON)
 if (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
@@ -111,15 +123,18 @@ if (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Cl
 endif ()
 if (WIN32)
     target_include_directories(spark_native PRIVATE "${funchook_SOURCE_DIR}/distorm/include")
-    target_link_libraries(spark_native PUBLIC dbghelp psapi advapi32 funchook-static distorm)
+    target_link_libraries(spark_native PUBLIC dbghelp psapi advapi32 distorm)
 elseif (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
     target_include_directories(spark_native PRIVATE "${funchook_SOURCE_DIR}/distorm/include")
-    target_link_libraries(spark_native PUBLIC distorm)
+    target_link_libraries(spark_native PUBLIC distorm ${CMAKE_DL_LIBS})
+elseif (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_libraries(spark_native PUBLIC ${CMAKE_DL_LIBS})
 endif ()
 
 # --- platform-independent core: profiler, stats, proto, net (no Endstone) ---
 add_library(spark_core STATIC
         src/core/config/spark_config.cpp
+        src/core/config/spark_config_environment.cpp
         src/core/config/trusted_viewers.cpp
         src/core/recovery/journal_reader.cpp
         src/core/recovery/recovery_player.cpp
@@ -127,30 +142,46 @@ add_library(spark_core STATIC
         src/core/recovery/stall_watchdog.cpp
         src/core/util/base64.cpp
         src/core/util/format.cpp
+        src/core/util/state_file.cpp
         src/core/util/world_region.cpp
         src/core/metadata/server_properties.cpp
         src/core/activity/activity_log.cpp
         src/core/command/arguments.cpp
         src/core/profiler/profiler.cpp
+        src/core/profiler/native_attribution.cpp
+        src/core/profiler/profiler_export.cpp
+        src/core/profiler/profiler_recovery.cpp
         src/core/stats/executable_hash.cpp
+        src/core/stats/metrics_history.cpp
         src/core/stats/statistics_service.cpp
+        src/core/stats/statistics_service_queries.cpp
+        src/core/stats/statistics_profile_windows.cpp
         src/core/stats/ping_statistics.cpp
         src/core/stats/network_monitor.cpp
         src/core/stats/tick_monitor.cpp
         src/core/stats/system_stats.cpp
         src/core/ws/ws_proto.cpp
-        src/core/ws/viewer_socket.cpp
+        src/core/ws/viewer_socket_lifecycle.cpp
+        src/core/ws/viewer_socket_send.cpp
+        src/core/ws/viewer_socket_receive.cpp
+        src/proto/health_data.cpp
+        src/proto/metrics_proto.cpp
         src/proto/sampler_data.cpp
+        src/proto/statistics_proto.cpp
         src/net/gzip.cpp
         src/net/bytebin.cpp
         src/net/profile_file.cpp
         src/net/websocket.cpp)
 target_include_directories(spark_core PUBLIC src)
 if (WIN32)
-    target_sources(spark_core PRIVATE src/core/ws/crypto_cng.cpp)
+    target_sources(spark_core PRIVATE
+            src/core/stats/network_monitor_windows.cpp
+            src/core/ws/crypto_cng.cpp)
     target_link_libraries(spark_core PUBLIC spark_native ZLIB::ZLIB CURL::libcurl tomlplusplus::tomlplusplus bcrypt)
 else ()
-    target_sources(spark_core PRIVATE src/core/ws/crypto.cpp)
+    target_sources(spark_core PRIVATE
+            src/core/stats/network_monitor_linux.cpp
+            src/core/ws/crypto.cpp)
     target_link_libraries(spark_core PUBLIC spark_native ZLIB::ZLIB CURL::libcurl tomlplusplus::tomlplusplus OpenSSL::Crypto)
 endif ()
 if (WIN32)
@@ -166,10 +197,24 @@ endif ()
 add_library(spark_application STATIC
         src/application/activity/activity_command.cpp
         src/application/command/command_registry.cpp
+        src/application/command/profiler_action_resolver.cpp
         src/application/health/health_command.cpp
+        src/application/health/health_command_report.cpp
+        src/application/health/health_report.cpp
+        src/application/monitoring/monitoring_schedule.cpp
+        src/application/health/health_dashboard.cpp
+        src/application/health/health_dashboard_worker.cpp
+        src/application/health/health_dashboard_connection.cpp
         src/application/placeholder/spark_placeholder_resolver.cpp
         src/application/profiler/profile_exporter.cpp
+        src/application/profiler/live_statistics_payload.cpp
+        src/application/profiler/live_viewer_schedule.cpp
+        src/application/profiler/profiler_open_orchestrator.cpp
         src/application/profiler/profiler_service.cpp
+        src/application/profiler/profiler_service_commands.cpp
+        src/application/profiler/profiler_start_options.cpp
+        src/application/profiler/profiler_timeout.cpp
+        src/application/profiler/viewer_update_worker.cpp
         src/application/spark_application.cpp
         src/application/tick_monitor/tick_monitor_command.cpp)
 target_include_directories(spark_application PUBLIC src)
@@ -191,6 +236,7 @@ endif ()
 # --- the Endstone plugin (links its application layer + Endstone adapters) ---
 endstone_add_plugin(spark
         src/platform/endstone/adapters.cpp
+        src/platform/endstone/world_gauge_provider.cpp
         src/platform/endstone/native_plugin_attribution.cpp
         src/plugin.cpp)
 target_include_directories(spark PRIVATE src)

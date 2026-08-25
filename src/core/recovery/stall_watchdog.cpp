@@ -71,18 +71,26 @@ void StallWatchdog::loop()
         if (elapsed >= stall_threshold_ns_) {
             State expected = State::Healthy;
             if (state_.compare_exchange_strong(expected, State::Stalled, std::memory_order_acq_rel)) {
-                std::scoped_lock lock(callback_mutex_);
-                if (callback_) {
-                    callback_(true);
+                StallCallback callback;
+                {
+                    std::scoped_lock lock(callback_mutex_);
+                    callback = callback_;
+                }
+                if (callback) {
+                    callback(true);
                 }
             }
         }
         else {
             State expected = State::Stalled;
             if (state_.compare_exchange_strong(expected, State::Healthy, std::memory_order_acq_rel)) {
-                std::scoped_lock lock(callback_mutex_);
-                if (callback_) {
-                    callback_(false);
+                StallCallback callback;
+                {
+                    std::scoped_lock lock(callback_mutex_);
+                    callback = callback_;
+                }
+                if (callback) {
+                    callback(false);
                 }
             }
         }

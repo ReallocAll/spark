@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <deque>
+#include <limits>
 #include <map>
 #include <unordered_map>
 #include <utility>
@@ -17,6 +18,21 @@ std::uint64_t packCoord(int x, int z)
 {
     return (static_cast<std::uint64_t>(static_cast<std::uint32_t>(z)) << 32) |
            static_cast<std::uint64_t>(static_cast<std::uint32_t>(x));
+}
+
+bool offsetCoordinate(int value, int delta, int &result)
+{
+    const std::int64_t candidate = static_cast<std::int64_t>(value) + delta;
+    if (candidate < std::numeric_limits<int>::min() || candidate > std::numeric_limits<int>::max()) {
+        return false;
+    }
+    result = static_cast<int>(candidate);
+    return true;
+}
+
+int saturatingEntitySum(int left, int right)
+{
+    return right > std::numeric_limits<int>::max() - left ? std::numeric_limits<int>::max() : left + right;
 }
 
 }  // namespace
@@ -63,13 +79,18 @@ std::vector<WorldRegion> groupChunksIntoRegions(const std::map<std::pair<int, in
                     if (dx == 0 && dz == 0) {
                         continue;
                     }
-                    std::uint64_t neighbor_key = packCoord(cx + dx, cz + dz);
+                    int neighbor_x = 0;
+                    int neighbor_z = 0;
+                    if (!offsetCoordinate(cx, dx, neighbor_x) || !offsetCoordinate(cz, dz, neighbor_z)) {
+                        continue;
+                    }
+                    std::uint64_t neighbor_key = packCoord(neighbor_x, neighbor_z);
                     auto it = chunk_map.find(neighbor_key);
                     if (it == chunk_map.end() || visited[neighbor_key]) {
                         continue;
                     }
                     visited[neighbor_key] = true;
-                    region.total_entities += it->second->total_entities;
+                    region.total_entities = saturatingEntitySum(region.total_entities, it->second->total_entities);
                     region.chunks.push_back(*it->second);
                     queue.push_back(it->second);
                 }

@@ -2,6 +2,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <sstream>
 #include <string>
 
 #include "core/config/trusted_viewers.h"
@@ -122,13 +123,16 @@ void test_add_and_save()
     tv.add("key2");
     assert(tv.save());
     assert(std::filesystem::exists(path));
+    tv.add("key3");
+    assert(tv.save());
 
     // Reload and verify.
     TrustedViewersState tv2(path);
     assert(tv2.load());
-    assert(tv2.keys().size() == 2);
+    assert(tv2.keys().size() == 3);
     assert(tv2.keys()[0] == "key1");
     assert(tv2.keys()[1] == "key2");
+    assert(tv2.keys()[2] == "key3");
 
     std::printf("  [PASS] add and save\n");
 }
@@ -170,6 +174,61 @@ void test_save_pretty_format()
     std::printf("  [PASS] save pretty format\n");
 }
 
+void test_bounded_trailing_and_collection_input()
+{
+    auto dir = tempDir();
+    auto path = dir / "bounded.json";
+
+    writeFile(path, R"(["key"] trailing)");
+    TrustedViewersState trailing(path);
+    assert(!trailing.load());
+    assert(!trailing.lastError().empty());
+
+    writeFile(path, std::string(4U * 1024U * 1024U + 1U, 'x'));
+    TrustedViewersState oversized(path);
+    assert(!oversized.load());
+    assert(!oversized.lastError().empty());
+
+    std::ostringstream keys;
+    keys << "[";
+    for (int i = 0; i < 1025; ++i) {
+        if (i != 0) {
+            keys << ",";
+        }
+        keys << "\"key" << i << "\"";
+    }
+    keys << "]";
+    writeFile(path, keys.str());
+    TrustedViewersState capped(path);
+    assert(capped.load());
+    assert(capped.keys().size() == 1024);
+
+    writeFile(path, "[\"" + std::string(16U * 1024U + 1U, 'a') + "\"]");
+    TrustedViewersState long_key(path);
+    assert(!long_key.load());
+
+    std::printf("  [PASS] bounded, trailing, and collection input\n");
+}
+
+void test_transactional_add_and_save_rolls_back()
+{
+    const auto dir = tempDir();
+    const auto parent = dir / "not-a-directory";
+    const auto path = parent / "trusted-viewers.json";
+    std::filesystem::remove_all(parent);
+    writeFile(parent, "occupied");
+
+    TrustedViewersState tv(path);
+    assert(!tv.addAndSave("key"));
+    assert(tv.keys().empty());
+    assert(!tv.contains("key"));
+    assert(!tv.lastError().empty());
+    assert(!tv.addAndSave(""));
+
+    std::filesystem::remove(parent);
+    std::printf("  [PASS] transactional add and save rollback\n");
+}
+
 }  // namespace
 
 int main()
@@ -184,6 +243,8 @@ int main()
     test_add_and_save();
     test_add_duplicate();
     test_save_pretty_format();
+    test_bounded_trailing_and_collection_input();
+    test_transactional_add_and_save_rolls_back();
     std::printf("All TrustedViewersState tests passed!\n");
     return 0;
 }

@@ -5,6 +5,8 @@
 
 namespace spark {
 
+// NOLINTBEGIN(readability-convert-member-functions-to-static)
+
 struct AllocationSampler::Impl {
     CallTree tree;
     std::map<std::uint64_t, ThreadCallTree> thread_trees;
@@ -19,7 +21,11 @@ AllocationSampler::~AllocationSampler() = default;
 
 bool AllocationSampler::start(const AllocationSamplerConfig &, std::string &error)
 {
+#ifdef _WIN32
+    error = "Windows allocation profiling is temporarily disabled because safe allocator entry patching is unavailable";
+#else
     error = "native allocation profiling is supported only on Windows x64 and Linux x86-64";
+#endif
     return false;
 }
 
@@ -28,6 +34,8 @@ bool AllocationSampler::stop(std::string &error)
     error.clear();
     return true;
 }
+
+void AllocationSampler::requestStop() noexcept {}
 
 bool AllocationSampler::shutdown(std::string &error)
 {
@@ -133,7 +141,7 @@ std::uint64_t AllocationSampler::droppedTickEvents() const
 {
     return 0;
 }
-std::uint64_t AllocationSampler::tickEventCapacity() const
+std::uint64_t AllocationSampler::tickEventCapacity()
 {
     return 0;
 }
@@ -141,7 +149,7 @@ std::uint64_t AllocationSampler::eventQueueHighWaterMark() const
 {
     return 0;
 }
-std::uint64_t AllocationSampler::eventQueueCapacity() const
+std::uint64_t AllocationSampler::eventQueueCapacity()
 {
     return 0;
 }
@@ -165,7 +173,7 @@ std::uint64_t AllocationSampler::peakLiveSamples() const
 {
     return 0;
 }
-std::uint64_t AllocationSampler::liveIndexCapacity() const
+std::uint64_t AllocationSampler::liveIndexCapacity()
 {
     return 0;
 }
@@ -173,7 +181,7 @@ std::uint64_t AllocationSampler::sampledThreadCount() const
 {
     return 0;
 }
-std::uint64_t AllocationSampler::threadRootCapacity() const
+std::uint64_t AllocationSampler::threadRootCapacity()
 {
     return 0;
 }
@@ -201,13 +209,65 @@ std::uint64_t AllocationSampler::moduleRegistryCount() const
 {
     return 0;
 }
-std::uint64_t AllocationSampler::moduleRegistryCapacity() const
+std::uint64_t AllocationSampler::moduleRegistryCapacity()
 {
     return 0;
 }
-std::uint64_t AllocationSampler::profileNodeCapacity() const
+std::uint64_t AllocationSampler::profileNodeCapacity()
 {
     return 0;
+}
+std::uint64_t AllocationSampler::profileTimeEntryCapacity()
+{
+    return 0;
+}
+std::uint64_t AllocationSampler::profileStorageSampleDrops() const
+{
+    return 0;
+}
+bool AllocationSampler::profileStorageExhausted() const
+{
+    return false;
+}
+std::uint64_t AllocationSampler::pendingSampleCapacity()
+{
+    return 0;
+}
+std::uint64_t AllocationSampler::pendingSampleDrops() const
+{
+    return 0;
+}
+std::uint64_t AllocationSampler::pendingCapacityDrops() const
+{
+    return 0;
+}
+std::uint64_t AllocationSampler::pendingStaleDrops() const
+{
+    return 0;
+}
+std::uint64_t AllocationSampler::pendingFinalDrops() const
+{
+    return 0;
+}
+std::uint64_t AllocationSampler::moduleOverflowFrames() const
+{
+    return 0;
+}
+std::uint64_t AllocationSampler::retainedHistoryWindows() const
+{
+    return 0;
+}
+std::uint64_t AllocationSampler::historySamplesPruned() const
+{
+    return 0;
+}
+std::uint64_t AllocationSampler::historyBytesPruned() const
+{
+    return 0;
+}
+bool AllocationSampler::historyTruncated() const
+{
+    return false;
 }
 bool AllocationSampler::dataIncomplete() const
 {
@@ -222,6 +282,10 @@ std::uint64_t AllocationSampler::maximumLifetimeMs() const
     return 0;
 }
 std::uint64_t AllocationSampler::lifecycleDropped() const
+{
+    return 0;
+}
+std::uint64_t AllocationSampler::contentionDropped() const
 {
     return 0;
 }
@@ -259,5 +323,7 @@ std::size_t AllocationSampler::hookTargetCount() const
 {
     return 0;
 }
+
+// NOLINTEND(readability-convert-member-functions-to-static)
 
 }  // namespace spark

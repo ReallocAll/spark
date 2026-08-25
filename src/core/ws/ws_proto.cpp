@@ -13,6 +13,7 @@ namespace {
 constexpr int KFieldServerPong = 1;
 constexpr int KFieldServerConnectResponse = 2;
 constexpr int KFieldServerUpdateSampler = 3;
+constexpr int KFieldServerUpdateStatistics = 4;
 constexpr int KFieldClientPing = 10;
 constexpr int KFieldClientConnect = 11;
 
@@ -60,6 +61,10 @@ std::string encodeSocketChannelInfo(const SocketChannelInfo &info)
 
 bool decodeRawPacket(std::string_view base64_data, WsIncomingPacket &out)
 {
+    out = {};
+    if (base64_data.empty() || base64_data.size() > kMaxIncomingWsPacketBytes) {
+        return false;
+    }
     auto raw_bytes = base64Decode(base64_data);
     if (raw_bytes.empty()) {
         return false;
@@ -99,7 +104,7 @@ bool decodeRawPacket(std::string_view base64_data, WsIncomingPacket &out)
         }
     }
 
-    if (version != Crypto::kVersion) {
+    if (!raw.valid() || version != Crypto::kVersion) {
         return false;
     }
     if (message.empty()) {
@@ -135,6 +140,9 @@ bool decodeRawPacket(std::string_view base64_data, WsIncomingPacket &out)
                     sub.skip(wire);
                 }
             }
+            if (!sub.valid()) {
+                return false;
+            }
         }
         else if (field == KFieldClientConnect) {
             out.type = WsPacketType::ClientConnect;
@@ -150,13 +158,17 @@ bool decodeRawPacket(std::string_view base64_data, WsIncomingPacket &out)
                     sub.skip(wire);
                 }
             }
+            if (!sub.valid()) {
+                return false;
+            }
         }
         else {
             wrapper.skip(wire);
         }
     }
 
-    return out.type != WsPacketType::Unknown;
+    return wrapper.valid() && out.type != WsPacketType::Unknown &&
+           (out.type != WsPacketType::ClientConnect || !out.public_key.empty());
 }
 
 std::string encodeServerPong(bool ok, std::int32_t data, const std::vector<std::uint8_t> &private_key_pkcs8)
@@ -217,6 +229,24 @@ std::string encodeServerUpdateSamplerData(const std::string &payload_id,
     ProtoWriter ww(wrapper);
     ww.message(KFieldServerUpdateSampler, update);
 
+    return wrapAndEncode(wrapper, private_key_pkcs8);
+}
+
+std::string encodeServerUpdateStatistics(const std::string &platform, const std::string &system,
+                                         const std::string &metrics, const std::vector<std::uint8_t> &private_key_pkcs8)
+{
+    // ServerUpdateStatistics { PlatformStatistics platform = 1;
+    // SystemStatistics system = 2; Metrics metrics = 3; }
+    std::string update;
+    ProtoWriter wu(update);
+    wu.message(1, platform);
+    wu.message(2, system);
+    wu.message(3, metrics);
+
+    // PacketWrapper { ServerUpdateStatistics server_update_statistics = 4; }
+    std::string wrapper;
+    ProtoWriter ww(wrapper);
+    ww.message(KFieldServerUpdateStatistics, update);
     return wrapAndEncode(wrapper, private_key_pkcs8);
 }
 
