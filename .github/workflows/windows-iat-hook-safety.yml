@@ -5,6 +5,8 @@ on:
     paths:
       - "src/native/alloc/windows_iat_hooks.*"
       - "src/native/alloc/windows_iat_hooks_windows.cpp"
+      - "src/native/alloc/windows_callback_gate.h"
+      - "tests/native/alloc/windows_callback_gate_test.cpp"
       - "tests/native/alloc/windows_iat_hooks_test.cpp"
       - "tests/native/alloc/windows_iat_native_test.cpp"
       - "tests/native/alloc/windows_iat_provider.cpp"
@@ -28,8 +30,16 @@ jobs:
           src/native/alloc/windows_iat_hooks.cpp
           tests/native/alloc/windows_iat_hooks_test.cpp
           -o windows_iat_hooks_test
+      - name: Compile callback lifetime gate test
+        run: >-
+          c++ -std=c++20 -Wall -Wextra -Werror -pedantic -pthread
+          -Isrc
+          tests/native/alloc/windows_callback_gate_test.cpp
+          -o windows_callback_gate_test
       - name: Run deterministic lifecycle test
         run: ./windows_iat_hooks_test
+      - name: Run callback lifetime gate test
+        run: ./windows_callback_gate_test
 
   deterministic-windows:
     name: Deterministic + native PE IAT lifecycle (Windows)
@@ -51,6 +61,11 @@ jobs:
             /Fe:windows_iat_hooks_test.exe /link Psapi.lib
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+          & $clang /nologo /std:c++20 /EHsc /W4 /WX /I src `
+            tests/native/alloc/windows_callback_gate_test.cpp `
+            /Fe:windows_callback_gate_test.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
           & $clang /nologo /std:c++20 /EHsc /W4 /WX /LD `
             tests/native/alloc/windows_iat_provider.cpp `
             /Fe:windows_iat_provider.dll /link /IMPLIB:windows_iat_provider.lib
@@ -70,6 +85,9 @@ jobs:
       - name: Run deterministic lifecycle test
         shell: pwsh
         run: .\windows_iat_hooks_test.exe
+      - name: Run callback lifetime gate test
+        shell: pwsh
+        run: .\windows_callback_gate_test.exe
       - name: Run native PE load/unload lifecycle test
         shell: pwsh
         run: .\windows_iat_native_test.exe
