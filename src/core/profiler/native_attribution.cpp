@@ -86,10 +86,7 @@ bool isUnresolvedMethod(std::string_view method_name) noexcept
 #if defined(__linux__) && defined(__x86_64__)
 
 constexpr std::size_t KMaxDiscoveredHookTargets = 32;
-constexpr std::array KAllocatorImports{
-    std::string_view("malloc"), std::string_view("calloc"), std::string_view("realloc"), std::string_view("free"),
-    std::string_view("reallocarray"), std::string_view("aligned_alloc"), std::string_view("posix_memalign"),
-};
+constexpr std::size_t KAllocatorImportCount = 7;
 
 struct LinuxDiscoveryContext {
     std::uintptr_t self_base = 0;
@@ -104,6 +101,14 @@ struct LinuxImageView {
     std::uintptr_t load_end = 0;
     const ElfW(Phdr) *headers = nullptr;
     std::size_t header_count = 0;
+};
+
+struct LinuxRelocationView {
+    const LinuxImageView &image;
+    const ElfW(Sym) *symbols;
+    const char *strings;
+    std::size_t string_size;
+    LinuxDiscoveryContext &context;
 };
 
 bool populateImageView(const dl_phdr_info &info, LinuxImageView &image) noexcept
@@ -141,7 +146,25 @@ bool supportedRelocation(unsigned type) noexcept
 
 bool allocatorImport(std::string_view name) noexcept
 {
-    return std::ranges::find(KAllocatorImports, name) != KAllocatorImports.end();
+    if (name == "malloc") {
+        return true;
+    }
+    if (name == "calloc") {
+        return true;
+    }
+    if (name == "realloc") {
+        return true;
+    }
+    if (name == "free") {
+        return true;
+    }
+    if (name == "reallocarray") {
+        return true;
+    }
+    if (name == "aligned_alloc") {
+        return true;
+    }
+    return name == "posix_memalign";
 }
 
 int findSelfExecutableRange(dl_phdr_info *info, std::size_t, void *opaque)
@@ -165,10 +188,13 @@ int findSelfExecutableRange(dl_phdr_info *info, std::size_t, void *opaque)
 }
 
 template <typename Relocation>
-void visitRelocations(const Relocation *entries, std::size_t bytes, const LinuxImageView &image,
-                      const ElfW(Sym) *symbols, const char *strings, std::size_t string_size,
-                      LinuxDiscoveryContext &context)
+void visitRelocations(const Relocation *entries, std::size_t bytes, const LinuxRelocationView &view)
 {
+    const LinuxImageView &image = view.image;
+    const ElfW(Sym) *symbols = view.symbols;
+    const char *strings = view.strings;
+    const std::size_t string_size = view.string_size;
+    LinuxDiscoveryContext &context = view.context;
     const auto entries_address = reinterpret_cast<std::uintptr_t>(entries);
     if (entries == nullptr || bytes % sizeof(Relocation) != 0 || !contains(image, entries_address, bytes)) {
         return;
@@ -252,8 +278,8 @@ int collectHookTargets(dl_phdr_info *info, std::size_t, void *opaque)
     std::size_t jmprel_size = 0;
     ElfW(Sword) plt_type = DT_RELA;
     bool dynamic_valid = false;
-    const std::size_t max_dynamic =
-        (image.load_end - reinterpret_cast<std::uintptr_t>(dynamic)) / sizeof(ElfW(Dyn));
+    const auto dynamic_address = reinterpret_cast<std::uintptr_t>(dynamic);
+    const std::size_t max_dynamic = (image.load_end - dynamic_address) / sizeof(ElfW(Dyn));
     for (std::size_t i = 0; i < max_dynamic; ++i) {
         const ElfW(Dyn) &entry = dynamic[i];
         if (entry.d_tag == DT_NULL) {
@@ -318,15 +344,14 @@ int collectHookTargets(dl_phdr_info *info, std::size_t, void *opaque)
         return 0;
     }
 
-    visitRelocations(rel, rel_size, image, symbols, strings, string_size, context);
-    visitRelocations(rela, rela_size, image, symbols, strings, string_size, context);
+    const LinuxRelocationView relocation_view{image, symbols, strings, string_size, context};
+    visitRelocations(rel, rel_size, relocation_view);
+    visitRelocations(rela, rela_size, relocation_view);
     if (plt_type == DT_REL) {
-        visitRelocations(static_cast<const ElfW(Rel) *>(jmprel), jmprel_size, image, symbols, strings, string_size,
-                         context);
+        visitRelocations(static_cast<const ElfW(Rel) *>(jmprel), jmprel_size, relocation_view);
     }
     else if (plt_type == DT_RELA) {
-        visitRelocations(static_cast<const ElfW(Rela) *>(jmprel), jmprel_size, image, symbols, strings, string_size,
-                         context);
+        visitRelocations(static_cast<const ElfW(Rela) *>(jmprel), jmprel_size, relocation_view);
     }
     return context.targets.size() == KMaxDiscoveredHookTargets ? 1 : 0;
 }
@@ -427,7 +452,7 @@ std::vector<NativeInstrumentationRange> discoverAllocationInstrumentationRanges(
         context.self_exec_end <= context.self_exec_begin) {
         return {};
     }
-    context.targets.reserve(KAllocatorImports.size());
+    context.targets.reserve(KAllocatorImportCount);
     ::dl_iterate_phdr(collectHookTargets, &context);
     if (context.targets.empty()) {
         return {};
