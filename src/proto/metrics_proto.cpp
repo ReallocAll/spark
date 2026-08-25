@@ -106,7 +106,7 @@ std::string buildWorldSeries(const std::vector<MetricsWorldInfoSample> &samples)
         if (sample.entities != 0) {
             values_writer.int32(2, sample.entities);
         }
-        if (sample.tile_entities != 0) {
+        if (sample.tile_entities_present) {
             values_writer.int32(3, sample.tile_entities);
         }
         if (sample.chunks != 0) {
