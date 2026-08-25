@@ -3,6 +3,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <string>
+#include <thread>
+#include <vector>
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -72,6 +74,79 @@ bool exerciseConsumer(HMODULE consumer, std::uint64_t expected_increment)
     return require(after == before + expected_increment, "unexpected hook invocation count");
 }
 
+bool concurrentInstallUninstallStress(spark::WindowsIatHooks &hooks, HMODULE consumer, std::string &error)
+{
+    constexpr int KWorkers = 8;
+    constexpr int KCycles = 1000;
+
+    ConsumerAllocFn allocate = function<ConsumerAllocFn>(consumer, "sparkIatConsumerAlloc");
+    ConsumerFreeFn release = function<ConsumerFreeFn>(consumer, "sparkIatConsumerFree");
+    if (!require(allocate != nullptr && release != nullptr, "stress consumer exports are unavailable")) {
+        return false;
+    }
+
+    std::atomic<bool> running{true};
+    std::atomic<std::uint64_t> successful_allocations{0};
+    std::atomic<std::uint64_t> failed_allocations{0};
+    std::vector<std::thread> workers;
+    workers.reserve(KWorkers);
+    for (int index = 0; index < KWorkers; ++index) {
+        workers.emplace_back([&] {
+            while (running.load(std::memory_order_acquire)) {
+                void *memory = allocate(32 + static_cast<std::size_t>(index));
+                if (memory == nullptr) {
+                    failed_allocations.fetch_add(1, std::memory_order_relaxed);
+                    continue;
+                }
+                release(memory);
+                successful_allocations.fetch_add(1, std::memory_order_relaxed);
+            }
+        });
+    }
+
+    bool ok = true;
+    for (int cycle = 0; cycle < KCycles; ++cycle) {
+        if (!hooks.uninstall(error) || hooks.installed() || hooks.unsafeState()) {
+            ok = false;
+            break;
+        }
+        if (!hooks.install(error) || !hooks.installed() || hooks.unsafeState()) {
+            ok = false;
+            break;
+        }
+    }
+
+    running.store(false, std::memory_order_release);
+    for (auto &worker : workers) {
+        worker.join();
+    }
+
+    return require(ok, error.empty() ? "concurrent install/uninstall stress failed" : error.c_str()) &&
+           require(failed_allocations.load(std::memory_order_relaxed) == 0,
+                   "allocator callback failed during install/uninstall stress") &&
+           require(successful_allocations.load(std::memory_order_relaxed) > 0,
+                   "allocator workers made no progress during install/uninstall stress");
+}
+
+bool moduleReloadStress(spark::WindowsIatHooks &hooks, HMODULE &consumer, std::string &error)
+{
+    constexpr int KCycles = 500;
+    for (int cycle = 0; cycle < KCycles; ++cycle) {
+        if (!require(::FreeLibrary(consumer) != FALSE, "consumer FreeLibrary failed during reload stress")) {
+            consumer = nullptr;
+            return false;
+        }
+        consumer = load(L".\\windows_iat_consumer.dll");
+        if (consumer == nullptr ||
+            !require(hooks.refresh(error), error.empty() ? "refresh during reload stress failed" : error.c_str()) ||
+            !require(hooks.activeSlotCount() == 1, "reload stress did not converge to one owned slot") ||
+            !exerciseConsumer(consumer, 1)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 }  // namespace
 
 int main()
@@ -107,7 +182,7 @@ int main()
     if (!require(hooks.configure({target}, error), "configure failed") ||
         !require(hooks.install(error), error.empty() ? "install failed" : error.c_str()) ||
         !require(hooks.activeSlotCount() == 1, "fixture should own exactly one import slot") ||
-        !exerciseConsumer(consumer, 1)) {
+        !exerciseConsumer(consumer, 1) || !concurrentInstallUninstallStress(hooks, consumer, error)) {
         std::string ignored;
         (void)hooks.uninstall(ignored);
         ::FreeLibrary(consumer);
@@ -115,15 +190,11 @@ int main()
         return 1;
     }
 
-    // Unload and reload the consumer while the old slot is still registered.
-    // refresh() must treat the old mapping as stale (or detached at the same
-    // reused base), discover the new import slot, and never dereference freed memory.
-    ::FreeLibrary(consumer);
-    consumer = load(L".\\windows_iat_consumer.dll");
-    if (consumer == nullptr ||
-        !require(hooks.refresh(error), error.empty() ? "refresh after reload failed" : error.c_str()) ||
-        !require(hooks.activeSlotCount() == 1, "reload should converge to one owned slot") ||
-        !exerciseConsumer(consumer, 1)) {
+    // Repeatedly unload and reload the consumer while the old slot is still
+    // registered. refresh() must treat each old mapping as stale (including
+    // same-base address reuse), discover the new import slot, and never
+    // dereference freed memory.
+    if (!moduleReloadStress(hooks, consumer, error)) {
         std::string ignored;
         (void)hooks.uninstall(ignored);
         if (consumer != nullptr) {
