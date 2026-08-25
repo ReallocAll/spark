@@ -411,7 +411,7 @@ void HealthDashboard::run() noexcept
                 bool upload_called = false;
                 try {
                     const std::string url = connection->open(
-                        [&](CancellationToken) {
+                        [&](const CancellationToken &) {
                             if (work.cancellation.stopRequested()) {
                                 return UploadResult{.error = "health dashboard upload cancelled"};
                             }
