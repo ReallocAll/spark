@@ -59,6 +59,7 @@ private:
         std::uintptr_t module_base = 0;
         std::string module_name;
         bool main_executable = false;
+        bool lazy_plt = false;
     };
 
     struct Page {

@@ -506,8 +506,10 @@ bool ElfImportHooks::scan(std::string &error)
                             original = previous->original;
                         }
                     }
-                    next_targets.push_back(
-                        {slot, original, spec.replacement, spec_index, image.base, image.name, image.main_executable});
+                    const bool lazy_plt =
+                        type == R_X86_64_JUMP_SLOT && contains(image, reinterpret_cast<std::uintptr_t>(original));
+                    next_targets.push_back({slot, original, spec.replacement, spec_index, image.base, image.name,
+                                            image.main_executable, lazy_plt});
                 }
             }
         };
@@ -667,7 +669,7 @@ bool ElfImportHooks::patch(bool replacements, std::string &error)
     std::vector<const Target *> updates;
     updates.reserve(targets_.size());
     std::vector<std::pair<std::uintptr_t, std::string_view>> hooked;
-    for (const Target &target : targets_) {
+    for (Target &target : targets_) {
         auto image = std::ranges::find_if(images, [&target](const Image &candidate) {
             return candidate.pinned && candidate.base == target.module_base && candidate.name == target.module_name &&
                    candidate.main_executable == target.main_executable;
@@ -685,8 +687,19 @@ bool ElfImportHooks::patch(bool replacements, std::string &error)
                 continue;
             }
             if (current != target.original) {
-                error = "ELF import slot changed while applying hooks: " + target.module_name;
-                return false;
+                const bool lazy_resolved = target.lazy_plt &&
+                                           contains(*image, reinterpret_cast<std::uintptr_t>(target.original)) &&
+                                           !contains(*image, reinterpret_cast<std::uintptr_t>(current));
+                if (!lazy_resolved) {
+                    error = "ELF import slot changed while applying hooks: " + target.module_name;
+                    return false;
+                }
+                // A JUMP_SLOT captured before lazy binding may legitimately transition from the importing
+                // module's PLT resolver stub to its final external function while the module stays pinned.
+                // Preserve that resolved value so uninstall restores the loader-selected target rather than
+                // the stale PLT trampoline. Any later unexpected change remains fail-closed.
+                target.original = current;
+                target.lazy_plt = false;
             }
         }
         else {
