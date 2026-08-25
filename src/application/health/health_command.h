@@ -2,6 +2,8 @@
 #define SPARK_APPLICATION_HEALTH_HEALTH_COMMAND_H
 
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -18,6 +20,7 @@
 #include "core/stats/ping_statistics.h"
 #include "core/stats/statistics_service.h"
 #include "net/bytebin.h"
+#include "net/cancellation.h"
 #include "proto/sampler_data.h"
 
 namespace spark {
@@ -28,8 +31,8 @@ struct HealthCommandTestAccess;
 // Platform-independent: uses CommandSender and ProfileMetadataProvider.
 class HealthCommand {
 public:
-    using UploadFunction =
-        std::function<UploadResult(const std::string &, const std::string &, const std::string &, const std::string &)>;
+    using UploadFunction = std::function<UploadResult(const std::string &, const std::string &, const std::string &,
+                                                      const std::string &, CancellationToken)>;
 
     HealthCommand(StatisticsService &statistics, ProfileMetadataProvider &metadata_provider, std::string bytebin_url,
                   std::string viewer_url, std::string bytesocks_host, TrustedViewersState &trusted_viewers,
@@ -54,6 +57,7 @@ public:
 
     // Returns the current network interface snapshots for profile export.
     std::map<std::string, NetworkInterfaceSnapshot> networkSnapshots() const;
+    bool shutdownWithin(std::chrono::milliseconds timeout);
     void shutdown();
 
     // Sets a callback that returns the activity log, or nullptr if not available.
@@ -72,8 +76,10 @@ private:
     HealthData captureHealthData(const CommandSender &sender, std::int64_t now_ms);
     HealthData captureHealthDataForSender(const std::string &sender_name, bool sender_is_player, std::int64_t now_ms);
     void onTickAt(std::int64_t now_ms);
-    UploadResult uploadHealthData(const HealthData &data);
-    void runHealthUpload(const HealthData &data, std::string sender_name, bool sender_is_player, std::int64_t now_ms);
+    UploadResult uploadHealthData(const HealthData &data, CancellationToken cancellation = {});
+    void runHealthUpload(const HealthData &data, std::string sender_name, bool sender_is_player, std::int64_t now_ms,
+                         CancellationToken cancellation);
+    void signalUploadWorkerExit() noexcept;
     void notifyBestEffort(const std::string &sender_name, const std::string &message) noexcept;
     void announceHealthUpload() noexcept;
     void completeHealthDashboard(HealthDashboard::OpenResult result);
@@ -96,13 +102,20 @@ private:
     std::uint64_t accepted_dashboard_generation_ = 0;
     std::thread upload_thread_;
     std::atomic<bool> uploading_{false};
+    std::atomic<bool> stopping_{false};
+    CancellationSource upload_cancellation_;
+    std::mutex upload_exit_mutex_;
+    std::condition_variable upload_exit_cv_;
+    bool upload_worker_exited_ = true;
     std::mutex upload_mutex_;
     UploadResult upload_result_;
     std::string upload_sender_;
     bool upload_sender_is_player_ = false;
     std::int64_t upload_time_ms_ = 0;
     UploadFunction upload_fn_;
-    std::shared_ptr<int> lifetime_ = std::make_shared<int>(0);
+    std::shared_ptr<int> lifetime_{std::make_shared<int>(0)};
+
+    static constexpr auto kDefaultShutdownBudget = std::chrono::seconds(2);
 };
 
 }  // namespace spark

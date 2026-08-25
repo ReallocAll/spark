@@ -57,6 +57,12 @@ std::size_t discardBody(char * /*unused*/, std::size_t size, std::size_t count, 
     return size * count;
 }
 
+int cancelTransfer(void *user_data, curl_off_t, curl_off_t, curl_off_t, curl_off_t) noexcept
+{
+    const auto *cancellation = static_cast<const CancellationToken *>(user_data);
+    return cancellation != nullptr && cancellation->stopRequested() ? 1 : 0;
+}
+
 std::string contentKeyFromLocation(std::string_view location)
 {
     while (!location.empty() && location.back() == '/') {
@@ -69,9 +75,14 @@ std::string contentKeyFromLocation(std::string_view location)
 }  // namespace
 
 UploadResult uploadToBytebin(const std::string &gzipped_body, const std::string &bytebin_url,
-                             const std::string &content_type, const std::string &user_agent)
+                             const std::string &content_type, const std::string &user_agent,
+                             CancellationToken cancellation)
 {
     UploadResult result;
+    if (cancellation.stopRequested()) {
+        result.error = "bytebin upload cancelled";
+        return result;
+    }
 
     std::call_once(CurlInitFlag, [] { CurlInitResult = curl_global_init(CURL_GLOBAL_DEFAULT); });
     if (CurlInitResult != CURLE_OK) {
@@ -125,12 +136,18 @@ UploadResult uploadToBytebin(const std::string &gzipped_body, const std::string 
     curl_easy_setopt(curl.get(), CURLOPT_HEADERDATA, &location);
     curl_easy_setopt(curl.get(), CURLOPT_WRITEFUNCTION, discardBody);
     curl_easy_setopt(curl.get(), CURLOPT_ERRORBUFFER, error_buffer);
+    curl_easy_setopt(curl.get(), CURLOPT_XFERINFOFUNCTION, cancelTransfer);
+    curl_easy_setopt(curl.get(), CURLOPT_XFERINFODATA, &cancellation);
+    curl_easy_setopt(curl.get(), CURLOPT_NOPROGRESS, 0L);
 
     const CURLcode request_result = curl_easy_perform(curl.get());
     auto status = 0L;
     curl_easy_getinfo(curl.get(), CURLINFO_RESPONSE_CODE, &status);
     if (request_result != CURLE_OK) {
-        if (status >= 400) {
+        if (request_result == CURLE_ABORTED_BY_CALLBACK && cancellation.stopRequested()) {
+            result.error = "bytebin upload cancelled";
+        }
+        else if (status >= 400) {
             result.error = "bytebin returned HTTP " + std::to_string(status);
         }
         else {

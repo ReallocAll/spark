@@ -51,7 +51,7 @@ spark_profiling_time (static) <- monotonic clock and profiling-window alignment
 
 spark_native (static)        <- native/sampler, native/symbol, native/alloc
                                links: spark_profiling_time, cpptrace, concurrentqueue,
-                                      distorm, funchook (Windows)
+                                      distorm
                                NO Endstone dependency
 
 spark_core (static)          <- core/, proto/, net/
@@ -88,7 +88,7 @@ Captures native thread stacks at a bounded interval. Linux uses `SIGPROF` with c
 
 ### Allocation Profiler (`native/alloc/`)
 
-Samples allocation stacks by requested bytes. Windows uses funchook for supported UCRT and heap entry points; Linux redirects supported ELF allocator imports. Hook callbacks enqueue bounded records for later processing. Live exports deep-copy cumulative aggregator state or rebuild a temporary retained tree from the authoritative live index without stopping hooks. The hook path is free of allocations, string construction, and unbounded containers.
+Samples allocation stacks by requested bytes on Linux x86-64 by redirecting supported ELF allocator imports. Windows allocation profiling is temporarily unavailable because safe allocator entry patching is unavailable. Hook callbacks enqueue bounded records for later processing. Live exports deep-copy cumulative aggregator state or rebuild a temporary retained tree from the authoritative live index without stopping hooks. The hook path is free of allocations, string construction, and unbounded containers.
 
 ### Symbol Guesser (`native/symbol/`)
 
@@ -125,4 +125,4 @@ enable order when installed; no PAPI binary is linked into Spark.
 
 ## Dependencies
 
-Conan supplies cpptrace, concurrentqueue, zlib, expected-lite, libcurl, and tomlplusplus. Linux additionally requires OpenSSL for crypto. CMake fetches Endstone's public plugin API, pinned public PAPI headers, and funchook `v1.1.3`; funchook's bundled distorm decoder is used by the x86-64 symbol guessers on both supported platforms, while the funchook hook library itself is linked only on Windows.
+Conan supplies cpptrace, concurrentqueue, zlib, expected-lite, libcurl, and tomlplusplus. Linux additionally requires OpenSSL for crypto. CMake fetches Endstone's public plugin API, pinned public PAPI headers, and funchook `v1.1.3`; only funchook's bundled distorm decoder is used by the x86-64 symbol guessers.

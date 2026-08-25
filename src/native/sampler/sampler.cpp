@@ -126,6 +126,9 @@ bool Sampler::start(const SamplerConfig &config)
 bool Sampler::stop()
 {
     running_.store(false);
+#ifdef _WIN32
+    Capture::cancelPending();
+#endif
     wait_cv_.notify_all();
     if (sampler_thread_.joinable()) {
         sampler_thread_.join();  // no more samples are produced after this
@@ -144,12 +147,18 @@ bool Sampler::stop()
 void Sampler::requestStop() noexcept
 {
     running_.store(false, std::memory_order_release);
+#ifdef _WIN32
+    Capture::cancelPending();
+#endif
     wait_cv_.notify_all();
 }
 
 void Sampler::pauseForExport()
 {
     running_.store(false);
+#ifdef _WIN32
+    Capture::cancelPending();
+#endif
     wait_cv_.notify_all();
     if (sampler_thread_.joinable()) {
         sampler_thread_.join();

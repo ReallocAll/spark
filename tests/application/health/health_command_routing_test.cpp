@@ -90,21 +90,51 @@ class Connection final : public HealthDashboardConnection {
 public:
     explicit Connection(ConnectionProbe &probe) : probe_(probe) {}
 
-    std::string open(const UploadCallback &upload) override
+    std::string open(const UploadCallback &upload, const CancellationToken &cancellation) override
     {
-        const UploadResult result = upload();
+        if (cancellation.stopRequested()) {
+            return {};
+        }
+        const UploadResult result = upload(cancellation);
         std::scoped_lock lock(probe_.mutex);
         ++probe_.open_count;
         ++probe_.upload_count;
         probe_.open = result.ok;
-        open_state_ = result.ok;
         probe_.cv.notify_all();
         return result.ok ? "https://viewer/" + result.key : std::string();
     }
-    bool tick() override { return open_state_; }
-    [[nodiscard]] bool isOpen() const override { return open_state_; }
-    [[nodiscard]] bool hasClient() const override { return probe_.client; }
-    void close() override { open_state_ = false; }
+    bool tick() override
+    {
+        std::scoped_lock lock(probe_.mutex);
+        return probe_.open;
+    }
+    [[nodiscard]] bool isOpen() const override
+    {
+        std::scoped_lock lock(probe_.mutex);
+        return probe_.open;
+    }
+    [[nodiscard]] bool hasClient() const override
+    {
+        std::scoped_lock lock(probe_.mutex);
+        return probe_.client;
+    }
+    void requestStop() noexcept override
+    {
+        std::scoped_lock lock(probe_.mutex);
+        probe_.open = false;
+        probe_.cv.notify_all();
+    }
+    bool closeWithin(std::chrono::milliseconds) noexcept override
+    {
+        close();
+        return true;
+    }
+    void close() override
+    {
+        std::scoped_lock lock(probe_.mutex);
+        probe_.open = false;
+        probe_.cv.notify_all();
+    }
     [[nodiscard]] SocketChannelInfo channelInfo() const override
     {
         return {.channel_id = "health-channel", .public_key = {1, 2, 3}};
@@ -114,7 +144,7 @@ public:
         std::scoped_lock lock(probe_.mutex);
         ++probe_.send_count;
         probe_.cv.notify_all();
-        return open_state_ && probe_.client;
+        return probe_.open && probe_.client;
     }
     [[nodiscard]] std::vector<std::uint8_t> pendingKey(const std::string &id) const override
     {
@@ -125,7 +155,6 @@ public:
 
 private:
     ConnectionProbe &probe_;
-    bool open_state_ = false;
     std::string trusted_id_;
     IsKeyTrustedCallback trusted_;
 };
@@ -178,6 +207,7 @@ int main()
 {
     using spark::Arguments;
     using spark::base64Encode;
+    using spark::CancellationToken;
     using spark::Connection;
     using spark::Fixture;
     using spark::HealthCommandTestAccess;
@@ -188,7 +218,8 @@ int main()
     Fixture fixture;
 
     int uploads = 0;
-    auto upload = [&uploads](const std::string &, const std::string &, const std::string &, const std::string &) {
+    auto upload = [&uploads](const std::string &, const std::string &, const std::string &, const std::string &,
+                             const CancellationToken &) {
         ++uploads;
         return UploadResult{.ok = true, .key = "health-key"};
     };

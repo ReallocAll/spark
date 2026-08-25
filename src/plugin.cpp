@@ -98,7 +98,12 @@ public:
         }
         papi_integration_.disable(*this);
         if (app_) {
-            app_->shutdown();
+            std::string application_shutdown_error;
+            if (!app_->shutdown(application_shutdown_error)) {
+                std::fprintf(stderr, "[spark] application shutdown failed before plugin unload: %s\n",
+                             application_shutdown_error.c_str());
+                std::abort();
+            }
         }
         getServer().getScheduler().cancelTasks(*this);
         tick_task_.reset();

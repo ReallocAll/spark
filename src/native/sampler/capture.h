@@ -10,6 +10,7 @@
 namespace spark {
 
 struct CaptureTestAccess;
+class WindowsCaptureBackend;
 
 // One captured stack, as raw instruction pointers (leaf..root). Resolving each ip
 // to a module + RVA is done by the sampler thread, off the capture path.
@@ -28,6 +29,9 @@ public:
     // async-signal-safe unwinding is unavailable (cpptrace not built with libunwind).
     static bool arm();
     static bool disarm();
+#ifdef _WIN32
+    static void cancelPending() noexcept;
+#endif
 
     // Capture the stack of the given OS thread id into `out`. Called from the
     // sampler thread. Returns false on timeout/failure.
@@ -38,6 +42,10 @@ public:
 
 private:
     friend struct CaptureTestAccess;
+#ifdef _WIN32
+    static void setWindowsBackendForTesting(WindowsCaptureBackend *backend);
+    static std::uint64_t cancellationGenerationForTesting() noexcept;
+#endif
 #ifdef __linux__
     static void setHandlerGateForTesting(std::atomic<bool> *entered, std::atomic<bool> *release);
     static void setHandlerWakeGateForTesting(std::atomic<bool> *entered, std::atomic<bool> *release);

@@ -44,6 +44,7 @@ public:
 
     // Lifecycle.
     void shutdown();
+    bool shutdown(std::string &error);
     void enable();
     bool shutdownProfilerBackend(std::string &error) { return profiler_.shutdownBackend(error); }
 

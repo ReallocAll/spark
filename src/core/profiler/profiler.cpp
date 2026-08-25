@@ -109,6 +109,10 @@ bool Profiler::start(const ProfilerOptions &options, std::uint64_t main_tid, std
         error = "profiler is already running";
         return false;
     }
+    if (!reapRecoveryWriter()) {
+        error = "previous recovery writer is still stopping";
+        return false;
+    }
     sampling_stop_requested_.store(false, std::memory_order_release);
     included_ticks_.store(0, std::memory_order_relaxed);
 
@@ -427,6 +431,10 @@ bool Profiler::shutdown(std::string &error)
         stopRecoveryWriter();
         running_.store(false);
         discardRecoveryJournal();
+        if (hasPendingRecoveryWriter()) {
+            error = "recovery writer shutdown timed out";
+            return false;
+        }
         return true;
     }
     if (running_.load()) {
@@ -440,6 +448,10 @@ bool Profiler::shutdown(std::string &error)
     // Clean shutdown: discard the journal so the next startup does not treat
     // it as a crash.  This is safe even if no journal exists.
     discardRecoveryJournal();
+    if (hasPendingRecoveryWriter()) {
+        error = "recovery writer shutdown timed out";
+        return false;
+    }
     return allocation_sampler_.shutdown(error);
 }
 
