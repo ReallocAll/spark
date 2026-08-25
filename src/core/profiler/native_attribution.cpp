@@ -87,9 +87,8 @@ bool isUnresolvedMethod(std::string_view method_name) noexcept
 
 constexpr std::size_t KMaxDiscoveredHookTargets = 32;
 constexpr std::array KAllocatorImports{
-    std::string_view("malloc"),       std::string_view("calloc"),        std::string_view("realloc"),
-    std::string_view("free"),         std::string_view("reallocarray"), std::string_view("aligned_alloc"),
-    std::string_view("posix_memalign"),
+    std::string_view("malloc"), std::string_view("calloc"), std::string_view("realloc"), std::string_view("free"),
+    std::string_view("reallocarray"), std::string_view("aligned_alloc"), std::string_view("posix_memalign"),
 };
 
 struct LinuxDiscoveryContext {
@@ -117,8 +116,7 @@ bool populateImageView(const dl_phdr_info &info, LinuxImageView &image) noexcept
         if (header.p_type != PT_LOAD) {
             continue;
         }
-        image.load_begin =
-            (std::min)(image.load_begin, image.base + static_cast<std::uintptr_t>(header.p_vaddr));
+        image.load_begin = (std::min)(image.load_begin, image.base + static_cast<std::uintptr_t>(header.p_vaddr));
         image.load_end =
             (std::max)(image.load_end, image.base + static_cast<std::uintptr_t>(header.p_vaddr + header.p_memsz));
     }
@@ -157,10 +155,11 @@ int findSelfExecutableRange(dl_phdr_info *info, std::size_t, void *opaque)
         if (header.p_type != PT_LOAD || (header.p_flags & PF_X) == 0) {
             continue;
         }
-        context.self_exec_begin = (std::min)(
-            context.self_exec_begin, context.self_base + static_cast<std::uintptr_t>(header.p_vaddr));
-        context.self_exec_end = (std::max)(
-            context.self_exec_end, context.self_base + static_cast<std::uintptr_t>(header.p_vaddr + header.p_memsz));
+        context.self_exec_begin =
+            (std::min)(context.self_exec_begin, context.self_base + static_cast<std::uintptr_t>(header.p_vaddr));
+        context.self_exec_end =
+            (std::max)(context.self_exec_end,
+                       context.self_base + static_cast<std::uintptr_t>(header.p_vaddr + header.p_memsz));
     }
     return 1;
 }
@@ -311,7 +310,8 @@ int collectHookTargets(dl_phdr_info *info, std::size_t, void *opaque)
         }
     }
     if (!dynamic_valid || symbols == nullptr || strings == nullptr || string_size == 0 ||
-        symbol_entry_size != sizeof(ElfW(Sym)) || !contains(image, reinterpret_cast<std::uintptr_t>(symbols), sizeof(ElfW(Sym))) ||
+        symbol_entry_size != sizeof(ElfW(Sym)) ||
+        !contains(image, reinterpret_cast<std::uintptr_t>(symbols), sizeof(ElfW(Sym))) ||
         !contains(image, reinterpret_cast<std::uintptr_t>(strings), string_size) ||
         (rel != nullptr && rel_entry_size != sizeof(ElfW(Rel))) ||
         (rela != nullptr && rela_entry_size != sizeof(ElfW(Rela)))) {
@@ -346,8 +346,7 @@ void *addressPointer(std::uintptr_t address) noexcept
 }
 
 std::optional<NativeInstrumentationRange> unwindFunctionRange(std::uintptr_t target, std::uintptr_t executable_begin,
-                                                              std::uintptr_t executable_end,
-                                                              FindFdeFunction find_fde)
+                                                              std::uintptr_t executable_end, FindFdeFunction find_fde)
 {
     DwarfEhBases bases{};
     const void *fde = find_fde(addressPointer(target), &bases);
@@ -590,8 +589,8 @@ bool isNativeAllocationInstrumentation(std::string_view method_name) noexcept
            matches(method_name, KSignaturelessMethods);
 }
 
-bool isNativeAllocationInstrumentationAddress(
-    std::uint64_t raw_address, std::span<const NativeInstrumentationRange> ranges) noexcept
+bool isNativeAllocationInstrumentationAddress(std::uint64_t raw_address,
+                                              std::span<const NativeInstrumentationRange> ranges) noexcept
 {
     return std::ranges::any_of(ranges, [raw_address](const NativeInstrumentationRange &range) {
         return range.begin < range.end && raw_address >= range.begin && raw_address < range.end;
