@@ -1,21 +1,11 @@
 #include "application/health/health_dashboard.h"
 
-#include <exception>
 #include <utility>
 
 #include "proto/metrics_proto.h"
 #include "proto/statistics_proto.h"
 
 namespace spark {
-
-namespace {
-
-std::string exceptionMessage(const std::exception &error)
-{
-    return error.what();
-}
-
-}  // namespace
 
 HealthDashboard::HealthDashboard(ConnectionFactory connection_factory, InitialUpload initial_upload,
                                  IsKeyTrustedCallback is_key_trusted, CompletionCallback completion)
@@ -60,7 +50,7 @@ HealthDashboard::OpenResult HealthDashboard::open(HealthData initial, const std:
             result.error = "health dashboard is stopping";
             return result;
         }
-        if (open_ || open_pending_ || work_active_) {
+        if (open_ || open_pending_ || work_active_ || work_) {
             result.error = "health dashboard is already open or opening";
             return result;
         }
@@ -74,80 +64,36 @@ HealthDashboard::OpenResult HealthDashboard::open(HealthData initial, const std:
         }
     }
 
+    if (!connection_factory_) {
+        result.error = "health dashboard connection factory is not configured";
+        return result;
+    }
     if (!startWorker()) {
         result.error = "health dashboard worker failed to start";
         return result;
     }
 
-    std::unique_ptr<HealthDashboardConnection> created;
-    try {
-        if (!connection_factory_) {
-            result.error = "health dashboard connection factory is not configured";
-            return result;
-        }
-        created = connection_factory_();
-    }
-    catch (const std::exception &error) {
-        result.error = std::string("health dashboard connection creation failed: ") + exceptionMessage(error);
-        return result;
-    }
-    catch (...) {
-        result.error = "health dashboard connection creation failed";
-        return result;
-    }
-    if (!created) {
-        result.error = "health dashboard connection factory returned null";
-        return result;
-    }
-
-    auto connection = std::shared_ptr<HealthDashboardConnection>(std::move(created));
-    try {
-        connection->setIsKeyTrustedCallback(is_key_trusted_);
-    }
-    catch (const std::exception &error) {
-        result.error = std::string("health dashboard connection setup failed: ") + exceptionMessage(error);
-        connection->requestStop();
-        connection->closeWithin(kBackgroundCloseBudget);
-        return result;
-    }
-    catch (...) {
-        result.error = "health dashboard connection setup failed";
-        connection->requestStop();
-        connection->closeWithin(kBackgroundCloseBudget);
-        return result;
-    }
-
-    bool reject = false;
     {
         std::scoped_lock lock(mutex_);
-        if (stopping_ || shutdown_complete_ || open_ || open_pending_ || work_active_) {
-            result.error = "health dashboard is already open or stopping";
-            reject = true;
+        if (stopping_ || shutdown_complete_) {
+            result.error = "health dashboard is stopping";
+            return result;
         }
-        else {
-            cancellation_source_.reset();
-            ++generation_;
-            result.accepted = true;
-            result.generation = generation_;
-            connection_ = connection;
-            work_ = WorkItem{.type = WorkType::Open,
-                             .data = std::move(initial),
-                             .connection = connection,
-                             .cancellation = cancellation_source_.token(),
-                             .generation = generation_,
-                             .sender_name = sender_name};
-            open_pending_ = true;
+        if (open_ || open_pending_ || work_active_ || work_) {
+            result.error = "health dashboard is already open or opening";
+            return result;
         }
-    }
-    if (reject) {
-        connection->requestStop();
-        if (!connection->closeWithin(kBackgroundCloseBudget)) {
-            std::scoped_lock lock(mutex_);
-            if (!connection_) {
-                connection_ = connection;
-            }
-        }
-        return result;
+        cancellation_source_.reset();
+        ++generation_;
+        result.accepted = true;
+        result.generation = generation_;
+        work_ = WorkItem{.type = WorkType::Open,
+                         .data = std::move(initial),
+                         .connection = {},
+                         .cancellation = cancellation_source_.token(),
+                         .generation = generation_,
+                         .sender_name = sender_name};
+        open_pending_ = true;
     }
     cv_.notify_one();
     return result;
