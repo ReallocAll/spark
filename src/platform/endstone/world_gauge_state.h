@@ -2,6 +2,7 @@
 #define SPARK_PLATFORM_ENDSTONE_WORLD_GAUGE_STATE_H
 
 #include <cstdint>
+#include <map>
 #include <mutex>
 #include <set>
 #include <string>
@@ -18,15 +19,23 @@ struct WorldGaugeChunkKey {
     auto operator<=>(const WorldGaugeChunkKey &) const = default;
 };
 
+struct WorldGaugeTileEntityCount {
+    WorldGaugeChunkKey chunk;
+    int count = 0;
+};
+
 struct WorldGaugeSnapshot {
     std::vector<std::int64_t> actor_ids;
     std::vector<std::int64_t> player_ids;
     std::vector<WorldGaugeChunkKey> chunks;
+    std::vector<WorldGaugeTileEntityCount> tile_entities;
+    bool tile_entities_complete = false;
 };
 
 struct WorldGaugeCounts {
     int players = 0;
     int entities = 0;
+    int tile_entities = 0;
     int chunks = 0;
 
     bool operator==(const WorldGaugeCounts &) const = default;
@@ -62,13 +71,15 @@ public:
     void chunkLoaded(WorldGaugeChunkKey key)
     {
         std::scoped_lock lock(mutex_);
-        chunks_.insert(std::move(key));
+        chunks_.insert(key);
+        tile_entities_by_chunk_.try_emplace(std::move(key), 0);
     }
 
     void chunkUnloaded(const WorldGaugeChunkKey &key)
     {
         std::scoped_lock lock(mutex_);
         chunks_.erase(key);
+        tile_entities_by_chunk_.erase(key);
     }
 
     void reconcile(const WorldGaugeSnapshot &snapshot)
@@ -81,6 +92,24 @@ public:
         actor_ids_ = std::move(actors);
         player_ids_ = std::move(players);
         chunks_ = std::move(chunks);
+
+        if (snapshot.tile_entities_complete) {
+            tile_entities_by_chunk_.clear();
+            for (const WorldGaugeTileEntityCount &entry : snapshot.tile_entities) {
+                if (chunks_.contains(entry.chunk)) {
+                    tile_entities_by_chunk_[entry.chunk] = (std::max)(0, entry.count);
+                }
+            }
+        }
+
+        for (auto it = tile_entities_by_chunk_.begin(); it != tile_entities_by_chunk_.end();) {
+            if (!chunks_.contains(it->first)) {
+                it = tile_entities_by_chunk_.erase(it);
+            }
+            else {
+                ++it;
+            }
+        }
     }
 
     [[nodiscard]] WorldGaugeCounts counts() const
@@ -92,8 +121,14 @@ public:
                 ++entity_count;
             }
         }
+        std::int64_t tile_entity_count = 0;
+        for (const auto &[chunk, count] : tile_entities_by_chunk_) {
+            (void)chunk;
+            tile_entity_count += count;
+        }
         return {.players = static_cast<int>(player_ids_.size()),
                 .entities = static_cast<int>(entity_count),
+                .tile_entities = static_cast<int>((std::min)(tile_entity_count, static_cast<std::int64_t>(INT32_MAX))),
                 .chunks = static_cast<int>(chunks_.size())};
     }
 
@@ -102,6 +137,7 @@ private:
     std::set<std::int64_t> actor_ids_;
     std::set<std::int64_t> player_ids_;
     std::set<WorldGaugeChunkKey> chunks_;
+    std::map<WorldGaugeChunkKey, int> tile_entities_by_chunk_;
 };
 
 }  // namespace spark::endstone_adapter
