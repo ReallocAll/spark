@@ -91,7 +91,7 @@ bool concurrentInstallUninstallStress(spark::WindowsIatHooks &hooks, HMODULE con
     std::vector<std::thread> workers;
     workers.reserve(KWorkers);
     for (int index = 0; index < KWorkers; ++index) {
-        workers.emplace_back([&] {
+        workers.emplace_back([&, index] {
             while (running.load(std::memory_order_acquire)) {
                 void *memory = allocate(32 + static_cast<std::size_t>(index));
                 if (memory == nullptr) {
