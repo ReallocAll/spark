@@ -100,20 +100,41 @@ public:
         ++probe_.open_count;
         ++probe_.upload_count;
         probe_.open = result.ok;
-        open_state_ = result.ok;
         probe_.cv.notify_all();
         return result.ok ? "https://viewer/" + result.key : std::string();
     }
-    bool tick() override { return open_state_; }
-    [[nodiscard]] bool isOpen() const override { return open_state_; }
-    [[nodiscard]] bool hasClient() const override { return probe_.client; }
-    void requestStop() noexcept override { open_state_ = false; }
+    bool tick() override
+    {
+        std::scoped_lock lock(probe_.mutex);
+        return probe_.open;
+    }
+    [[nodiscard]] bool isOpen() const override
+    {
+        std::scoped_lock lock(probe_.mutex);
+        return probe_.open;
+    }
+    [[nodiscard]] bool hasClient() const override
+    {
+        std::scoped_lock lock(probe_.mutex);
+        return probe_.client;
+    }
+    void requestStop() noexcept override
+    {
+        std::scoped_lock lock(probe_.mutex);
+        probe_.open = false;
+        probe_.cv.notify_all();
+    }
     bool closeWithin(std::chrono::milliseconds) noexcept override
     {
         close();
         return true;
     }
-    void close() override { open_state_ = false; }
+    void close() override
+    {
+        std::scoped_lock lock(probe_.mutex);
+        probe_.open = false;
+        probe_.cv.notify_all();
+    }
     [[nodiscard]] SocketChannelInfo channelInfo() const override
     {
         return {.channel_id = "health-channel", .public_key = {1, 2, 3}};
@@ -123,7 +144,7 @@ public:
         std::scoped_lock lock(probe_.mutex);
         ++probe_.send_count;
         probe_.cv.notify_all();
-        return open_state_ && probe_.client;
+        return probe_.open && probe_.client;
     }
     [[nodiscard]] std::vector<std::uint8_t> pendingKey(const std::string &id) const override
     {
@@ -134,7 +155,6 @@ public:
 
 private:
     ConnectionProbe &probe_;
-    bool open_state_ = false;
     std::string trusted_id_;
     IsKeyTrustedCallback trusted_;
 };
