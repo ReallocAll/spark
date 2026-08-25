@@ -123,6 +123,8 @@ struct WindowStats {
     int players = 0;
     bool entities_present = false;
     int entities = 0;
+    bool tile_entities_present = false;
+    int tile_entities = 0;
     bool chunks_present = false;
     int chunks = 0;
     std::int64_t start_time_ms = 0;
