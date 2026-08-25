@@ -1,6 +1,7 @@
 #include "native/alloc/windows_iat_hooks.h"
 
 #include <algorithm>
+#include <functional>
 #include <ranges>
 #include <unordered_set>
 #include <utility>
@@ -47,8 +48,14 @@ WindowsIatHooks::WindowsIatHooks(std::unique_ptr<WindowsIatHookBackend> backend)
 
 WindowsIatHooks::~WindowsIatHooks()
 {
-    std::string ignored;
-    (void)uninstall(ignored);
+    try {
+        std::string ignored;
+        (void)uninstall(ignored);
+    }
+    catch (...) {
+        // The owning AllocationSampler must prove detach before module unload.
+        // The destructor is only a best-effort fallback and must not throw.
+    }
 }
 
 bool WindowsIatHooks::configure(std::vector<WindowsIatHookTarget> targets, std::string &error)
@@ -157,7 +164,7 @@ bool WindowsIatHooks::refresh(std::string &error)
     return true;
 }
 
-bool WindowsIatHooks::uninstall(std::string &error) noexcept
+bool WindowsIatHooks::uninstall(std::string &error)
 {
     error.clear();
     bool ok = true;
@@ -180,6 +187,9 @@ bool WindowsIatHooks::uninstall(std::string &error) noexcept
     if (!ok) {
         error = first_error.empty() ? "failed to detach one or more Windows IAT hooks" : first_error;
         return false;
+    }
+    if (active_slots_.empty()) {
+        unsafe_state_ = false;
     }
     return true;
 }
@@ -269,6 +279,10 @@ bool WindowsIatHooks::reconcile(bool initial_install, std::string &error)
             return false;
         }
         if (after_status == WindowsIatAccessStatus::Error) {
+            // Ownership is uncertain. Keep the slot as potentially active so
+            // shutdown cannot silently forget a pointer that may target Spark.
+            active_slots_.push_back(slot);
+            installed_ = true;
             markUnsafe(exchange_error.empty() ? read_error : exchange_error, error);
             return false;
         }
@@ -278,7 +292,7 @@ bool WindowsIatHooks::reconcile(bool initial_install, std::string &error)
     return true;
 }
 
-bool WindowsIatHooks::rollbackInstalled(std::string &error) noexcept
+bool WindowsIatHooks::rollbackInstalled(std::string &error)
 {
     bool ok = true;
     std::string first_error;
@@ -301,7 +315,7 @@ bool WindowsIatHooks::rollbackInstalled(std::string &error) noexcept
     return ok;
 }
 
-bool WindowsIatHooks::restoreSlot(const WindowsIatSlot &slot, std::string &error) noexcept
+bool WindowsIatHooks::restoreSlot(const WindowsIatSlot &slot, std::string &error)
 {
     if (slot.target_index >= targets_.size()) {
         markUnsafe("active Windows IAT slot has an invalid target index", error);
