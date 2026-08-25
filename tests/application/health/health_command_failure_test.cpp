@@ -90,8 +90,8 @@ public:
 
 class Sender final : public spark::CommandSender {
 public:
-    std::string getName() const override { return "Tester"; }
-    bool isPlayer() const override { return false; }
+    [[nodiscard]] std::string getName() const override { return "Tester"; }
+    [[nodiscard]] bool isPlayer() const override { return false; }
 
 private:
     void sendImpl(const std::string &) override {}
@@ -178,7 +178,8 @@ void test_upload_shutdown_delivers_cancellation()
     std::atomic<bool> cancelled{false};
 
     spark::HealthCommand::UploadFunction upload = [&](const std::string &, const std::string &, const std::string &,
-                                                       const std::string &, spark::CancellationToken cancellation) {
+                                                       const std::string &,
+                                                       const spark::CancellationToken &cancellation) {
         {
             std::scoped_lock lock(mutex);
             entered = true;
@@ -215,7 +216,7 @@ void test_upload_timeout_retains_worker_for_later_reap()
     bool release = false;
 
     spark::HealthCommand::UploadFunction upload = [&](const std::string &, const std::string &, const std::string &,
-                                                       const std::string &, spark::CancellationToken) {
+                                                       const std::string &, const spark::CancellationToken &) {
         std::unique_lock lock(mutex);
         entered = true;
         cv.notify_all();
