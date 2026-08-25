@@ -1,0 +1,51 @@
+name: Windows IAT Hook Safety
+
+on:
+  pull_request:
+    paths:
+      - "src/native/alloc/windows_iat_hooks.*"
+      - "src/native/alloc/windows_iat_hooks_windows.cpp"
+      - "tests/native/alloc/windows_iat_hooks_test.cpp"
+      - ".github/workflows/windows-iat-hook-safety.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deterministic-linux:
+    name: Deterministic IAT lifecycle (Linux host)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Compile deterministic lifecycle test
+        run: >-
+          c++ -std=c++20 -Wall -Wextra -Werror -pedantic
+          -Isrc
+          src/native/alloc/windows_iat_hooks.cpp
+          tests/native/alloc/windows_iat_hooks_test.cpp
+          -o windows_iat_hooks_test
+      - name: Run deterministic lifecycle test
+        run: ./windows_iat_hooks_test
+
+  deterministic-windows:
+    name: Deterministic IAT lifecycle (Windows)
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up MSVC environment
+        uses: TheMrMilchmann/setup-msvc-dev@v4
+        with:
+          arch: x64
+      - name: Compile deterministic lifecycle test
+        shell: pwsh
+        run: |
+          $llvmBin = "C:\Program Files\LLVM\bin"
+          & "$llvmBin\clang-cl.exe" /nologo /std:c++20 /EHsc /W4 /WX /I src `
+            src/native/alloc/windows_iat_hooks.cpp `
+            tests/native/alloc/windows_iat_hooks_test.cpp `
+            /Fe:windows_iat_hooks_test.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Run deterministic lifecycle test
+        shell: pwsh
+        run: .\windows_iat_hooks_test.exe
