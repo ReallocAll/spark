@@ -2,6 +2,7 @@
 #define SPARK_APPLICATION_HEALTH_HEALTH_DASHBOARD_H
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <functional>
@@ -13,6 +14,7 @@
 #include <vector>
 
 #include "application/health/health_dashboard_connection.h"
+#include "net/cancellation.h"
 #include "proto/health_data.h"
 
 namespace spark {
@@ -33,7 +35,7 @@ public:
     };
 
     using ConnectionFactory = std::function<std::unique_ptr<HealthDashboardConnection>()>;
-    using InitialUpload = std::function<UploadResult(const HealthData &)>;
+    using InitialUpload = std::function<UploadResult(const HealthData &, CancellationToken)>;
     using IsKeyTrustedCallback = HealthDashboardConnection::IsKeyTrustedCallback;
     using CompletionCallback = std::function<void(OpenResult)>;
 
@@ -51,6 +53,8 @@ public:
     bool updateDue(std::int64_t now_ms) const;
     bool enqueueUpdate(HealthData snapshot, std::int64_t now_ms);
     void tick();
+    void requestStop() noexcept;
+    bool shutdownWithin(std::chrono::milliseconds timeout);
     void shutdown();
 
     bool isOpen() const;
@@ -72,12 +76,14 @@ private:
         WorkType type = WorkType::Update;
         HealthData data;
         std::shared_ptr<HealthDashboardConnection> connection;
+        CancellationToken cancellation;
         std::uint64_t generation = 0;
         std::string sender_name;
     };
 
     void run() noexcept;
-    bool startWorker(std::unique_lock<std::mutex> &lifecycle_lock);
+    bool startWorker();
+    void signalWorkerExit() noexcept;
     void markFailure(const std::shared_ptr<HealthDashboardConnection> &connection) noexcept;
     void completeOpen(OpenResult result, const std::shared_ptr<HealthDashboardConnection> &connection,
                       std::int64_t initial_time_ms);
@@ -95,6 +101,9 @@ private:
     std::condition_variable cv_;
     std::mutex completion_mutex_;
     std::thread worker_;
+    std::mutex worker_exit_mutex_;
+    std::condition_variable worker_exit_cv_;
+    bool worker_exited_ = true;
     std::atomic<bool> running_{false};
     std::atomic<bool> failed_{false};
     std::optional<WorkItem> work_;
@@ -102,10 +111,15 @@ private:
     bool open_pending_ = false;
     bool open_ = false;
     bool stopping_ = false;
+    bool shutdown_complete_ = false;
     bool callbacks_enabled_ = true;
     std::uint64_t generation_ = 0;
     std::int64_t last_update_ms_ = 0;
+    CancellationSource cancellation_source_;
     std::shared_ptr<HealthDashboardConnection> connection_;
+
+    static constexpr auto kDefaultShutdownBudget = std::chrono::seconds(2);
+    static constexpr auto kBackgroundCloseBudget = std::chrono::milliseconds(500);
 };
 
 }  // namespace spark
