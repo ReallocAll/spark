@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <chrono>
 #include <exception>
+#include <utility>
 
 #include "application/health/health_dashboard.h"
 #include "proto/metrics_proto.h"
@@ -153,56 +154,7 @@ bool HealthDashboard::shutdownWithin(std::chrono::milliseconds timeout)
 
 void HealthDashboard::shutdown()
 {
-    if (shutdownWithin(kDefaultShutdownBudget)) {
-        return;
-    }
-
-    {
-        std::scoped_lock lifecycle_lock(lifecycle_mutex_);
-        if (worker_.joinable() && worker_id_ == std::this_thread::get_id()) {
-            return;
-        }
-    }
-
-    requestStop();
-    {
-        std::unique_lock lifecycle_lock(lifecycle_mutex_);
-        lifecycle_cv_.wait(lifecycle_lock, [this] { return !lifecycle_active_ && open_calls_active_ == 0; });
-    }
-    if (worker_.joinable()) {
-        try {
-            worker_.join();
-        }
-        catch (...) {
-        }
-    }
-    {
-        std::scoped_lock lock(lifecycle_mutex_);
-        worker_id_ = {};
-    }
-    std::shared_ptr<HealthDashboardConnection> connection;
-    {
-        std::scoped_lock lock(mutex_);
-        connection = connection_;
-    }
-    if (connection) {
-        try {
-            connection->close();
-        }
-        catch (...) {
-        }
-    }
-    {
-        std::scoped_lock lock(mutex_);
-        if (connection_ == connection) {
-            connection_.reset();
-        }
-        work_.reset();
-        work_active_ = false;
-        open_pending_ = false;
-        open_ = false;
-        shutdown_complete_ = true;
-    }
+    static_cast<void>(shutdownWithin(kDefaultShutdownBudget));
 }
 
 bool HealthDashboard::startWorker()
@@ -305,17 +257,18 @@ void HealthDashboard::completeOpen(OpenResult result, const std::shared_ptr<Heal
     {
         std::scoped_lock lock(mutex_);
         stopping = stopping_;
-        current = !stopping_ && result.generation == generation_ && connection_ == connection;
+        current = !stopping_ && result.generation == generation_ && open_pending_ &&
+                  (!connection || connection_ == connection);
+        work_active_ = false;
         if (current) {
             open_pending_ = false;
-            work_active_ = false;
             open_ = result.ok;
             if (result.ok) {
                 last_update_ms_ = initial_time_ms;
             }
         }
     }
-    if (!current || !result.ok) {
+    if (connection && (!current || !result.ok)) {
         connection->requestStop();
         if (!stopping && connection->closeWithin(kBackgroundCloseBudget)) {
             std::scoped_lock lock(mutex_);
@@ -373,18 +326,104 @@ void HealthDashboard::run() noexcept
                 result.accepted = true;
                 result.generation = work.generation;
                 result.sender_name = work.sender_name;
+
+                if (work.cancellation.stopRequested()) {
+                    std::scoped_lock lock(mutex_);
+                    work_active_ = false;
+                    continue;
+                }
+
+                std::shared_ptr<HealthDashboardConnection> connection;
+                try {
+                    std::unique_ptr<HealthDashboardConnection> created = connection_factory_();
+                    if (created) {
+                        connection = std::shared_ptr<HealthDashboardConnection>(std::move(created));
+                    }
+                }
+                catch (const std::exception &error) {
+                    result.error =
+                        std::string("health dashboard connection creation failed: ") + exceptionMessage(error);
+                }
+                catch (...) {
+                    result.error = "health dashboard connection creation failed";
+                }
+
+                if (work.cancellation.stopRequested()) {
+                    if (connection) {
+                        connection->requestStop();
+                        static_cast<void>(connection->closeWithin(kBackgroundCloseBudget));
+                    }
+                    std::scoped_lock lock(mutex_);
+                    work_active_ = false;
+                    continue;
+                }
+                if (!connection) {
+                    if (result.error.empty()) {
+                        result.error = "health dashboard connection factory returned null";
+                    }
+                    completeOpen(std::move(result), {}, work.data.generated_time_ms);
+                    continue;
+                }
+
+                try {
+                    connection->setIsKeyTrustedCallback(is_key_trusted_);
+                }
+                catch (const std::exception &error) {
+                    result.error = std::string("health dashboard connection setup failed: ") + exceptionMessage(error);
+                }
+                catch (...) {
+                    result.error = "health dashboard connection setup failed";
+                }
+                if (!result.error.empty()) {
+                    connection->requestStop();
+                    static_cast<void>(connection->closeWithin(kBackgroundCloseBudget));
+                    completeOpen(std::move(result), {}, work.data.generated_time_ms);
+                    continue;
+                }
+                if (work.cancellation.stopRequested()) {
+                    connection->requestStop();
+                    static_cast<void>(connection->closeWithin(kBackgroundCloseBudget));
+                    std::scoped_lock lock(mutex_);
+                    work_active_ = false;
+                    continue;
+                }
+
+                bool admitted = false;
+                {
+                    std::scoped_lock lock(mutex_);
+                    admitted = !stopping_ && work.generation == generation_ && open_pending_ && !connection_;
+                    if (admitted) {
+                        connection_ = connection;
+                    }
+                }
+                if (!admitted || work.cancellation.stopRequested()) {
+                    connection->requestStop();
+                    static_cast<void>(connection->closeWithin(kBackgroundCloseBudget));
+                    std::scoped_lock lock(mutex_);
+                    if (connection_ == connection) {
+                        connection_.reset();
+                    }
+                    work_active_ = false;
+                    continue;
+                }
+
                 UploadResult upload_result;
                 bool upload_called = false;
                 try {
-                    std::string url;
-                    url = work.connection->open(
+                    const std::string url = connection->open(
                         [&] {
                             if (work.cancellation.stopRequested()) {
                                 return UploadResult{.error = "health dashboard upload cancelled"};
                             }
                             HealthData upload_data = work.data;
-                            upload_data.channel_info = work.connection->channelInfo();
+                            upload_data.channel_info = connection->channelInfo();
+                            if (work.cancellation.stopRequested()) {
+                                return UploadResult{.error = "health dashboard upload cancelled"};
+                            }
                             upload_called = true;
+                            if (!initial_upload_) {
+                                return UploadResult{.error = "health dashboard upload is not configured"};
+                            }
                             upload_result = initial_upload_(upload_data, work.cancellation);
                             return upload_result;
                         },
@@ -414,15 +453,13 @@ void HealthDashboard::run() noexcept
                 catch (...) {
                     result.error = "health dashboard open failed";
                 }
-                completeOpen(std::move(result), work.connection, work.data.generated_time_ms);
+                completeOpen(std::move(result), connection, work.data.generated_time_ms);
                 continue;
             }
 
             if (work.cancellation.stopRequested()) {
                 std::scoped_lock lock(mutex_);
-                if (connection_ == work.connection && work.generation == generation_) {
-                    work_active_ = false;
-                }
+                work_active_ = false;
                 continue;
             }
 
@@ -453,9 +490,7 @@ void HealthDashboard::run() noexcept
             {
                 std::scoped_lock lock(mutex_);
                 current = !stopping_ && work.generation == generation_ && connection_ == work.connection;
-                if (connection_ == work.connection) {
-                    work_active_ = false;
-                }
+                work_active_ = false;
             }
             if (attempted && current && !sent) {
                 markFailure(work.connection);
@@ -467,6 +502,7 @@ void HealthDashboard::run() noexcept
         {
             std::scoped_lock lock(mutex_);
             connection = connection_;
+            work_active_ = false;
         }
         markFailure(connection);
     }
