@@ -133,8 +133,24 @@ void SparkApplication::enable()
     profiler_.startBackgroundProfiler();
 }
 
+bool SparkApplication::shutdown(std::string &error)
+{
+    error.clear();
+    if (!health_.shutdownWithin(std::chrono::seconds(2))) {
+        error = "health dashboard/upload shutdown timed out";
+        return false;
+    }
+    profiler_.shutdown();
+    watchdog_.stop();
+    return true;
+}
+
 void SparkApplication::shutdown()
 {
+    std::string error;
+    if (shutdown(error)) {
+        return;
+    }
     health_.shutdown();
     profiler_.shutdown();
     watchdog_.stop();

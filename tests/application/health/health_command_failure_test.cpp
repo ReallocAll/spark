@@ -1,12 +1,17 @@
+#include <atomic>
 #include <cassert>
+#include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <utility>
 
 #include "application/health/health_command.h"
+#include "core/command/arguments.h"
 
 namespace spark {
 
@@ -83,6 +88,16 @@ public:
     void notify(const std::string &, const std::string &) override { throw std::runtime_error("notify failed"); }
 };
 
+class Sender final : public spark::CommandSender {
+public:
+    [[nodiscard]] std::string getName() const override { return "Tester"; }
+    [[nodiscard]] bool isPlayer() const override { return false; }
+
+private:
+    void sendImpl(const std::string &) override {}
+    void errorImpl(const std::string &) override {}
+};
+
 void test_upload_state_clears_before_throwing_notification()
 {
     spark::StatisticsService statistics;
@@ -149,6 +164,82 @@ void test_tick_failure_clears_state_when_notification_throws()
     assert(spark::HealthCommandTestAccess::dashboardSender(command).empty());
 }
 
+void test_upload_shutdown_delivers_cancellation()
+{
+    spark::StatisticsService statistics;
+    Metadata metadata;
+    Dispatcher dispatcher;
+    ThrowingNotifier notifier;
+    Sender sender;
+    spark::TrustedViewersState trusted(std::filesystem::temp_directory_path() / "spark-health-upload-cancel.json");
+    std::mutex mutex;
+    std::condition_variable cv;
+    bool entered = false;
+    std::atomic<bool> cancelled{false};
+
+    spark::HealthCommand::UploadFunction upload = [&](const std::string &, const std::string &, const std::string &,
+                                                      const std::string &,
+                                                      const spark::CancellationToken &cancellation) {
+        {
+            std::scoped_lock lock(mutex);
+            entered = true;
+            cv.notify_all();
+        }
+        if (cancellation.waitForStop(std::chrono::seconds(2))) {
+            cancelled.store(true, std::memory_order_release);
+        }
+        return spark::UploadResult{.error = "cancelled"};
+    };
+    spark::HealthCommand command(statistics, metadata, {}, "https://viewer/", {}, trusted, dispatcher, notifier, {},
+                                 std::move(upload));
+    spark::Arguments args({"upload"}, true);
+    command.cmdHealth(sender, args);
+    {
+        std::unique_lock lock(mutex);
+        assert(cv.wait_for(lock, std::chrono::seconds(2), [&] { return entered; }));
+    }
+    assert(command.shutdownWithin(std::chrono::seconds(2)));
+    assert(cancelled.load(std::memory_order_acquire));
+}
+
+void test_upload_timeout_retains_worker_for_later_reap()
+{
+    spark::StatisticsService statistics;
+    Metadata metadata;
+    Dispatcher dispatcher;
+    ThrowingNotifier notifier;
+    Sender sender;
+    spark::TrustedViewersState trusted(std::filesystem::temp_directory_path() / "spark-health-upload-reap.json");
+    std::mutex mutex;
+    std::condition_variable cv;
+    bool entered = false;
+    bool release = false;
+
+    spark::HealthCommand::UploadFunction upload = [&](const std::string &, const std::string &, const std::string &,
+                                                      const std::string &, const spark::CancellationToken &) {
+        std::unique_lock lock(mutex);
+        entered = true;
+        cv.notify_all();
+        cv.wait(lock, [&] { return release; });
+        return spark::UploadResult{.error = "released"};
+    };
+    spark::HealthCommand command(statistics, metadata, {}, "https://viewer/", {}, trusted, dispatcher, notifier, {},
+                                 std::move(upload));
+    spark::Arguments args({"upload"}, true);
+    command.cmdHealth(sender, args);
+    {
+        std::unique_lock lock(mutex);
+        assert(cv.wait_for(lock, std::chrono::seconds(2), [&] { return entered; }));
+    }
+    assert(!command.shutdownWithin(std::chrono::milliseconds::zero()));
+    {
+        std::scoped_lock lock(mutex);
+        release = true;
+        cv.notify_all();
+    }
+    assert(command.shutdownWithin(std::chrono::seconds(2)));
+}
+
 }  // namespace
 
 int main()
@@ -157,5 +248,7 @@ int main()
     test_stale_dashboard_completion_is_ignored();
     test_current_failed_completion_clears_state_when_notification_throws();
     test_tick_failure_clears_state_when_notification_throws();
+    test_upload_shutdown_delivers_cancellation();
+    test_upload_timeout_retains_worker_for_later_reap();
     return 0;
 }
