@@ -171,6 +171,8 @@ int main()
     assert(spark::isNativeAllocationInstrumentation("spark::AllocationSampler::Impl::hookHeapAlloc"));
     assert(spark::isNativeAllocationInstrumentation("spark::AllocationSampler::Impl::hookMalloc"));
     assert(spark::isNativeAllocationInstrumentation("spark::AllocationSampler::Impl::hookMallocBase"));
+    assert(spark::isNativeAllocationInstrumentation("_ZN5spark17AllocationSampler4Impl10hookMallocEm"));
+    assert(spark::isNativeAllocationInstrumentation("_ZN5spark17AllocationSampler4Impl17hookPosixMemalignEPPvmm"));
     assert(!spark::isNativeAllocationInstrumentation("spark::AllocationSampler::Impl::hookMallocExtra(unsigned long)"));
     assert(!spark::isNativeAllocationInstrumentation("plugin::AllocationSampler::Impl::hookMalloc(unsigned long)"));
 
@@ -183,18 +185,33 @@ int main()
     const spark::FrameKey root_frame = frame(1, 0x100000, 0x100);
     const spark::FrameKey parent_frame = frame(1, 0x100000, 0x200);
     const spark::FrameKey instrumentation = frame(1, 0x100000, 0x300);
+    const spark::FrameKey unresolved_instrumentation = frame(1, 0x100000, 0x308);
     const spark::FrameKey instrumentation_leaf = frame(1, 0x100000, 0x310);
+    const spark::FrameKey ordinary_inside_range = frame(1, 0x100000, 0x318);
     const spark::FrameKey ordinary_leaf = frame(1, 0x100000, 0x400);
     const spark::FrameKey sibling = frame(1, 0x100000, 0x500);
     const spark::FrameKey sibling_leaf = frame(1, 0x100000, 0x510);
+    const spark::FrameKey exact_name_outside_range = frame(1, 0x100000, 0x600);
+    const std::vector<spark::NativeInstrumentationRange> instrumentation_ranges{
+        {.begin = 0x1002f0, .end = 0x100320},
+    };
+    assert(spark::isNativeAllocationInstrumentationAddress(0x1002f0, instrumentation_ranges));
+    assert(spark::isNativeAllocationInstrumentationAddress(0x10031f, instrumentation_ranges));
+    assert(!spark::isNativeAllocationInstrumentationAddress(0x100320, instrumentation_ranges));
+    assert(!spark::isNativeAllocationInstrumentationAddress(ordinary_leaf.raw_address, instrumentation_ranges));
+
     spark::ResolvedFrameMap resolved = {
         {root_frame, {.class_name = "plugin-a.dll", .method_name = "root"}},
         {parent_frame, {.class_name = "plugin-a.dll", .method_name = "ordinaryParent"}},
         {instrumentation, {.class_name = "plugin-a.dll", .method_name = "spark::AllocationSampler::Impl::hookMalloc"}},
+        {unresolved_instrumentation, {.class_name = "plugin-a.dll", .method_name = "0x308"}},
         {instrumentation_leaf, {.class_name = "plugin-a.dll", .method_name = "hookDescendant"}},
+        {ordinary_inside_range, {.class_name = "plugin-a.dll", .method_name = "ordinaryInsideRange"}},
         {ordinary_leaf, {.class_name = "plugin-a.dll", .method_name = "ordinaryLeaf"}},
         {sibling, {.class_name = "plugin-a.dll", .method_name = "ordinarySibling"}},
         {sibling_leaf, {.class_name = "plugin-a.dll", .method_name = "siblingLeaf"}},
+        {exact_name_outside_range,
+         {.class_name = "plugin-a.dll", .method_name = "spark::AllocationSampler::Impl::hookMalloc"}},
     };
 
     spark::CallTree tree;
@@ -208,7 +225,7 @@ int main()
     tree.log({sibling_leaf, sibling, root_frame}, 2, 5);
 
     spark::CallTree filtered;
-    assert(spark::filterExecutionTree(filtered, tree, resolved));
+    assert(spark::filterExecutionTree(filtered, tree, resolved, instrumentation_ranges));
     assert(filtered.root().times.at(1) == 16);
     assert(filtered.root().times.at(2) == 15);
     const auto &filtered_root = *filtered.root().children.at(root_frame);
@@ -227,6 +244,28 @@ int main()
     assert(std::ranges::find(filtered_keys, instrumentation) == filtered_keys.end());
     assert(std::ranges::find(filtered_keys, instrumentation_leaf) == filtered_keys.end());
     assert(std::ranges::find(filtered_keys, sibling) != filtered_keys.end());
+
+    spark::CallTree unresolved_tree;
+    unresolved_tree.log({unresolved_instrumentation, root_frame}, 1, 4);
+    spark::CallTree unresolved_filtered;
+    assert(spark::filterExecutionTree(unresolved_filtered, unresolved_tree, resolved, instrumentation_ranges));
+    assert(spark::collectFrameKeys(unresolved_filtered).empty());
+
+    spark::ResolvedFrameMap missing_unresolved = resolved;
+    missing_unresolved.erase(unresolved_instrumentation);
+    spark::CallTree missing_unresolved_filtered;
+    assert(spark::filterExecutionTree(missing_unresolved_filtered, unresolved_tree, missing_unresolved,
+                                      instrumentation_ranges));
+    assert(spark::collectFrameKeys(missing_unresolved_filtered).empty());
+
+    spark::CallTree guarded_tree;
+    guarded_tree.log({ordinary_inside_range, root_frame}, 1, 3);
+    guarded_tree.log({exact_name_outside_range, root_frame}, 1, 5);
+    spark::CallTree guarded_filtered;
+    assert(spark::filterExecutionTree(guarded_filtered, guarded_tree, resolved, instrumentation_ranges));
+    const auto guarded_keys = spark::collectFrameKeys(guarded_filtered);
+    assert(std::ranges::find(guarded_keys, ordinary_inside_range) != guarded_keys.end());
+    assert(std::ranges::find(guarded_keys, exact_name_outside_range) != guarded_keys.end());
 
     spark::ProfileMetadata metadata;
     spark::ProfilerTestAccess::addNativePluginSources(metadata, context, filtered_keys, resolved);
@@ -254,7 +293,7 @@ int main()
     malformed_child->times.emplace(1, 2);
     malformed.root().children.emplace(root_frame, std::move(malformed_child));
     spark::CallTree malformed_filtered;
-    assert(!spark::filterExecutionTree(malformed_filtered, malformed, resolved));
+    assert(!spark::filterExecutionTree(malformed_filtered, malformed, resolved, instrumentation_ranges));
     assert(malformed_filtered.root().times.empty());
 
     const spark::FrameKey conflicting = frame(3, 0x200000, 0x320);
