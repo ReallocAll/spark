@@ -30,27 +30,27 @@ void EndstoneWorldGaugeProvider::init()
     initialized_ = true;
 
     plugin_.registerEvent<::endstone::ActorSpawnEvent>(
-        [this](::endstone::ActorSpawnEvent &event) { state_.actorSpawned(event.getActor()->getId()); },
+        [this](::endstone::ActorSpawnEvent &event) { event_adapter_.actorSpawned(event.getActor()->getId()); },
         ::endstone::EventPriority::Monitor, true);
 
     plugin_.registerEvent<::endstone::ActorRemoveEvent>(
-        [this](::endstone::ActorRemoveEvent &event) { state_.actorRemoved(event.getActor()->getId()); },
+        [this](::endstone::ActorRemoveEvent &event) { event_adapter_.actorRemoved(event.getActor()->getId()); },
         ::endstone::EventPriority::Monitor);
 
     plugin_.registerEvent<::endstone::PlayerJoinEvent>(
-        [this](::endstone::PlayerJoinEvent &event) { state_.playerSpawned(event.getPlayer()->getId()); },
+        [this](::endstone::PlayerJoinEvent &event) { event_adapter_.playerSpawned(event.getPlayer()->getId()); },
         ::endstone::EventPriority::Monitor);
 
     plugin_.registerEvent<::endstone::PlayerQuitEvent>(
-        [this](::endstone::PlayerQuitEvent &event) { state_.playerRemoved(event.getPlayer()->getId()); },
+        [this](::endstone::PlayerQuitEvent &event) { event_adapter_.playerRemoved(event.getPlayer()->getId()); },
         ::endstone::EventPriority::Monitor);
 
     plugin_.registerEvent<::endstone::ChunkLoadEvent>(
-        [this](::endstone::ChunkLoadEvent &event) { state_.chunkLoaded(chunkKey(event.getChunk())); },
+        [this](::endstone::ChunkLoadEvent &event) { event_adapter_.chunkLoaded(chunkKey(event.getChunk())); },
         ::endstone::EventPriority::Monitor);
 
     plugin_.registerEvent<::endstone::ChunkUnloadEvent>(
-        [this](::endstone::ChunkUnloadEvent &event) { state_.chunkUnloaded(chunkKey(event.getChunk())); },
+        [this](::endstone::ChunkUnloadEvent &event) { event_adapter_.chunkUnloaded(chunkKey(event.getChunk())); },
         ::endstone::EventPriority::Monitor);
 
     reconcile();
@@ -62,7 +62,7 @@ std::pair<int, int> EndstoneWorldGaugeProvider::worldGauges()
     if (now - last_reconcile_steady_ms_ >= KReconcileIntervalMs) {
         reconcile();
     }
-    const WorldGaugeCounts counts = state_.counts();
+    const WorldGaugeCounts counts = event_adapter_.counts();
     return {counts.entities, counts.chunks};
 }
 
@@ -83,7 +83,7 @@ void EndstoneWorldGaugeProvider::reconcile()
     for (const auto &player : server_.getOnlinePlayers()) {
         snapshot.player_ids.push_back(player->getId());
     }
-    state_.reconcile(snapshot);
+    event_adapter_.reconcile(snapshot);
 }
 
 }  // namespace spark::endstone_adapter
