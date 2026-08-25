@@ -29,7 +29,7 @@ std::size_t accountedBytes(std::initializer_list<std::size_t> sizes)
     return total;
 }
 
-constexpr auto kOpenCleanupBudget = std::chrono::milliseconds(500);
+constexpr auto KOpenCleanupBudget = std::chrono::milliseconds(500);
 
 }  // namespace
 
@@ -51,7 +51,7 @@ SocketChannelInfo ViewerSocket::channelInfo() const
     return info;
 }
 
-std::string ViewerSocket::open(const UploadCallback &upload, CancellationToken cancellation)
+std::string ViewerSocket::open(const UploadCallback &upload, const CancellationToken &cancellation)
 {
     std::scoped_lock open_lock(open_mutex_);
     std::uint64_t generation = 0;
@@ -61,7 +61,7 @@ std::string ViewerSocket::open(const UploadCallback &upload, CancellationToken c
         {
             std::scoped_lock transport_lock(transport_mutex_);
             if (ws_) {
-                if (!ws_->closeWithin(kOpenCleanupBudget)) {
+                if (!ws_->closeWithin(KOpenCleanupBudget)) {
                     return {};
                 }
                 ws_.reset();
@@ -108,7 +108,7 @@ std::string ViewerSocket::open(const UploadCallback &upload, CancellationToken c
             if (bytebin_key.empty() || state_.load(std::memory_order_acquire) != ConnectionState::Opening || !ws_ ||
                 !ws_->isOpen()) {
                 if (ws_) {
-                    ws_->closeWithin(kOpenCleanupBudget);
+                    ws_->closeWithin(KOpenCleanupBudget);
                 }
                 state_.store(ConnectionState::Closed, std::memory_order_release);
                 return {};
@@ -121,7 +121,7 @@ std::string ViewerSocket::open(const UploadCallback &upload, CancellationToken c
             ConnectionState expected = ConnectionState::Opening;
             if (!state_.compare_exchange_strong(expected, ConnectionState::Open, std::memory_order_acq_rel,
                                                 std::memory_order_acquire)) {
-                ws_->closeWithin(kOpenCleanupBudget);
+                ws_->closeWithin(KOpenCleanupBudget);
                 state_.store(ConnectionState::Closed, std::memory_order_release);
                 return {};
             }
@@ -133,7 +133,7 @@ std::string ViewerSocket::open(const UploadCallback &upload, CancellationToken c
             std::scoped_lock transport_lock(transport_mutex_);
             if (generation_started && generation == connection_generation_.load(std::memory_order_acquire)) {
                 if (ws_) {
-                    ws_->closeWithin(kOpenCleanupBudget);
+                    ws_->closeWithin(KOpenCleanupBudget);
                 }
                 state_.store(ConnectionState::Closed, std::memory_order_release);
             }
@@ -184,6 +184,7 @@ void ViewerSocket::requestStop() noexcept
         setCloseState(CloseReason::LocalClose);
     }
     catch (...) {
+        state_.store(ConnectionState::Closed, std::memory_order_release);
     }
 }
 
