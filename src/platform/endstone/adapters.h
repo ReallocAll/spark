@@ -1,7 +1,6 @@
 #ifndef SPARK_PLATFORM_ENDSTONE_ADAPTERS_H
 #define SPARK_PLATFORM_ENDSTONE_ADAPTERS_H
 
-#include <atomic>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -12,6 +11,7 @@
 
 #include "application/command/command_sender.h"
 #include "application/platform_capabilities.h"
+#include "platform/endstone/world_gauge_state.h"
 
 namespace spark::endstone_adapter {
 
@@ -87,8 +87,7 @@ private:
 
     ::endstone::Plugin &plugin_;
     ::endstone::Server &server_;
-    std::atomic<int> entity_count_{0};
-    std::atomic<int> chunk_count_{0};
+    EndstoneWorldGaugeState state_;
     std::int64_t last_reconcile_steady_ms_ = 0;
     bool initialized_ = false;
 };
