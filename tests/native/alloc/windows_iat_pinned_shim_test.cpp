@@ -90,9 +90,10 @@ int main()
 
     if (!require(original != nullptr && consumer_alloc != nullptr && consumer_free != nullptr,
                  "provider or consumer exports are unavailable") ||
-        !require(shim_alloc != nullptr && shim_pin != nullptr && shim_configure != nullptr && shim_activate != nullptr &&
-                     shim_begin_deactivate != nullptr && shim_drained != nullptr && shim_finish_deactivate != nullptr &&
-                     shim_handler_calls != nullptr && shim_fallback_calls != nullptr,
+        !require(shim_alloc != nullptr && shim_pin != nullptr && shim_configure != nullptr &&
+                     shim_activate != nullptr && shim_begin_deactivate != nullptr && shim_drained != nullptr &&
+                     shim_finish_deactivate != nullptr && shim_handler_calls != nullptr &&
+                     shim_fallback_calls != nullptr,
                  "shim exports are unavailable") ||
         !require(handler_alloc != nullptr && handler_calls != nullptr && handler_set_block != nullptr,
                  "handler exports are unavailable") ||
@@ -102,8 +103,7 @@ int main()
         return 1;
     }
 
-    spark::WindowsIatHooks hooks(
-        spark::makeNativeWindowsIatHookBackend(reinterpret_cast<void *>(handler_alloc)));
+    spark::WindowsIatHooks hooks(spark::makeNativeWindowsIatHookBackend(reinterpret_cast<void *>(handler_alloc)));
     spark::WindowsIatHookTarget target;
     target.import_name = "sparkIatProviderAlloc";
     target.import_modules = {"windows_iat_provider.dll"};
