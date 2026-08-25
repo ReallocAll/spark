@@ -2,6 +2,7 @@
 #define ENDSTONE_SPARK_VIEWER_SOCKET_H
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -13,6 +14,7 @@
 
 #include "core/ws/crypto.h"
 #include "core/ws/ws_proto.h"
+#include "net/cancellation.h"
 #include "net/websocket.h"
 
 namespace spark {
@@ -51,7 +53,7 @@ public:
 
     // Create the WebSocket channel, connect, and upload initial data.
     // Returns the viewer URL on success, or empty string on failure.
-    std::string open(const UploadCallback &upload);
+    std::string open(const UploadCallback &upload, CancellationToken cancellation = {});
 
     // Uploads on the caller's thread and sends the new payload ID.
     void processWindowRotate(const UploadCallback &upload);
@@ -64,6 +66,9 @@ public:
     // Send signed, already serialized platform/system/metrics statistics to
     // a connected viewer. Thread-safe against tick().
     bool sendStatistics(const std::string &platform, const std::string &system, const std::string &metrics);
+
+    void requestStop() noexcept;
+    bool closeWithin(std::chrono::milliseconds timeout) noexcept;
 
     // Close the socket and signal the viewer.
     void close() noexcept;
