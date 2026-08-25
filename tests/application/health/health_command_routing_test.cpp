@@ -90,9 +90,12 @@ class Connection final : public HealthDashboardConnection {
 public:
     explicit Connection(ConnectionProbe &probe) : probe_(probe) {}
 
-    std::string open(const UploadCallback &upload) override
+    std::string open(const UploadCallback &upload, CancellationToken cancellation) override
     {
-        const UploadResult result = upload();
+        if (cancellation.stopRequested()) {
+            return {};
+        }
+        const UploadResult result = upload(cancellation);
         std::scoped_lock lock(probe_.mutex);
         ++probe_.open_count;
         ++probe_.upload_count;
@@ -104,6 +107,12 @@ public:
     bool tick() override { return open_state_; }
     [[nodiscard]] bool isOpen() const override { return open_state_; }
     [[nodiscard]] bool hasClient() const override { return probe_.client; }
+    void requestStop() noexcept override { open_state_ = false; }
+    bool closeWithin(std::chrono::milliseconds) noexcept override
+    {
+        close();
+        return true;
+    }
     void close() override { open_state_ = false; }
     [[nodiscard]] SocketChannelInfo channelInfo() const override
     {
@@ -178,6 +187,7 @@ int main()
 {
     using spark::Arguments;
     using spark::base64Encode;
+    using spark::CancellationToken;
     using spark::Connection;
     using spark::Fixture;
     using spark::HealthCommandTestAccess;
@@ -188,7 +198,8 @@ int main()
     Fixture fixture;
 
     int uploads = 0;
-    auto upload = [&uploads](const std::string &, const std::string &, const std::string &, const std::string &) {
+    auto upload = [&uploads](const std::string &, const std::string &, const std::string &, const std::string &,
+                             CancellationToken) {
         ++uploads;
         return UploadResult{.ok = true, .key = "health-key"};
     };
