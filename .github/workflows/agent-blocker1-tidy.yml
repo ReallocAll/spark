@@ -1,0 +1,62 @@
+name: Agent Blocker 1 Tidy
+
+on:
+  push:
+    branches: [fix/linux-elf-hook-lifetime]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: fix/linux-elf-hook-lifetime
+          fetch-depth: 0
+
+      - name: Apply tidy fixes
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src/native/alloc/elf_import_hooks.cpp')
+          s = p.read_text(encoding='utf-8')
+          if '#include <ranges>\n' not in s:
+              s = s.replace('#include <limits>\n', '#include <limits>\n#include <ranges>\n')
+          s = s.replace('''        for (auto it = handles.rbegin(); it != handles.rend(); ++it) {
+            if (*it != nullptr) {
+                ::dlclose(*it);
+            }
+        }''', '''        for (void *handle : std::ranges::reverse_view(handles)) {
+            if (handle != nullptr) {
+                ::dlclose(handle);
+            }
+        }''')
+          s = s.replace('::dlinfo(handle, RTLD_DI_LINKMAP, &map)',
+                        '::dlinfo(handle, RTLD_DI_LINKMAP, static_cast<void *>(&map))')
+          s = s.replace('RefreshContext context{&image, false};',
+                        'RefreshContext context{.image = &image, .found = false};')
+          p.write_text(s, encoding='utf-8')
+          PY
+
+      - name: Install clang-format 20
+        shell: bash
+        run: |
+          wget -qO /tmp/llvm.sh https://apt.llvm.org/llvm.sh
+          chmod +x /tmp/llvm.sh
+          sudo /tmp/llvm.sh 20
+          sudo apt-get install -y clang-format-20
+
+      - name: Format and commit
+        shell: bash
+        run: |
+          clang-format-20 -i src/native/alloc/elf_import_hooks.cpp
+          git diff --check
+          rm .github/workflows/agent-blocker1-tidy.yml
+          git config user.name ReallocAll
+          git config user.email 63277109+ReallocAll@users.noreply.github.com
+          git add src/native/alloc/elf_import_hooks.cpp .github/workflows/agent-blocker1-tidy.yml
+          git commit -m "fix: satisfy ELF hook clang-tidy"
+          git push origin HEAD:fix/linux-elf-hook-lifetime
