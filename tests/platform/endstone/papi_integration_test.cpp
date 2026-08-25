@@ -105,35 +105,36 @@ WorldGaugeChunkKey chunk(std::string dimension, int x, int z)
 
 void expectGaugeCounts(const EndstoneWorldGaugeState &state, int players, int entities, int chunks)
 {
-    assert(state.counts() == WorldGaugeCounts{.players = players, .entities = entities, .chunks = chunks});
+    const WorldGaugeCounts expected{.players = players, .entities = entities, .chunks = chunks};
+    assert(state.counts() == expected);
 }
 
 void testWorldGaugeLifecycle()
 {
-    constexpr std::int64_t KPlayer = 100;
-    constexpr std::int64_t KEntity = 200;
-    constexpr std::int64_t KSecondEntity = 300;
+    constexpr std::int64_t k_player = 100;
+    constexpr std::int64_t k_entity = 200;
+    constexpr std::int64_t k_second_entity = 300;
 
     EndstoneWorldGaugeState lifecycle;
     expectGaugeCounts(lifecycle, 0, 0, 0);
 
-    lifecycle.playerSpawned(KPlayer);
+    lifecycle.playerSpawned(k_player);
     expectGaugeCounts(lifecycle, 1, 1, 0);
 
-    lifecycle.actorSpawned(KPlayer);
-    lifecycle.playerSpawned(KPlayer);
+    lifecycle.actorSpawned(k_player);
+    lifecycle.playerSpawned(k_player);
     expectGaugeCounts(lifecycle, 1, 1, 0);
 
-    lifecycle.actorSpawned(KEntity);
-    lifecycle.actorSpawned(KEntity);
+    lifecycle.actorSpawned(k_entity);
+    lifecycle.actorSpawned(k_entity);
     expectGaugeCounts(lifecycle, 1, 2, 0);
 
-    lifecycle.actorRemoved(KEntity);
-    lifecycle.actorRemoved(KEntity);
+    lifecycle.actorRemoved(k_entity);
+    lifecycle.actorRemoved(k_entity);
     expectGaugeCounts(lifecycle, 1, 1, 0);
 
-    lifecycle.playerRemoved(KPlayer);
-    lifecycle.playerRemoved(KPlayer);
+    lifecycle.playerRemoved(k_player);
+    lifecycle.playerRemoved(k_player);
     expectGaugeCounts(lifecycle, 0, 0, 0);
 
     const WorldGaugeChunkKey overworld = chunk("minecraft:overworld", 4, -7);
@@ -150,45 +151,45 @@ void testWorldGaugeLifecycle()
     expectGaugeCounts(lifecycle, 0, 0, 0);
 
     EndstoneWorldGaugeState reconciled;
-    reconciled.playerSpawned(KPlayer);
-    reconciled.actorSpawned(KPlayer);
-    reconciled.actorSpawned(KEntity);
-    reconciled.actorSpawned(KSecondEntity);
+    reconciled.playerSpawned(k_player);
+    reconciled.actorSpawned(k_player);
+    reconciled.actorSpawned(k_entity);
+    reconciled.actorSpawned(k_second_entity);
     reconciled.chunkLoaded(overworld);
     expectGaugeCounts(reconciled, 1, 3, 1);
 
     WorldGaugeSnapshot repaired;
-    repaired.actor_ids = {KPlayer, KSecondEntity, KSecondEntity};
-    repaired.player_ids = {KPlayer, KPlayer};
+    repaired.actor_ids = {k_player, k_second_entity, k_second_entity};
+    repaired.player_ids = {k_player, k_player};
     repaired.chunks = {nether_same_coordinates, nether_same_coordinates};
     reconciled.reconcile(repaired);
     expectGaugeCounts(reconciled, 1, 2, 1);
 
     WorldGaugeSnapshot initial_scan;
-    initial_scan.actor_ids = {KPlayer, KEntity};
-    initial_scan.player_ids = {KPlayer};
+    initial_scan.actor_ids = {k_player, k_entity};
+    initial_scan.player_ids = {k_player};
     initial_scan.chunks = {overworld, nether_same_coordinates};
 
     EndstoneWorldGaugeState from_scan;
     from_scan.reconcile(initial_scan);
 
     EndstoneWorldGaugeState from_events;
-    from_events.playerSpawned(KPlayer);
-    from_events.actorSpawned(KPlayer);
-    from_events.actorSpawned(KEntity);
+    from_events.playerSpawned(k_player);
+    from_events.actorSpawned(k_player);
+    from_events.actorSpawned(k_entity);
     from_events.chunkLoaded(overworld);
     from_events.chunkLoaded(nether_same_coordinates);
     assert(from_scan.counts() == from_events.counts());
     expectGaugeCounts(from_scan, 1, 2, 2);
 
-    from_events.playerRemoved(KPlayer);
+    from_events.playerRemoved(k_player);
     expectGaugeCounts(from_events, 0, 1, 2);
-    from_events.playerSpawned(KPlayer);
+    from_events.playerSpawned(k_player);
     expectGaugeCounts(from_events, 1, 2, 2);
     from_events.reconcile(WorldGaugeSnapshot{});
     expectGaugeCounts(from_events, 0, 0, 0);
-    from_events.actorRemoved(KEntity);
-    from_events.playerRemoved(KPlayer);
+    from_events.actorRemoved(k_entity);
+    from_events.playerRemoved(k_player);
     from_events.chunkUnloaded(overworld);
     expectGaugeCounts(from_events, 0, 0, 0);
 }
