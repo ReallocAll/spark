@@ -33,6 +33,7 @@ struct Probe {
     std::vector<spark::HealthDashboard::OpenResult> completions;
     std::optional<spark::SocketChannelInfo> uploaded_channel;
     bool next_open_success = true;
+    bool next_open_block = false;
     bool block_factory = false;
     bool release_factory = true;
     bool factory_entered = false;
@@ -41,10 +42,12 @@ struct Probe {
     bool upload_entered = false;
     std::atomic<bool> upload_cancelled{false};
     std::atomic<bool> close_during_work{false};
+    std::atomic<int> trusted_send_count{0};
 
     void configureFactory(bool block);
     void releaseFactory();
     bool waitFactoryEntered();
+    bool waitConnectionReady();
     void configureUpload(bool block);
     void releaseUpload();
     bool waitUploadEntered();
@@ -75,6 +78,7 @@ public:
     bool waitOpenEntered();
     bool waitSendEntered();
     int sendCount() const;
+    std::string trustedClient() const;
 
 private:
     Probe &probe_;
