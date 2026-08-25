@@ -1,0 +1,130 @@
+name: Agent Blocker 1 Lazy Fix
+
+on:
+  push:
+    branches: [fix/linux-elf-hook-lifetime]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: fix/linux-elf-hook-lifetime
+          fetch-depth: 0
+
+      - name: Apply lazy-binding-safe hook fix
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          header = Path('src/native/alloc/elf_import_hooks.h')
+          s = header.read_text(encoding='utf-8')
+          old = '''        std::string module_name;\n        bool main_executable = false;\n'''
+          new = '''        std::string module_name;\n        bool main_executable = false;\n        bool lazy_plt = false;\n'''
+          assert old in s
+          s = s.replace(old, new, 1)
+          header.write_text(s, encoding='utf-8')
+
+          cpp = Path('src/native/alloc/elf_import_hooks.cpp')
+          s = cpp.read_text(encoding='utf-8')
+          old = '''                    next_targets.push_back(\n                        {slot, original, spec.replacement, spec_index, image.base, image.name, image.main_executable});\n'''
+          new = '''                    const bool lazy_plt =\n                        type == R_X86_64_JUMP_SLOT && contains(image, reinterpret_cast<std::uintptr_t>(original));\n                    next_targets.push_back({slot, original, spec.replacement, spec_index, image.base, image.name,\n                                            image.main_executable, lazy_plt});\n'''
+          assert old in s
+          s = s.replace(old, new, 1)
+
+          old = '''    std::vector<const Target *> updates;\n    updates.reserve(targets_.size());\n    std::vector<std::pair<std::uintptr_t, std::string_view>> hooked;\n    for (const Target &target : targets_) {\n'''
+          new = '''    std::vector<const Target *> updates;\n    updates.reserve(targets_.size());\n    std::vector<std::pair<std::uintptr_t, std::string_view>> hooked;\n    for (Target &target : targets_) {\n'''
+          assert old in s
+          s = s.replace(old, new, 1)
+
+          old = '''            if (current != target.original) {\n                error = "ELF import slot changed while applying hooks: " + target.module_name;\n                return false;\n            }\n'''
+          new = '''            if (current != target.original) {\n                const bool lazy_resolved =\n                    target.lazy_plt && contains(*image, reinterpret_cast<std::uintptr_t>(target.original)) &&\n                    !contains(*image, reinterpret_cast<std::uintptr_t>(current));\n                if (!lazy_resolved) {\n                    error = "ELF import slot changed while applying hooks: " + target.module_name;\n                    return false;\n                }\n                // A JUMP_SLOT captured before lazy binding may legitimately transition from the importing\n                // module's PLT resolver stub to its final external function while the module stays pinned.\n                // Preserve that resolved value so uninstall restores the loader-selected target rather than\n                // the stale PLT trampoline. Any later unexpected change remains fail-closed.\n                target.original = current;\n                target.lazy_plt = false;\n            }\n'''
+          assert old in s
+          s = s.replace(old, new, 1)
+          cpp.write_text(s, encoding='utf-8')
+
+          test = Path('tests/selftest_allocation_linux.cpp')
+          s = test.read_text(encoding='utf-8')
+          marker = '''}  // namespace\n\nbool verifyLinuxImportHooks()\n{\n    const pid_t expected = ::getpid();\n'''
+          helper = r'''bool verifyLazyImportResolution(pid_t expected)
+{
+    void *fixture = ::dlopen(SPARK_ELF_HOOK_FIXTURE_PATH, RTLD_LAZY | RTLD_LOCAL);
+    if (fixture == nullptr) {
+        std::fprintf(stderr, "linux import hooks: lazy fixture load failed: %s\n", ::dlerror());
+        return false;
+    }
+    auto fixture_getpid = reinterpret_cast<pid_t (*)()>(::dlsym(fixture, "sparkElfHookFixtureGetpid"));
+    if (fixture_getpid == nullptr) {
+        std::fprintf(stderr, "linux import hooks: lazy fixture symbol lookup failed\n");
+        ::dlclose(fixture);
+        return false;
+    }
+
+    spark::ElfImportHooks hooks;
+    const spark::ElfImportHookSpec spec{
+        .name = "getpid", .replacement = reinterpret_cast<void *>(&linuxHookProbe), .required = true};
+    std::string error;
+    if (!hooks.prepare(std::span<const spark::ElfImportHookSpec>(&spec, 1), error)) {
+        std::fprintf(stderr, "linux import hooks: lazy prepare failed: %s\n", error.c_str());
+        ::dlclose(fixture);
+        return false;
+    }
+
+    // Resolve a potentially-lazy JUMP_SLOT after scan but before install. install() must accept exactly
+    // this loader transition, retain the resolved function as the uninstall target, and still reject
+    // unrelated slot changes.
+    if (fixture_getpid() != expected || !hooks.install(error) || fixture_getpid() != static_cast<pid_t>(-12345)) {
+        std::fprintf(stderr, "linux import hooks: lazy resolution/install failed: %s\n", error.c_str());
+        std::string ignored;
+        hooks.uninstall(ignored);
+        ::dlclose(fixture);
+        return false;
+    }
+    if (!hooks.uninstall(error) || fixture_getpid() != expected) {
+        std::fprintf(stderr, "linux import hooks: lazy resolution restore failed: %s\n", error.c_str());
+        ::dlclose(fixture);
+        return false;
+    }
+    ::dlclose(fixture);
+    return true;
+}
+
+}  // namespace
+
+bool verifyLinuxImportHooks()
+{
+    const pid_t expected = ::getpid();
+    if (!verifyLazyImportResolution(expected)) {
+        return false;
+    }
+'''
+          assert marker in s
+          s = s.replace(marker, helper, 1)
+          test.write_text(s, encoding='utf-8')
+          PY
+
+      - name: Install clang-format 20
+        shell: bash
+        run: |
+          wget -qO /tmp/llvm.sh https://apt.llvm.org/llvm.sh
+          chmod +x /tmp/llvm.sh
+          sudo /tmp/llvm.sh 20
+          sudo apt-get install -y clang-format-20
+
+      - name: Format and commit
+        shell: bash
+        run: |
+          clang-format-20 -i src/native/alloc/elf_import_hooks.cpp src/native/alloc/elf_import_hooks.h tests/selftest_allocation_linux.cpp
+          git diff --check
+          rm .github/workflows/agent-blocker1-lazy-fix.yml
+          git config user.name ReallocAll
+          git config user.email 63277109+ReallocAll@users.noreply.github.com
+          git add src/native/alloc/elf_import_hooks.cpp src/native/alloc/elf_import_hooks.h tests/selftest_allocation_linux.cpp .github/workflows/agent-blocker1-lazy-fix.yml
+          git commit -m "fix: handle ELF lazy binding during hook install"
+          git push origin HEAD:fix/linux-elf-hook-lifetime
