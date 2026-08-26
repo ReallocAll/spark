@@ -122,12 +122,17 @@ bool startsWithIgnoreCase(const std::string &value, const char *prefix)
     return value.size() >= prefix_length && ::_strnicmp(value.c_str(), prefix, prefix_length) == 0;
 }
 
-bool isLeadingAllocatorRuntime(const std::string &path)
+bool isSparkAllocationInstrumentation(const std::string &path)
 {
     const std::string name = moduleBasename(path);
     return equalsIgnoreCase(name, "spark.dll") || equalsIgnoreCase(name, "endstone_spark.dll") ||
-           startsWithIgnoreCase(name, "endstone_spark-") || equalsIgnoreCase(name, "spark_allocation_shim.dll") ||
-           equalsIgnoreCase(name, "ucrtbase.dll") || equalsIgnoreCase(name, "vcruntime140.dll") ||
+           startsWithIgnoreCase(name, "endstone_spark-") || equalsIgnoreCase(name, "spark_allocation_shim.dll");
+}
+
+bool isLeadingAllocatorRuntime(const std::string &path)
+{
+    const std::string name = moduleBasename(path);
+    return equalsIgnoreCase(name, "ucrtbase.dll") || equalsIgnoreCase(name, "vcruntime140.dll") ||
            equalsIgnoreCase(name, "vcruntime140_1.dll") || equalsIgnoreCase(name, "msvcp140.dll");
 }
 
@@ -1885,6 +1890,9 @@ struct AllocationSampler::Impl {
             }
             std::string path;
             FrameKey key = frameKeyForAddress(raw, path);
+            if (isSparkAllocationInstrumentation(path)) {
+                continue;
+            }
             if (leading && isLeadingAllocatorRuntime(path)) {
                 continue;
             }
@@ -1922,6 +1930,9 @@ struct AllocationSampler::Impl {
             }
             std::string path;
             FrameKey key = frameKeyForAddress(raw, path);
+            if (isSparkAllocationInstrumentation(path)) {
+                continue;
+            }
             if (leading && isLeadingAllocatorRuntime(path)) {
                 continue;
             }
