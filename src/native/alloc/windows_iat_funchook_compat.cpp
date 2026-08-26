@@ -184,12 +184,42 @@ bool loadShim(ShimApi &api, std::string &error)
     if (!moduleDirectory(directory, error)) {
         return false;
     }
-    const std::wstring path = directory + KShimFileName;
-    api.module = ::LoadLibraryW(path.c_str());
+    const std::wstring primary_path = directory + KShimFileName;
+    api.module = ::LoadLibraryW(primary_path.c_str());
     if (api.module == nullptr) {
-        error = "LoadLibraryW(spark_allocation_shim.dll) failed: " + std::to_string(::GetLastError());
-        return false;
+        const DWORD primary_error = ::GetLastError();
+
+        // Endstone shadow-copies C++ plugins into plugins/.local before
+        // LoadLibrary so hot reload can replace the original plugin file.
+        // The process-lifetime allocation shim remains next to the original
+        // plugin in plugins/, therefore a module-relative lookup from the
+        // loaded shadow copy must explicitly fall back one level.
+        std::wstring module_directory = directory;
+        while (!module_directory.empty() &&
+               (module_directory.back() == L'\\' || module_directory.back() == L'/')) {
+            module_directory.pop_back();
+        }
+        const std::size_t separator = module_directory.find_last_of(L"/\\");
+        const std::wstring leaf = separator == std::wstring::npos
+                                      ? module_directory
+                                      : module_directory.substr(separator + 1);
+        if (leaf != L".local" || separator == std::wstring::npos) {
+            error = "LoadLibraryW(spark_allocation_shim.dll) failed from plugin module directory: " +
+                    std::to_string(primary_error);
+            return false;
+        }
+
+        const std::wstring fallback_path =
+            module_directory.substr(0, separator + 1) + KShimFileName;
+        api.module = ::LoadLibraryW(fallback_path.c_str());
+        if (api.module == nullptr) {
+            error = "LoadLibraryW(spark_allocation_shim.dll) failed from Endstone shadow-copy directory: " +
+                    std::to_string(primary_error) + "; plugins parent fallback failed: " +
+                    std::to_string(::GetLastError());
+            return false;
+        }
     }
+
 
     api.pin = proc<spark::WindowsAllocationShimPinFn>(api.module, "sparkAllocationShimPin");
     api.configure = proc<spark::WindowsAllocationShimConfigureFn>(api.module, "sparkAllocationShimConfigure");
