@@ -1,0 +1,58 @@
+name: Temporary PE Import Bounds Fix
+
+on:
+  push:
+    branches:
+      - fix/windows-allocation-safe-hooks
+    paths:
+      - .github/workflows/temp-pe-import-bounds.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: fix/windows-allocation-safe-hooks
+      - name: Patch Windows PE import bounds
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path("src/native/alloc/windows_iat_hooks_windows.cpp")
+          text = path.read_text(encoding="utf-8")
+          old = '''        if (!spanInside(directory.VirtualAddress, directory.Size, identity.image_size)) {
+            error = "PE import directory is outside the loaded image";
+            return false;
+        }
+
+        const std::size_t descriptor_capacity = directory.Size / sizeof(IMAGE_IMPORT_DESCRIPTOR);
+'''
+          new = '''        if (!spanInside(directory.VirtualAddress, 1, identity.image_size)) {
+            error = "PE import directory starts outside the loaded image";
+            return false;
+        }
+
+        // The PE import directory size is loader metadata, not a trustworthy mapped-memory bound.
+        // Some valid images (including BDS) declare a directory size that extends past SizeOfImage.
+        // Clamp descriptor scanning to the mapped image while keeping all per-record RVA checks below.
+        const std::size_t mapped_bytes = identity.image_size - directory.VirtualAddress;
+        const std::size_t descriptor_bytes = (std::min)(static_cast<std::size_t>(directory.Size), mapped_bytes);
+        const std::size_t descriptor_capacity = descriptor_bytes / sizeof(IMAGE_IMPORT_DESCRIPTOR);
+'''
+          if text.count(old) != 1:
+              raise SystemExit("expected PE import bounds block not found exactly once")
+          path.write_text(text.replace(old, new), encoding="utf-8")
+      - name: Commit patch and remove temporary workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/temp-pe-import-bounds.yml
+          git add src/native/alloc/windows_iat_hooks_windows.cpp
+          git commit -m "fix: clamp Windows PE import scan to loaded image"
+          git push origin HEAD:fix/windows-allocation-safe-hooks
