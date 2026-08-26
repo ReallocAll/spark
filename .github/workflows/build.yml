@@ -2,7 +2,7 @@ name: Build
 
 on:
   push:
-    branches: [develop]
+    branches: [develop, "ci/**"]
   pull_request:
     branches: [develop]
   workflow_dispatch:
