@@ -104,6 +104,12 @@ set_target_properties(spark_arguments_test PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME spark_arguments_test COMMAND spark_arguments_test)
 
+add_executable(spark_gamerule_defaults_test core/metadata/gamerule_defaults_test.cpp)
+target_link_libraries(spark_gamerule_defaults_test PRIVATE spark_core)
+set_target_properties(spark_gamerule_defaults_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME spark_gamerule_defaults_test COMMAND spark_gamerule_defaults_test)
+
 add_executable(spark_placeholder_statistics_test core/stats/placeholder_statistics_test.cpp)
 target_link_libraries(spark_placeholder_statistics_test PRIVATE spark_core)
 set_target_properties(spark_placeholder_statistics_test PROPERTIES

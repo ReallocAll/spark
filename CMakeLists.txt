@@ -159,6 +159,7 @@ add_library(spark_core STATIC
         src/core/util/state_file.cpp
         src/core/util/world_region.cpp
         src/core/metadata/server_properties.cpp
+        src/core/metadata/gamerule_defaults.cpp
         src/core/activity/activity_log.cpp
         src/core/command/arguments.cpp
         src/core/profiler/profiler.cpp
