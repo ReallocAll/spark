@@ -462,6 +462,31 @@ extern "C" int funchook_install(funchook_t *funchook, int flags)
     }
 }
 
+extern "C" int funchook_refresh(funchook_t *funchook)
+{
+    if (funchook == nullptr) {
+        return FUNCHOOK_ERROR_INTERNAL;
+    }
+    if (!funchook->installed || funchook->hooks == nullptr) {
+        return FUNCHOOK_ERROR_NOT_INSTALLED;
+    }
+    try {
+        funchook->error.clear();
+        if (!funchook->hooks->refresh(funchook->error)) {
+            return FUNCHOOK_ERROR_INTERNAL;
+        }
+        return FUNCHOOK_ERROR_SUCCESS;
+    }
+    catch (const std::exception &exception) {
+        funchook->error = std::string("Windows IAT allocation hook refresh failed: ") + exception.what();
+        return FUNCHOOK_ERROR_INTERNAL;
+    }
+    catch (...) {
+        funchook->error = "Windows IAT allocation hook refresh failed";
+        return FUNCHOOK_ERROR_INTERNAL;
+    }
+}
+
 extern "C" int funchook_uninstall(funchook_t *funchook, int flags)
 {
     (void)flags;

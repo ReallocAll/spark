@@ -67,6 +67,7 @@ constexpr std::size_t KMaxTickDecisions = 100000;
 constexpr std::size_t KTickEventCapacity = 4096;
 constexpr std::size_t KHookPatchSize = 5;  // funchook 1.1.3 x86/x64 entry jump
 constexpr std::uint32_t KFramesToSkip = 2;
+constexpr std::uint64_t KHookRefreshIntervalMs = 2000;
 
 void *tombstonePointer() noexcept
 {
@@ -115,12 +116,19 @@ bool equalsIgnoreCase(const std::string &a, const char *b)
     return ::_stricmp(a.c_str(), b) == 0;
 }
 
+bool startsWithIgnoreCase(const std::string &value, const char *prefix)
+{
+    const std::size_t prefix_length = std::strlen(prefix);
+    return value.size() >= prefix_length && ::_strnicmp(value.c_str(), prefix, prefix_length) == 0;
+}
+
 bool isLeadingAllocatorRuntime(const std::string &path)
 {
     const std::string name = moduleBasename(path);
-    return equalsIgnoreCase(name, "spark.dll") || equalsIgnoreCase(name, "ucrtbase.dll") ||
-           equalsIgnoreCase(name, "vcruntime140.dll") || equalsIgnoreCase(name, "vcruntime140_1.dll") ||
-           equalsIgnoreCase(name, "msvcp140.dll");
+    return equalsIgnoreCase(name, "spark.dll") || equalsIgnoreCase(name, "endstone_spark.dll") ||
+           startsWithIgnoreCase(name, "endstone_spark-") || equalsIgnoreCase(name, "spark_allocation_shim.dll") ||
+           equalsIgnoreCase(name, "ucrtbase.dll") || equalsIgnoreCase(name, "vcruntime140.dll") ||
+           equalsIgnoreCase(name, "vcruntime140_1.dll") || equalsIgnoreCase(name, "msvcp140.dll");
 }
 
 }  // namespace
@@ -1995,7 +2003,17 @@ struct AllocationSampler::Impl {
         if (config.aggregator_delay_ms_for_testing != 0) {
             std::this_thread::sleep_for(std::chrono::milliseconds(config.aggregator_delay_ms_for_testing));
         }
+        std::uint64_t next_hook_refresh_ms = monotonicMs() + KHookRefreshIntervalMs;
         while (aggregator_running.load(std::memory_order_acquire)) {
+            const std::uint64_t now_ms = monotonicMs();
+            if (now_ms >= next_hook_refresh_ms) {
+                if (hooks == nullptr || funchook_refresh(hooks) != FUNCHOOK_ERROR_SUCCESS) {
+                    const char *hook_error = funchook_error_message(hooks);
+                    throw std::runtime_error(std::string("allocation hook refresh failed: ") +
+                                             (hook_error != nullptr ? hook_error : "unknown hook refresh failure"));
+                }
+                next_hook_refresh_ms = now_ms + KHookRefreshIntervalMs;
+            }
             {
                 std::scoped_lock lock(aggregate_mutex);
                 drainQueues();
