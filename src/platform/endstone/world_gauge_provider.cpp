@@ -24,7 +24,7 @@ WorldGaugeChunkKey chunkKey(const ::endstone::Chunk &chunk)
 
 int boundedSize(std::size_t size)
 {
-    const std::size_t maximum = static_cast<std::size_t>(std::numeric_limits<int>::max());
+    const auto maximum = static_cast<std::size_t>(std::numeric_limits<int>::max());
     return static_cast<int>((std::min)(size, maximum));
 }
 
@@ -101,8 +101,7 @@ void EndstoneWorldGaugeProvider::reconcile(bool include_tile_entities)
                 continue;
             }
             try {
-                snapshot.tile_entities.push_back(
-                    {.chunk = key, .count = boundedSize(chunk->getBlockActors().size())});
+                snapshot.tile_entities.push_back({.chunk = key, .count = boundedSize(chunk->getBlockActors().size())});
             }
             catch (...) {
                 tile_scan_ok = false;
