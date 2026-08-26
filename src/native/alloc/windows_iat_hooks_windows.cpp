@@ -295,12 +295,17 @@ private:
         if (directory.VirtualAddress == 0 || directory.Size == 0) {
             return true;
         }
-        if (!spanInside(directory.VirtualAddress, directory.Size, identity.image_size)) {
-            error = "PE import directory is outside the loaded image";
+        if (!spanInside(directory.VirtualAddress, 1, identity.image_size)) {
+            error = "PE import directory starts outside the loaded image";
             return false;
         }
 
-        const std::size_t descriptor_capacity = directory.Size / sizeof(IMAGE_IMPORT_DESCRIPTOR);
+        // The PE import directory size is loader metadata, not a trustworthy mapped-memory bound.
+        // Some valid images (including BDS) declare a directory size that extends past SizeOfImage.
+        // Clamp descriptor scanning to the mapped image while keeping all per-record RVA checks below.
+        const std::size_t mapped_bytes = identity.image_size - directory.VirtualAddress;
+        const std::size_t descriptor_bytes = (std::min)(static_cast<std::size_t>(directory.Size), mapped_bytes);
+        const std::size_t descriptor_capacity = descriptor_bytes / sizeof(IMAGE_IMPORT_DESCRIPTOR);
         const auto *descriptors = reinterpret_cast<const IMAGE_IMPORT_DESCRIPTOR *>(base + directory.VirtualAddress);
         for (std::size_t descriptor_index = 0; descriptor_index < descriptor_capacity; ++descriptor_index) {
             const IMAGE_IMPORT_DESCRIPTOR &descriptor = descriptors[descriptor_index];
