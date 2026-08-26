@@ -212,7 +212,7 @@ int main()
         assert(spawn_radius.has_value() && *spawn_radius == "10");
         assert(random_tick_speed.has_value() && *random_tick_speed == "1");
         assert(recipes_unlock.has_value() && *recipes_unlock == "true");
-        assert(max_chain.has_value() && *max_chain == "65535");
+        assert(max_chain.has_value() && *max_chain == "65536");
     }
 
     // Historical default changes are sparse overrides, not full version snapshots.
