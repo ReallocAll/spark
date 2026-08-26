@@ -196,11 +196,11 @@ inline std::optional<std::string> resolveGameRuleDefault(std::string_view name, 
     const std::string normalized_version = detail::normalizeMinecraftVersion(minecraft_version);
 
     if (!normalized_version.empty()) {
-        const auto exact = std::find_if(
-            std::begin(detail::kExactHistoricalOverrides), std::end(detail::kExactHistoricalOverrides),
-            [&normalized_name, &normalized_version](const auto &entry) {
-                return entry.name == normalized_name && entry.version == normalized_version;
-            });
+        const auto exact =
+            std::find_if(std::begin(detail::kExactHistoricalOverrides), std::end(detail::kExactHistoricalOverrides),
+                         [&normalized_name, &normalized_version](const auto &entry) {
+                             return entry.name == normalized_name && entry.version == normalized_version;
+                         });
         if (exact != std::end(detail::kExactHistoricalOverrides)) {
             return std::string(exact->value);
         }
