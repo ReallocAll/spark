@@ -146,8 +146,8 @@ public:
         }
         return {.players = static_cast<int>(player_ids_.size()),
                 .entities = static_cast<int>(entity_count),
-                .tile_entities = static_cast<int>((std::min)(tile_entity_count,
-                                                              static_cast<std::int64_t>(std::numeric_limits<int>::max()))),
+                .tile_entities = static_cast<int>(
+                    (std::min)(tile_entity_count, static_cast<std::int64_t>(std::numeric_limits<int>::max()))),
                 .chunks = static_cast<int>(chunks_.size()),
                 .tile_entities_present = tile_entities_complete_};
     }
