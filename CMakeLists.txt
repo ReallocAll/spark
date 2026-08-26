@@ -78,7 +78,9 @@ if (WIN32)
             src/native/alloc/windows_allocation_shim.cpp)
     target_include_directories(spark_allocation_shim PRIVATE src)
     target_compile_definitions(spark_allocation_shim PRIVATE NOMINMAX)
-    set_target_properties(spark_allocation_shim PROPERTIES OUTPUT_NAME "spark_allocation_shim")
+    set_target_properties(spark_allocation_shim PROPERTIES
+            OUTPUT_NAME "spark_allocation_shim"
+            MSVC_RUNTIME_LIBRARY "MultiThreaded")
 endif ()
 
 # --- shared profiling time primitives (no native or core dependencies) ---
