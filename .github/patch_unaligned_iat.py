@@ -1,0 +1,106 @@
+from pathlib import Path
+
+source = Path("src/native/alloc/windows_iat_hooks_windows.cpp")
+text = source.read_text()
+old = """                        const std::uintptr_t slot_rva =
+                            first_rva + thunk_index * static_cast<std::uintptr_t>(sizeof(IMAGE_THUNK_DATA64));
+                        slots.push_back({.module = identity, .slot_rva = slot_rva, .target_index = target_index});
+"""
+new = """                        const std::uintptr_t slot_rva =
+                            first_rva + thunk_index * static_cast<std::uintptr_t>(sizeof(IMAGE_THUNK_DATA64));
+                        const std::uintptr_t slot_address = reinterpret_cast<std::uintptr_t>(base) + slot_rva;
+                        if (slot_address % alignof(std::uintptr_t) != 0) {
+                            error = "PE IAT slot is not pointer-aligned";
+                            return false;
+                        }
+                        slots.push_back({.module = identity, .slot_rva = slot_rva, .target_index = target_index});
+"""
+if old not in text:
+    raise SystemExit("source slot insertion point not found")
+source.write_text(text.replace(old, new, 1))
+
+test = Path("tests/native/alloc/windows_iat_native_test.cpp")
+text = test.read_text()
+marker = "bool concurrentInstallUninstallStress(spark::WindowsIatHooks &hooks, HMODULE consumer, std::string &error)\n"
+helper = r'''bool unalignedIatModuleRefresh(spark::WindowsIatHooks &hooks, HMODULE consumer, std::string &error)
+{
+    constexpr wchar_t KCopyName[] = L".\\windows_iat_consumer_unaligned.dll";
+    (void)::DeleteFileW(KCopyName);
+    if (!require(::CopyFileW(L".\\windows_iat_consumer.dll", KCopyName, FALSE) != FALSE,
+                 "CopyFileW failed for unaligned consumer fixture")) {
+        return false;
+    }
+
+    HMODULE malformed = load(KCopyName);
+    if (malformed == nullptr) {
+        (void)::DeleteFileW(KCopyName);
+        return false;
+    }
+
+    auto *base = reinterpret_cast<std::byte *>(malformed);
+    auto *dos = reinterpret_cast<IMAGE_DOS_HEADER *>(base);
+    auto *nt = reinterpret_cast<IMAGE_NT_HEADERS64 *>(base + static_cast<std::uint32_t>(dos->e_lfanew));
+    IMAGE_DATA_DIRECTORY &directory = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+    auto *descriptors = reinterpret_cast<IMAGE_IMPORT_DESCRIPTOR *>(base + directory.VirtualAddress);
+
+    IMAGE_IMPORT_DESCRIPTOR *target_descriptor = nullptr;
+    const std::size_t capacity = directory.Size / sizeof(IMAGE_IMPORT_DESCRIPTOR);
+    for (std::size_t index = 0; index < capacity; ++index) {
+        IMAGE_IMPORT_DESCRIPTOR &descriptor = descriptors[index];
+        if (descriptor.Name == 0 && descriptor.FirstThunk == 0 && descriptor.OriginalFirstThunk == 0) {
+            break;
+        }
+        if (descriptor.Name == 0) {
+            continue;
+        }
+        const char *provider_name = reinterpret_cast<const char *>(base + descriptor.Name);
+        if (::_stricmp(provider_name, "windows_iat_provider.dll") == 0) {
+            target_descriptor = &descriptor;
+            break;
+        }
+    }
+
+    bool ok = require(target_descriptor != nullptr, "unaligned consumer provider descriptor was not found");
+    DWORD old_protection = 0;
+    DWORD original_first_thunk = 0;
+    if (ok) {
+        ok = require(::VirtualProtect(&target_descriptor->FirstThunk, sizeof(target_descriptor->FirstThunk), PAGE_READWRITE,
+                                      &old_protection) != FALSE,
+                     "VirtualProtect failed while misaligning consumer FirstThunk");
+    }
+    if (ok) {
+        original_first_thunk = target_descriptor->FirstThunk;
+        target_descriptor->FirstThunk = original_first_thunk + 1;
+        error.clear();
+        ok = require(hooks.refresh(error), error.empty() ? "refresh rejected unrelated unaligned IAT module" : error.c_str()) &&
+             require(hooks.activeSlotCount() == 1, "unaligned module refresh changed owned-slot count") &&
+             exerciseConsumer(consumer, 1);
+        target_descriptor->FirstThunk = original_first_thunk;
+        DWORD ignored = 0;
+        ok = require(::VirtualProtect(&target_descriptor->FirstThunk, sizeof(target_descriptor->FirstThunk), old_protection,
+                                      &ignored) != FALSE,
+                     "VirtualProtect failed while restoring consumer FirstThunk protection") && ok;
+    }
+
+    const bool unloaded = ::FreeLibrary(malformed) != FALSE;
+    const bool deleted = ::DeleteFileW(KCopyName) != FALSE;
+    return require(unloaded, "unaligned consumer FreeLibrary failed") &&
+           require(deleted, "unaligned consumer fixture cleanup failed") && ok;
+}
+
+'''
+if marker not in text:
+    raise SystemExit("test helper insertion point not found")
+text = text.replace(marker, helper + marker, 1)
+old_chain = """        !exerciseConsumer(consumer, 1) || !concurrentInstallUninstallStress(hooks, consumer, error) ||
+        !oversizedImportDirectoryRefresh(hooks, consumer, error) ||
+        !outOfRangeImportDirectoryRefresh(hooks, provider, consumer, error)) {
+"""
+new_chain = """        !exerciseConsumer(consumer, 1) || !concurrentInstallUninstallStress(hooks, consumer, error) ||
+        !oversizedImportDirectoryRefresh(hooks, consumer, error) ||
+        !outOfRangeImportDirectoryRefresh(hooks, provider, consumer, error) ||
+        !unalignedIatModuleRefresh(hooks, consumer, error)) {
+"""
+if old_chain not in text:
+    raise SystemExit("test call chain insertion point not found")
+test.write_text(text.replace(old_chain, new_chain, 1))
