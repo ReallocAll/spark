@@ -65,9 +65,13 @@ jobs:
           python - <<'PY'
           from pathlib import Path
           text = Path('src/native/alloc/allocation_sampler_windows.cpp').read_text()
-          section = text[text.index('    bool installHooks'):text.index('    FrameKey frameKeyForAddress')]
-          assert 'suspendStable' not in section
-          assert 'restoreOriginalTargets' not in section
+          install = text[text.index('    bool installHooks'):text.index('    static bool anyActiveHookCalls')]
+          assert 'suspendStable' not in install
+          assert 'restoreOriginalTargets' not in install
+          uninstall = text[text.index('    bool uninstallHooks'):text.index('    bool waitForQuiescence')]
+          assert 'suspendStable' not in uninstall
+          assert 'restoreOriginalTargets' not in uninstall
+          assert 'funchook_uninstall(hooks, 0)' in uninstall
           shutdown = text[text.index('    bool shutdownBackend'):text.index('    void tick(double mspt_ms)')]
           assert '30000' not in shutdown
           assert 'uninstallHooks(error)' in shutdown
