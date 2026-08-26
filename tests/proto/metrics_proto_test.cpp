@@ -47,6 +47,45 @@ void testMetricsFields()
     }));
 }
 
+void testTileEntityMetricPresence()
+{
+    spark::MetricsSnapshot present_zero;
+    present_zero.world_info = {{.timestamp_ms = 1'000,
+                                .players = 1,
+                                .entities = 2,
+                                .tile_entities = 0,
+                                .chunks = 3,
+                                .tile_entities_present = true}};
+    const std::string zero_bytes = spark::proto_detail::buildMetrics(present_zero);
+    assert(spark::proto_test::findMessageBytes(zero_bytes, 8, [](std::string_view series) {
+        return spark::proto_test::findMessageBytes(series, 3, [](std::string_view values) {
+            return spark::proto_test::hasVarint(values, 3, 0);
+        });
+    }));
+
+    spark::MetricsSnapshot present_nonzero;
+    present_nonzero.world_info = {{.timestamp_ms = 1'000,
+                                   .tile_entities = 6,
+                                   .tile_entities_present = true}};
+    const std::string nonzero_bytes = spark::proto_detail::buildMetrics(present_nonzero);
+    assert(spark::proto_test::findMessageBytes(nonzero_bytes, 8, [](std::string_view series) {
+        return spark::proto_test::findMessageBytes(series, 3, [](std::string_view values) {
+            return spark::proto_test::hasVarint(values, 3, 6);
+        });
+    }));
+
+    spark::MetricsSnapshot unavailable;
+    unavailable.world_info = {{.timestamp_ms = 1'000,
+                               .tile_entities = 9,
+                               .tile_entities_present = false}};
+    const std::string unavailable_bytes = spark::proto_detail::buildMetrics(unavailable);
+    assert(spark::proto_test::findMessageBytes(unavailable_bytes, 8, [](std::string_view series) {
+        return spark::proto_test::findMessageBytes(series, 3, [](std::string_view values) {
+            return !spark::proto_test::hasField(values, 3);
+        });
+    }));
+}
+
 void testMetadataFields()
 {
     const spark::MetricsSnapshot metrics = sampleMetrics();
@@ -79,6 +118,7 @@ void testMetadataFields()
 int main()
 {
     testMetricsFields();
+    testTileEntityMetricPresence();
     testMetadataFields();
     return 0;
 }
