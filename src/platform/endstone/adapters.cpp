@@ -158,7 +158,8 @@ void appendGameRules(WorldInfo &world, endstone::Level &level, const std::string
 
         GameRuleInfo info;
         info.name = rule_name;
-        if (const auto default_value = resolveGameRuleDefault(info.name, minecraft_version); default_value.has_value()) {
+        if (const auto default_value = resolveGameRuleDefault(info.name, minecraft_version);
+            default_value.has_value()) {
             info.default_value = normalizeGameRuleSemanticValue(info.name, *default_value);
         }
         const std::string raw_value = formatGameRuleValue(endstone::GameRuleValue{level.getGameRule(id)});
