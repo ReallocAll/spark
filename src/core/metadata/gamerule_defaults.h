@@ -71,6 +71,38 @@ inline std::string normalizeMinecraftVersion(std::string_view version)
     return normalized;
 }
 
+inline int compareMinecraftVersions(std::string_view lhs, std::string_view rhs)
+{
+    while (!lhs.empty() || !rhs.empty()) {
+        unsigned long long lhs_part = 0;
+        unsigned long long rhs_part = 0;
+
+        while (!lhs.empty() && lhs.front() != '.') {
+            lhs_part = lhs_part * 10ULL + static_cast<unsigned long long>(lhs.front() - '0');
+            lhs.remove_prefix(1);
+        }
+        while (!rhs.empty() && rhs.front() != '.') {
+            rhs_part = rhs_part * 10ULL + static_cast<unsigned long long>(rhs.front() - '0');
+            rhs.remove_prefix(1);
+        }
+
+        if (lhs_part < rhs_part) {
+            return -1;
+        }
+        if (lhs_part > rhs_part) {
+            return 1;
+        }
+
+        if (!lhs.empty()) {
+            lhs.remove_prefix(1);
+        }
+        if (!rhs.empty()) {
+            rhs.remove_prefix(1);
+        }
+    }
+    return 0;
+}
+
 inline constexpr std::pair<std::string_view, std::string_view> kCurrentDefaults[] = {
     {"commandblockoutput", "true"},
     {"commandblocksenabled", "true"},
@@ -111,17 +143,27 @@ inline constexpr std::pair<std::string_view, std::string_view> kCurrentDefaults[
     {"tntexplosiondropdecay", "false"},
 };
 
-struct HistoricalDefaultOverride {
+struct ExactHistoricalDefaultOverride {
     std::string_view name;
     std::string_view version;
     std::string_view value;
 };
 
-// This is intentionally sparse: only versions whose old default is explicitly
-// known are listed. It is not a per-version snapshot table.
-inline constexpr HistoricalDefaultOverride kHistoricalOverrides[] = {
+struct HistoricalDefaultChangePoint {
+    std::string_view name;
+    std::string_view changed_in;
+    std::string_view previous_value;
+};
+
+// These tables are intentionally sparse. Exact preview exceptions and known
+// default-change boundaries are recorded instead of maintaining snapshots for
+// every Bedrock version.
+inline constexpr ExactHistoricalDefaultOverride kExactHistoricalOverrides[] = {
     {"recipesunlock", "1.20.30.21", "false"},
-    {"spawnradius", "1.20.30", "5"},
+};
+
+inline constexpr HistoricalDefaultChangePoint kHistoricalChangePoints[] = {
+    {"spawnradius", "1.20.40", "5"},
 };
 
 // Renames/type changes are metadata only. They do not imply a default value.
@@ -154,13 +196,23 @@ inline std::optional<std::string> resolveGameRuleDefault(std::string_view name, 
     const std::string normalized_version = detail::normalizeMinecraftVersion(minecraft_version);
 
     if (!normalized_version.empty()) {
-        const auto historical =
-            std::find_if(std::begin(detail::kHistoricalOverrides), std::end(detail::kHistoricalOverrides),
+        const auto exact = std::find_if(
+            std::begin(detail::kExactHistoricalOverrides), std::end(detail::kExactHistoricalOverrides),
+            [&normalized_name, &normalized_version](const auto &entry) {
+                return entry.name == normalized_name && entry.version == normalized_version;
+            });
+        if (exact != std::end(detail::kExactHistoricalOverrides)) {
+            return std::string(exact->value);
+        }
+
+        const auto change_point =
+            std::find_if(std::begin(detail::kHistoricalChangePoints), std::end(detail::kHistoricalChangePoints),
                          [&normalized_name, &normalized_version](const auto &entry) {
-                             return entry.name == normalized_name && entry.version == normalized_version;
+                             return entry.name == normalized_name &&
+                                    detail::compareMinecraftVersions(normalized_version, entry.changed_in) < 0;
                          });
-        if (historical != std::end(detail::kHistoricalOverrides)) {
-            return std::string(historical->value);
+        if (change_point != std::end(detail::kHistoricalChangePoints)) {
+            return std::string(change_point->previous_value);
         }
     }
 
