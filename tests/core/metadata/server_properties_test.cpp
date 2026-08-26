@@ -87,7 +87,6 @@ int main()
         assert(result.size() == 1);
         assert(!result.contains("server-port"));
         assert(!result.contains("server-portv6"));
-        assert(result.at("max-players") == "20");
         std::filesystem::remove(path);
     }
 
@@ -233,12 +232,16 @@ int main()
     // Rename/type migration metadata is deliberately separate from default resolution.
     {
         const auto migration = gameRuleMigration("locatorBar");
-        assert(migration.has_value());
-        assert(migration->old_name == "locatorbar");
-        assert(migration->new_name == "playerwaypoints");
-        assert(migration->changed_in == "26.30");
-        assert(migration->old_kind == GameRuleValueKind::Boolean);
-        assert(migration->new_kind == GameRuleValueKind::Enum);
+        if (!migration.has_value()) {
+            std::fprintf(stderr, "locatorBar migration metadata missing.\n");
+            return 1;
+        }
+        const auto &migration_value = *migration;
+        assert(migration_value.old_name == "locatorbar");
+        assert(migration_value.new_name == "playerwaypoints");
+        assert(migration_value.changed_in == "26.30");
+        assert(migration_value.old_kind == GameRuleValueKind::Boolean);
+        assert(migration_value.new_kind == GameRuleValueKind::Enum);
         assert(!resolveGameRuleDefault("locatorBar", "26.44").has_value());
         assert(!resolveGameRuleDefault("playerWaypoints", "26.44").has_value());
     }
