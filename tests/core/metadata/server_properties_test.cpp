@@ -87,6 +87,7 @@ int main()
         assert(result.size() == 1);
         assert(!result.contains("server-port"));
         assert(!result.contains("server-portv6"));
+        assert(result.at("max-players") == "20");
         std::filesystem::remove(path);
     }
 
@@ -241,7 +242,7 @@ int main()
         assert(migration_value.new_name == "playerwaypoints");
         assert(migration_value.changed_in == "26.30");
         assert(migration_value.old_kind == GameRuleValueKind::Boolean);
-        assert(migration_value.new_kind == GameRuleValueKind::Enum);
+        assert(migration_value.new_kind == GameRuleValueKind::Integer);
         assert(!resolveGameRuleDefault("locatorBar", "26.44").has_value());
         assert(!resolveGameRuleDefault("playerWaypoints", "26.44").has_value());
     }
