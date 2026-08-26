@@ -152,7 +152,7 @@ bool describeTarget(void *address, TargetDescription &description) noexcept
 bool moduleDirectory(std::wstring &directory, std::string &error)
 {
     HMODULE owner = nullptr;
-    const auto address = reinterpret_cast<LPCWSTR>(&moduleDirectory);
+    const auto *const address = reinterpret_cast<LPCWSTR>(&moduleDirectory);
     if (::GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
                              address, &owner) == FALSE) {
         error = "GetModuleHandleExW for Spark allocation hook module failed: " + std::to_string(::GetLastError());
