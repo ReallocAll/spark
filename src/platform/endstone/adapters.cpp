@@ -12,7 +12,7 @@
 #include <variant>
 #include <vector>
 
-#include "core/metadata/gamerule_defaults.h"
+#include "core/metadata/gamerule_semantics.h"
 #include "core/metadata/server_properties.h"
 #include "core/profiler/profiler.h"
 #include "core/stats/ping_statistics.h"
@@ -151,14 +151,19 @@ void appendGameRules(WorldInfo &world, endstone::Level &level, const std::string
                      std::string_view minecraft_version, const std::array<endstone::GameRuleId<T>, N> &rules)
 {
     for (const auto id : rules) {
-        if (!level.hasGameRule(id)) {
+        const std::string rule_name(id.getKey());
+        if (!shouldExportGameRule(rule_name, minecraft_version) || !level.hasGameRule(id)) {
             continue;
         }
 
         GameRuleInfo info;
-        info.name = std::string(id.getKey());
-        info.default_value = resolveGameRuleDefault(info.name, minecraft_version);
-        info.world_values[world_name] = formatGameRuleValue(endstone::GameRuleValue{level.getGameRule(id)});
+        info.name = rule_name;
+        if (const auto default_value = resolveGameRuleDefault(info.name, minecraft_version);
+            default_value.has_value()) {
+            info.default_value = normalizeGameRuleSemanticValue(info.name, *default_value);
+        }
+        const std::string raw_value = formatGameRuleValue(endstone::GameRuleValue{level.getGameRule(id)});
+        info.world_values[world_name] = normalizeGameRuleSemanticValue(info.name, raw_value);
         world.game_rules.push_back(std::move(info));
     }
 }

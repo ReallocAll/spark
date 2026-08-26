@@ -5,6 +5,7 @@
 #include <string>
 
 #include "core/metadata/gamerule_defaults.h"
+#include "core/metadata/gamerule_semantics.h"
 #include "core/metadata/server_properties.h"
 
 using namespace spark;  // NOLINT(google-build-using-namespace)
@@ -212,7 +213,7 @@ int main()
         assert(spawn_radius.has_value() && *spawn_radius == "10");
         assert(random_tick_speed.has_value() && *random_tick_speed == "1");
         assert(recipes_unlock.has_value() && *recipes_unlock == "true");
-        assert(max_chain.has_value() && *max_chain == "65536");
+        assert(max_chain.has_value() && *max_chain == "65535");
     }
 
     // Historical default changes are sparse overrides, not full version snapshots.
@@ -248,6 +249,29 @@ int main()
         assert(!resolveGameRuleDefault("playerWaypoints", "26.44").has_value());
     }
 
-    std::printf("All server.properties and gamerule fallback tests passed.\n");
+    // locatorBar remains historical metadata before 1.26.30 but is hidden at and after the migration boundary.
+    {
+        assert(shouldExportGameRule("locatorBar", "1.26.29"));
+        assert(shouldExportGameRule("minecraft:LOCATORBAR", "26.29"));
+        assert(!shouldExportGameRule("locatorBar", "1.26.30"));
+        assert(!shouldExportGameRule("locatorBar", "26.30"));
+        assert(!shouldExportGameRule("locatorBar", "1.26.44.3"));
+        assert(!shouldExportGameRule("locatorBar", "26.44"));
+        assert(shouldExportGameRule("locatorBar", ""));
+        assert(shouldExportGameRule("keepInventory", "26.44"));
+    }
+
+    // playerWaypoints is an enum-semantic Gamerule externally, despite Endstone exposing an integer.
+    // The 0/1 mapping was measured from real BDS 1.26.44.3 via Endstone runtime reads.
+    {
+        assert(normalizeGameRuleSemanticValue("playerWaypoints", "0") == "Off");
+        assert(normalizeGameRuleSemanticValue("minecraft:PLAYERWAYPOINTS", "1") == "Everyone");
+        assert(normalizeGameRuleSemanticValue("playerWaypoints", "2") == "Unknown (2)");
+        assert(normalizeGameRuleSemanticValue("playerWaypoints", "-1") == "Unknown (-1)");
+        assert(normalizeGameRuleSemanticValue("playerWaypoints", "") == "Unknown");
+        assert(normalizeGameRuleSemanticValue("randomTickSpeed", "3") == "3");
+    }
+
+    std::printf("All server.properties and gamerule fallback/semantic tests passed.\n");
     return 0;
 }
