@@ -1,0 +1,50 @@
+name: Apply Windows qualified auto
+
+on:
+  push:
+    branches:
+      - fix/windows-allocation-safe-hooks
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 0
+      - name: Apply readability-qualified-auto fixes
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          replacements = {
+              Path('src/native/alloc/windows_allocation_shim.cpp'): (
+                  '    auto address = reinterpret_cast<LPCWSTR>(&sparkAllocationShimPin);\n',
+                  '    const auto *address = reinterpret_cast<LPCWSTR>(&sparkAllocationShimPin);\n',
+              ),
+              Path('src/native/alloc/windows_iat_funchook_compat.cpp'): (
+                  '    auto address = reinterpret_cast<LPCWSTR>(&moduleDirectory);\n',
+                  '    const auto *address = reinterpret_cast<LPCWSTR>(&moduleDirectory);\n',
+              ),
+          }
+          for path, (old, new) in replacements.items():
+              text = path.read_text()
+              if old not in text:
+                  raise SystemExit(f'expected line not found in {path}')
+              path.write_text(text.replace(old, new, 1))
+          PY
+          git diff --check
+      - name: Commit fixes
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/native/alloc/windows_allocation_shim.cpp src/native/alloc/windows_iat_funchook_compat.cpp
+          git diff --cached --quiet && exit 0
+          git commit -m "style: qualify Windows address pointers"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
