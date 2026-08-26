@@ -13,7 +13,6 @@ namespace spark {
 enum class GameRuleValueKind {
     Boolean,
     Integer,
-    Enum,
 };
 
 struct GameRuleMigration {
@@ -125,8 +124,9 @@ inline constexpr HistoricalDefaultOverride kHistoricalOverrides[] = {
     {"spawnradius", "1.20.40.20", "10"},
 };
 
+// Renames/type changes are metadata only. They do not imply a default value.
 inline constexpr GameRuleMigration kMigrations[] = {
-    {"locatorbar", "playerwaypoints", "26.30", GameRuleValueKind::Boolean, GameRuleValueKind::Enum},
+    {"locatorbar", "playerwaypoints", "26.30", GameRuleValueKind::Boolean, GameRuleValueKind::Integer},
 };
 
 }  // namespace detail
