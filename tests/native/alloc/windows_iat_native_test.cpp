@@ -74,6 +74,47 @@ bool exerciseConsumer(HMODULE consumer, std::uint64_t expected_increment)
     return require(after == before + expected_increment, "unexpected hook invocation count");
 }
 
+bool oversizedImportDirectoryRefresh(spark::WindowsIatHooks &hooks, HMODULE consumer, std::string &error)
+{
+    auto *base = reinterpret_cast<std::byte *>(consumer);
+    auto *dos = reinterpret_cast<IMAGE_DOS_HEADER *>(base);
+    if (!require(dos->e_magic == IMAGE_DOS_SIGNATURE && dos->e_lfanew >= 0,
+                 "consumer DOS header is invalid")) {
+        return false;
+    }
+
+    auto *nt = reinterpret_cast<IMAGE_NT_HEADERS64 *>(base + static_cast<std::uint32_t>(dos->e_lfanew));
+    if (!require(nt->Signature == IMAGE_NT_SIGNATURE && nt->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC,
+                 "consumer NT header is invalid")) {
+        return false;
+    }
+
+    IMAGE_DATA_DIRECTORY &directory = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+    if (!require(directory.VirtualAddress != 0 && directory.VirtualAddress < nt->OptionalHeader.SizeOfImage,
+                 "consumer import directory is unavailable")) {
+        return false;
+    }
+
+    DWORD old_protection = 0;
+    if (!require(::VirtualProtect(&directory.Size, sizeof(directory.Size), PAGE_READWRITE, &old_protection) != FALSE,
+                 "VirtualProtect failed while expanding import directory metadata")) {
+        return false;
+    }
+
+    const DWORD original_size = directory.Size;
+    directory.Size = nt->OptionalHeader.SizeOfImage;
+    const bool refreshed = hooks.refresh(error);
+    directory.Size = original_size;
+
+    DWORD ignored = 0;
+    const bool protection_restored =
+        ::VirtualProtect(&directory.Size, sizeof(directory.Size), old_protection, &ignored) != FALSE;
+    return require(protection_restored, "VirtualProtect failed while restoring import directory metadata") &&
+           require(refreshed, error.empty() ? "refresh rejected oversized import directory metadata" : error.c_str()) &&
+           require(hooks.activeSlotCount() == 1, "oversized import metadata refresh lost the owned slot") &&
+           exerciseConsumer(consumer, 1);
+}
+
 bool concurrentInstallUninstallStress(spark::WindowsIatHooks &hooks, HMODULE consumer, std::string &error)
 {
     constexpr int KWorkers = 8;
@@ -182,7 +223,8 @@ int main()
     if (!require(hooks.configure({target}, error), "configure failed") ||
         !require(hooks.install(error), error.empty() ? "install failed" : error.c_str()) ||
         !require(hooks.activeSlotCount() == 1, "fixture should own exactly one import slot") ||
-        !exerciseConsumer(consumer, 1) || !concurrentInstallUninstallStress(hooks, consumer, error)) {
+        !exerciseConsumer(consumer, 1) || !concurrentInstallUninstallStress(hooks, consumer, error) ||
+        !oversizedImportDirectoryRefresh(hooks, consumer, error)) {
         std::string ignored;
         (void)hooks.uninstall(ignored);
         ::FreeLibrary(consumer);
