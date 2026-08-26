@@ -1,17 +1,45 @@
 #include <cstdio>
 #include <string>
+#include <vector>
 
 #include "native/alloc/allocation_sampler.h"
 
 namespace {
 
-constexpr char KExpectedError[] =
-    "Windows allocation profiling is temporarily disabled because safe allocator entry patching is unavailable";
-
 int fail(const char *message)
 {
-    std::fprintf(stderr, "windows allocation unavailable: %s\n", message);
+    std::fprintf(stderr, "windows allocation backend: %s\n", message);
     return 1;
+}
+
+bool runSession(spark::AllocationSampler &sampler, std::uint64_t seed)
+{
+    spark::AllocationSamplerConfig config;
+    config.session_seed = seed;
+    config.interval_bytes = 4096;
+
+    std::string error;
+    if (!sampler.start(config, error)) {
+        std::fprintf(stderr, "windows allocation backend: start failed: %s\n", error.c_str());
+        return false;
+    }
+    if (!sampler.running() || !sampler.hooksInstalled() || sampler.hookTargetCount() == 0 ||
+        sampler.hookCapabilities().empty()) {
+        return false;
+    }
+
+    std::vector<std::string> allocations;
+    allocations.reserve(256);
+    for (int i = 0; i < 256; ++i) {
+        allocations.emplace_back(512, static_cast<char>('a' + (i % 26)));
+    }
+    sampler.onTick(1.0);
+
+    error = "sentinel";
+    if (!sampler.stop(error) || !error.empty() || sampler.running() || !sampler.hooksInstalled()) {
+        return false;
+    }
+    return true;
 }
 
 }  // namespace
@@ -19,23 +47,25 @@ int fail(const char *message)
 int main()
 {
     spark::AllocationSampler sampler;
-    spark::AllocationSamplerConfig config;
-    std::string error;
-    if (sampler.start(config, error) || error != KExpectedError) {
-        return fail("start did not return the exact unavailability error");
+    if (!runSession(sampler, 0x12345678ULL)) {
+        return fail("first session did not complete cleanly");
     }
-    if (sampler.running() || sampler.hooksInstalled() || sampler.hookTargetCount() != 0 ||
-        !sampler.hookCapabilities().empty()) {
-        return fail("failed start left allocation state active");
+    if (!runSession(sampler, 0x87654321ULL)) {
+        return fail("second session did not complete cleanly");
     }
 
-    error = "sentinel";
-    if (!sampler.stop(error) || !error.empty()) {
-        return fail("stop was not harmless after unavailable start");
-    }
-    error = "sentinel";
+    std::string error = "sentinel";
     if (!sampler.shutdown(error) || !error.empty() || sampler.running() || sampler.hooksInstalled()) {
-        return fail("shutdown was not harmless after unavailable start");
+        std::fprintf(stderr, "windows allocation backend: shutdown failed: %s\n", error.c_str());
+        return 1;
+    }
+
+    // A process-lifetime shim may remain mapped after shutdown. Any stale IAT
+    // entry must therefore be a harmless allocator pass-through after Spark's
+    // callback gate has been drained and cleared.
+    std::vector<std::string> after_shutdown(64, std::string(256, 'z'));
+    if (after_shutdown.size() != 64) {
+        return fail("post-shutdown allocator pass-through failed");
     }
     return 0;
 }
