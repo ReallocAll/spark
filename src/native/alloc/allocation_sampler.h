@@ -31,6 +31,10 @@ struct AllocationSamplerConfig {
     // Deterministic fault injection used only by the offline selftest.
     bool fail_aggregator_for_testing = false;
     std::uint32_t aggregator_delay_ms_for_testing = 0;
+    // Keeps the consumer side of the allocation event queue parked until a
+    // producer has observed a bounded queue drop (or the session is stopped).
+    // This makes queue-capacity pressure tests independent of host speed.
+    bool hold_aggregator_until_event_drop_for_testing = false;
     std::uint32_t thread_state_limit_for_testing = 0;
     bool force_live_lock_contention_for_testing = false;
     std::atomic<std::uint64_t> *observed_thread_identities_for_testing = nullptr;

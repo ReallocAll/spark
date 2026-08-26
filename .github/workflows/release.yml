@@ -241,6 +241,7 @@ jobs:
           path: |
             build/RelWithDebInfo/endstone_spark.dll
             build/RelWithDebInfo/endstone_spark.pdb
+            build/RelWithDebInfo/spark_allocation_shim.dll
           if-no-files-found: error
 
   linux:
@@ -266,7 +267,7 @@ jobs:
           sudo apt-get install -y libc++-20-dev libc++abi-20-dev
           sudo ln -sf /usr/bin/clang-20 /usr/local/bin/clang
           sudo ln -sf /usr/bin/clang++-20 /usr/local/bin/clang++
-          clang --version | grep -E "clang version 20\."
+          clang --version | grep -E "clang version 20\\."
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -336,6 +337,7 @@ jobs:
           test -f release-notes/release_body.md
           test -f release-windows/endstone_spark.dll
           test -f release-windows/endstone_spark.pdb
+          test -f release-windows/spark_allocation_shim.dll
           test -f release-linux/endstone_spark.so
           gh release create "v${{ needs.release.outputs.version }}" \
             --repo "${{ github.repository }}" \
@@ -343,4 +345,5 @@ jobs:
             --notes-file release-notes/release_body.md \
             release-windows/endstone_spark.dll \
             release-windows/endstone_spark.pdb \
+            release-windows/spark_allocation_shim.dll \
             release-linux/endstone_spark.so

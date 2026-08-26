@@ -430,8 +430,14 @@ if (WIN32)
             RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
     add_test(NAME spark_symbol_guess_windows_test COMMAND spark_symbol_guess_windows_test)
 
+    add_library(spark_windows_allocation_fixture SHARED native/alloc/windows_allocation_fixture.cpp)
+    set_target_properties(spark_windows_allocation_fixture PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+            OUTPUT_NAME "spark_windows_allocation_fixture")
+
     add_executable(spark_windows_allocation_unavailable_test
             native/alloc/windows_allocation_unavailable_test.cpp)
+    add_dependencies(spark_windows_allocation_unavailable_test spark_windows_allocation_fixture)
     target_link_libraries(spark_windows_allocation_unavailable_test PRIVATE spark_core)
     set_target_properties(spark_windows_allocation_unavailable_test PROPERTIES
             RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")

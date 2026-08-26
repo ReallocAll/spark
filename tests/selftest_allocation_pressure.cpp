@@ -68,7 +68,7 @@ bool verifyAllocationResourcePressure()
     spark::AllocationSamplerConfig config;
     config.interval_bytes = 1;
     config.session_seed = spark::currentNativeThreadId();
-    config.aggregator_delay_ms_for_testing = 1000;
+    config.hold_aggregator_until_event_drop_for_testing = true;
 
     std::string error;
     spark::AllocationSampler queue_sampler;
@@ -76,21 +76,13 @@ bool verifyAllocationResourcePressure()
         std::fprintf(stderr, "allocation pressure: queue start failed: %s\n", error.c_str());
         return false;
     }
-    std::vector<std::thread> workers;
-    workers.reserve(8);
-    for (int thread = 0; thread < 8; ++thread) {
-        workers.emplace_back([]() {
-            for (int i = 0; i < 4096; ++i) {
-                void *pointer = std::malloc(64);
-                if (pointer != nullptr) {
-                    static_cast<volatile unsigned char *>(pointer)[0] = static_cast<unsigned char>(i);
-                    std::free(pointer);
-                }
-            }
-        });
-    }
-    for (std::thread &worker_thread : workers) {
-        worker_thread.join();
+    constexpr std::uint64_t extra_allocation_events = 1024;
+    for (std::uint64_t i = 0; i < spark::AllocationSampler::eventQueueCapacity() + extra_allocation_events; ++i) {
+        void *pointer = std::malloc(64);
+        if (pointer != nullptr) {
+            static_cast<volatile unsigned char *>(pointer)[0] = static_cast<unsigned char>(i);
+            std::free(pointer);
+        }
     }
     if (!queue_sampler.stop(error) ||
         queue_sampler.eventQueueHighWaterMark() != spark::AllocationSampler::eventQueueCapacity() ||
@@ -125,7 +117,7 @@ bool verifyAllocationResourcePressure()
         return false;
     }
 
-    config.aggregator_delay_ms_for_testing = 0;
+    config.hold_aggregator_until_event_drop_for_testing = false;
     config.only_ticks_over_ms = 0;
     config.thread_state_limit_for_testing = 8;
     spark::AllocationSampler registry_sampler;
@@ -135,7 +127,8 @@ bool verifyAllocationResourcePressure()
     }
     std::atomic<int> registry_ready{0};
     std::atomic<bool> release_registry_threads{false};
-    workers.clear();
+    std::vector<std::thread> workers;
+    workers.reserve(16);
     for (int thread = 0; thread < 16; ++thread) {
         workers.emplace_back([&]() {
             void *pointer = std::malloc(128);
