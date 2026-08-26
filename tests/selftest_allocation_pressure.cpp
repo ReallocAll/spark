@@ -128,6 +128,7 @@ bool verifyAllocationResourcePressure()
     std::atomic<int> registry_ready{0};
     std::atomic<bool> release_registry_threads{false};
     std::vector<std::thread> workers;
+    workers.reserve(16);
     for (int thread = 0; thread < 16; ++thread) {
         workers.emplace_back([&]() {
             void *pointer = std::malloc(128);
