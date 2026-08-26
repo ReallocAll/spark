@@ -367,6 +367,11 @@ private:
                     if (target.import_name == name && providerAllowed(provider, target)) {
                         const std::uintptr_t slot_rva =
                             first_rva + thunk_index * static_cast<std::uintptr_t>(sizeof(IMAGE_THUNK_DATA64));
+                        const std::uintptr_t slot_address = reinterpret_cast<std::uintptr_t>(base) + slot_rva;
+                        if (slot_address % alignof(std::uintptr_t) != 0) {
+                            error = "PE IAT slot is not pointer-aligned";
+                            return false;
+                        }
                         slots.push_back({.module = identity, .slot_rva = slot_rva, .target_index = target_index});
                         break;
                     }
