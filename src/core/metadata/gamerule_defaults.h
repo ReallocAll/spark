@@ -106,7 +106,7 @@ inline constexpr std::pair<std::string_view, std::string_view> kCurrentDefaults[
     {"showdeathmessages", "true"},
     {"showrecipemessages", "true"},
     {"showtags", "true"},
-    {"spawnradius", "5"},
+    {"spawnradius", "10"},
     {"tntexplodes", "true"},
     {"tntexplosiondropdecay", "false"},
 };
@@ -121,8 +121,7 @@ struct HistoricalDefaultOverride {
 // known are listed. It is not a per-version snapshot table.
 inline constexpr HistoricalDefaultOverride kHistoricalOverrides[] = {
     {"recipesunlock", "1.20.30.21", "false"},
-    {"spawnradius", "1.20.40", "10"},
-    {"spawnradius", "1.20.40.20", "10"},
+    {"spawnradius", "1.20.30", "5"},
 };
 
 // Renames/type changes are metadata only. They do not imply a default value.
