@@ -12,6 +12,7 @@
 #include <variant>
 #include <vector>
 
+#include "core/metadata/gamerule_defaults.h"
 #include "core/metadata/server_properties.h"
 #include "core/profiler/profiler.h"
 #include "core/stats/ping_statistics.h"
@@ -147,7 +148,7 @@ constexpr std::array KIntegerGameRules{
 
 template <typename T, std::size_t N>
 void appendGameRules(WorldInfo &world, endstone::Level &level, const std::string &world_name,
-                     const std::array<endstone::GameRuleId<T>, N> &rules)
+                     std::string_view minecraft_version, const std::array<endstone::GameRuleId<T>, N> &rules)
 {
     for (const auto id : rules) {
         if (!level.hasGameRule(id)) {
@@ -156,6 +157,7 @@ void appendGameRules(WorldInfo &world, endstone::Level &level, const std::string
 
         GameRuleInfo info;
         info.name = std::string(id.getKey());
+        info.default_value = resolveGameRuleDefault(info.name, minecraft_version);
         info.world_values[world_name] = formatGameRuleValue(endstone::GameRuleValue{level.getGameRule(id)});
         world.game_rules.push_back(std::move(info));
     }
@@ -258,8 +260,8 @@ void EndstoneMetadataProvider::gatherWorldMetadata(ExportContext &ctx)
     }
 
     const std::string world_name = level.getName();
-    appendGameRules(ctx.world, level, world_name, KBooleanGameRules);
-    appendGameRules(ctx.world, level, world_name, KIntegerGameRules);
+    appendGameRules(ctx.world, level, world_name, ctx.minecraft_version, KBooleanGameRules);
+    appendGameRules(ctx.world, level, world_name, ctx.minecraft_version, KIntegerGameRules);
 
     ctx.world.present = !ctx.world.worlds.empty() || !ctx.world.game_rules.empty();
 }
