@@ -1,0 +1,130 @@
+name: Temporary IAT unscannable module fix
+
+on:
+  push:
+    branches:
+      - fix/windows-allocation-safe-hooks
+    paths:
+      - ".github/workflows/temp-iat-unscannable-module-fix.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: fix/windows-allocation-safe-hooks
+
+      - name: Apply backend and regression-test patch
+        shell: python
+        run: |
+          from pathlib import Path
+
+          backend = Path("src/native/alloc/windows_iat_hooks_windows.cpp")
+          text = backend.read_text(encoding="utf-8")
+          old = '''            WindowsIatModuleIdentity identity;
+            std::string identity_error;
+            if (!moduleIdentity(pinned.get(), identity, &identity_error)) {
+                error = identity_error;
+                return false;
+            }
+            if (!enumerateModule(pinned.get(), identity, targets, slots, error)) {
+                return false;
+            }
+'''
+          new = '''            WindowsIatModuleIdentity identity;
+            if (!moduleIdentity(pinned.get(), identity)) {
+                continue;  // A nonconforming loaded module cannot be scanned safely.
+            }
+
+            const std::size_t slot_count = slots.size();
+            std::string module_error;
+            if (!enumerateModule(pinned.get(), identity, targets, slots, module_error)) {
+                slots.resize(slot_count);  // Never retain candidates from a partially parsed module.
+                continue;
+            }
+'''
+          if old not in text:
+              raise SystemExit("backend patch anchor not found")
+          backend.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          test = Path("tests/native/alloc/windows_iat_native_test.cpp")
+          text = test.read_text(encoding="utf-8")
+          anchor = '''bool concurrentInstallUninstallStress(spark::WindowsIatHooks &hooks, HMODULE consumer, std::string &error)
+'''
+          helper = '''bool outOfRangeImportDirectoryRefresh(spark::WindowsIatHooks &hooks, HMODULE provider, HMODULE consumer,
+                                      std::string &error)
+{
+    auto *base = reinterpret_cast<std::byte *>(provider);
+    auto *dos = reinterpret_cast<IMAGE_DOS_HEADER *>(base);
+    if (!require(dos->e_magic == IMAGE_DOS_SIGNATURE && dos->e_lfanew >= 0, "provider DOS header is invalid")) {
+        return false;
+    }
+
+    auto *nt = reinterpret_cast<IMAGE_NT_HEADERS64 *>(base + static_cast<std::uint32_t>(dos->e_lfanew));
+    if (!require(nt->Signature == IMAGE_NT_SIGNATURE && nt->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC,
+                 "provider NT header is invalid")) {
+        return false;
+    }
+
+    IMAGE_DATA_DIRECTORY &directory = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+    if (!require(directory.VirtualAddress != 0 && directory.VirtualAddress < nt->OptionalHeader.SizeOfImage,
+                 "provider import directory is unavailable")) {
+        return false;
+    }
+
+    DWORD old_protection = 0;
+    if (!require(::VirtualProtect(&directory.VirtualAddress, sizeof(directory.VirtualAddress), PAGE_READWRITE,
+                                  &old_protection) != FALSE,
+                 "VirtualProtect failed while moving provider import directory metadata")) {
+        return false;
+    }
+
+    const DWORD original_rva = directory.VirtualAddress;
+    directory.VirtualAddress = nt->OptionalHeader.SizeOfImage;
+    const bool refreshed = hooks.refresh(error);
+    directory.VirtualAddress = original_rva;
+
+    DWORD ignored = 0;
+    const bool protection_restored =
+        ::VirtualProtect(&directory.VirtualAddress, sizeof(directory.VirtualAddress), old_protection, &ignored) != FALSE;
+    return require(protection_restored, "VirtualProtect failed while restoring provider import directory metadata") &&
+           require(refreshed, error.empty() ? "refresh rejected an unrelated unscannable module" : error.c_str()) &&
+           require(hooks.activeSlotCount() == 1, "unscannable provider refresh lost the owned consumer slot") &&
+           exerciseConsumer(consumer, 1);
+}
+
+'''
+          if anchor not in text:
+              raise SystemExit("test helper anchor not found")
+          text = text.replace(anchor, helper + anchor, 1)
+          old_call = '''        !exerciseConsumer(consumer, 1) || !concurrentInstallUninstallStress(hooks, consumer, error) ||
+        !oversizedImportDirectoryRefresh(hooks, consumer, error)) {
+'''
+          new_call = '''        !exerciseConsumer(consumer, 1) || !concurrentInstallUninstallStress(hooks, consumer, error) ||
+        !oversizedImportDirectoryRefresh(hooks, consumer, error) ||
+        !outOfRangeImportDirectoryRefresh(hooks, provider, consumer, error)) {
+'''
+          if old_call not in text:
+              raise SystemExit("test call anchor not found")
+          test.write_text(text.replace(old_call, new_call, 1), encoding="utf-8")
+
+      - name: Format changed C++
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-format-20
+          clang-format-20 -i src/native/alloc/windows_iat_hooks_windows.cpp tests/native/alloc/windows_iat_native_test.cpp
+
+      - name: Commit patch and remove temporary workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/temp-iat-unscannable-module-fix.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/native/alloc/windows_iat_hooks_windows.cpp tests/native/alloc/windows_iat_native_test.cpp .github/workflows/temp-iat-unscannable-module-fix.yml
+          git commit -m "fix: skip unscannable Windows IAT modules safely"
+          git push origin HEAD:fix/windows-allocation-safe-hooks
