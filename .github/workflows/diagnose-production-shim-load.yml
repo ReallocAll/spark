@@ -1,0 +1,50 @@
+name: Diagnose production shim load
+
+on:
+  push:
+    branches:
+      - fix/windows-allocation-safe-hooks
+    paths:
+      - ".github/workflows/diagnose-production-shim-load.yml"
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  load-production-shim:
+    runs-on: windows-2022
+    steps:
+      - name: Download exact successful build artifact
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run download 32946854302 --repo ReallocAll/spark --name spark-windows-32946854302 --dir artifact
+          Get-ChildItem artifact -Recurse | Format-Table FullName,Length
+      - name: Load production shim by absolute path
+        shell: pwsh
+        run: |
+          Add-Type @'
+          using System;
+          using System.ComponentModel;
+          using System.Runtime.InteropServices;
+          public static class NativeShimProbe {
+              [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+              public static extern IntPtr LoadLibraryW(string path);
+              [DllImport("kernel32.dll", SetLastError = true)]
+              public static extern bool FreeLibrary(IntPtr module);
+          }
+          '@
+          $path = (Resolve-Path 'artifact/spark_allocation_shim.dll').Path
+          Write-Host "Loading: $path"
+          $module = [NativeShimProbe]::LoadLibraryW($path)
+          if ($module -eq [IntPtr]::Zero) {
+            $code = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+            throw "LoadLibraryW failed: $code $([ComponentModel.Win32Exception]::new($code).Message)"
+          }
+          Write-Host "LoadLibraryW PASS: $module"
+          if (-not [NativeShimProbe]::FreeLibrary($module)) {
+            $code = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+            throw "FreeLibrary failed: $code"
+          }
