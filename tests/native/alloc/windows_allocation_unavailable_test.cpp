@@ -24,48 +24,55 @@ int fail(const char *message)
 
 using FixtureOnceFn = void (*)();
 
-bool treeContainsModule(const spark::CallTree::Node &node, const spark::ModuleTable &modules, const char *name)
+bool treeContainsModule(const spark::CallTree::Node &root, const spark::ModuleTable &modules, const char *name)
 {
-    if (node.key.module != spark::kInvalidModule) {
-        const std::string &path = modules.path(node.key.module);
-        const std::size_t separator = path.find_last_of("/\\");
-        const char *base = separator == std::string::npos ? path.c_str() : path.c_str() + separator + 1;
-        if (::_stricmp(base, name) == 0) {
-            return true;
+    std::vector<const spark::CallTree::Node *> pending{&root};
+    while (!pending.empty()) {
+        const spark::CallTree::Node *node = pending.back();
+        pending.pop_back();
+        if (node->key.module != spark::kInvalidModule) {
+            const std::string &path = modules.path(node->key.module);
+            const std::size_t separator = path.find_last_of("/\\");
+            const char *base = separator == std::string::npos ? path.c_str() : path.c_str() + separator + 1;
+            if (::_stricmp(base, name) == 0) {
+                return true;
+            }
         }
-    }
-    for (const auto &[key, child] : node.children) {
-        (void)key;
-        if (treeContainsModule(*child, modules, name)) {
-            return true;
+        for (const auto &[key, child] : node->children) {
+            (void)key;
+            pending.push_back(child.get());
         }
     }
     return false;
 }
 
-bool verifyLateLoadedModuleRefresh(spark::AllocationSampler &sampler)
+bool waitForLateLoadedModuleSample(spark::AllocationSampler &sampler, FixtureOnceFn once, std::string &error)
 {
-    HMODULE fixture = ::LoadLibraryW(L".\\spark_windows_allocation_fixture.dll");
-    if (fixture == nullptr) {
-        std::fprintf(stderr, "windows allocation backend: fixture LoadLibraryW failed: %lu\n",
-                     static_cast<unsigned long>(::GetLastError()));
-        return false;
-    }
-    FixtureOnceFn once = reinterpret_cast<FixtureOnceFn>(::GetProcAddress(fixture, "sparkAllocationFixtureOnce"));
-    if (once == nullptr) {
-        ::FreeLibrary(fixture);
-        return false;
+    constexpr int k_batch_calls = 512;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(8);
+    while (std::chrono::steady_clock::now() < deadline) {
+        for (int i = 0; i < k_batch_calls; ++i) {
+            once();
+        }
+        sampler.onTick(1.0);
+
+        spark::AllocationSnapshot snapshot;
+        if (!sampler.snapshot(snapshot, error)) {
+            std::fprintf(stderr, "windows allocation backend: late-module snapshot failed: %s\n", error.c_str());
+            return false;
+        }
+        if (treeContainsModule(snapshot.tree.root(), snapshot.modules, "spark_allocation_shim.dll")) {
+            std::fprintf(stderr, "windows allocation backend: shim instrumentation frame leaked into snapshot\n");
+            return false;
+        }
+        if (treeContainsModule(snapshot.tree.root(), snapshot.modules, "spark_windows_allocation_fixture.dll")) {
+            return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
     }
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(2500));
-    const std::uint64_t before = sampler.hookCalls();
-    constexpr int KCalls = 2048;
-    for (int i = 0; i < KCalls; ++i) {
-        once();
-    }
-    const std::uint64_t delta = sampler.hookCalls() - before;
-    const bool unloaded = ::FreeLibrary(fixture) != FALSE;
-    return unloaded && delta >= static_cast<std::uint64_t>(KCalls);
+    std::fprintf(stderr, "windows allocation backend: late-loaded fixture was not sampled after automatic refresh\n");
+    return false;
 }
 
 bool runSession(spark::AllocationSampler &sampler, std::uint64_t seed, bool verify_refresh)
@@ -81,10 +88,23 @@ bool runSession(spark::AllocationSampler &sampler, std::uint64_t seed, bool veri
     }
     if (!sampler.running() || !sampler.hooksInstalled() || sampler.hookTargetCount() == 0 ||
         sampler.hookCapabilities().empty()) {
+        std::fprintf(stderr, "windows allocation backend: sampler did not report installed hooks after start\n");
         return false;
     }
-    if (verify_refresh && !verifyLateLoadedModuleRefresh(sampler)) {
-        return false;
+
+    HMODULE fixture = nullptr;
+    if (verify_refresh) {
+        fixture = ::LoadLibraryW(L".\\spark_windows_allocation_fixture.dll");
+        if (fixture == nullptr) {
+            std::fprintf(stderr, "windows allocation backend: fixture LoadLibraryW failed: %lu\n",
+                         static_cast<unsigned long>(::GetLastError()));
+            return false;
+        }
+        const auto once = reinterpret_cast<FixtureOnceFn>(::GetProcAddress(fixture, "sparkAllocationFixtureOnce"));
+        if (once == nullptr || !waitForLateLoadedModuleSample(sampler, once, error)) {
+            ::FreeLibrary(fixture);
+            return false;
+        }
     }
 
     std::vector<std::string> allocations;
@@ -95,13 +115,21 @@ bool runSession(spark::AllocationSampler &sampler, std::uint64_t seed, bool veri
     sampler.onTick(1.0);
 
     spark::AllocationSnapshot snapshot;
-    if (!sampler.snapshot(snapshot, error) || snapshot.sample_count == 0 ||
-        treeContainsModule(snapshot.tree.root(), snapshot.modules, "spark_allocation_shim.dll")) {
+    const bool snapshot_ok = sampler.snapshot(snapshot, error) && snapshot.sample_count != 0 &&
+                             !treeContainsModule(snapshot.tree.root(), snapshot.modules, "spark_allocation_shim.dll");
+    if (fixture != nullptr && ::FreeLibrary(fixture) == FALSE) {
+        std::fprintf(stderr, "windows allocation backend: fixture FreeLibrary failed: %lu\n",
+                     static_cast<unsigned long>(::GetLastError()));
+        return false;
+    }
+    if (!snapshot_ok) {
+        std::fprintf(stderr, "windows allocation backend: final snapshot validation failed: %s\n", error.c_str());
         return false;
     }
 
     error = "sentinel";
     if (!sampler.stop(error) || !error.empty() || sampler.running() || !sampler.hooksInstalled()) {
+        std::fprintf(stderr, "windows allocation backend: stop failed: %s\n", error.c_str());
         return false;
     }
     return true;
