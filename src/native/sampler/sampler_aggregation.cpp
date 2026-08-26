@@ -37,6 +37,16 @@ void Sampler::dropPendingSamples(std::size_t count) noexcept
     dropped_samples_.fetch_add(static_cast<std::uint64_t>(count), std::memory_order_relaxed);
 }
 
+void Sampler::journalModuleDefinitions(const Sample &sample)
+{
+    if (recovery_sink_ == nullptr) {
+        return;
+    }
+    for (const RecoveryModuleDefinition &definition : sample.recovery_module_definitions) {
+        recovery_sink_->journalModuleDef(definition.module_id, definition.path);
+    }
+}
+
 bool Sampler::acceptSample(const Sample &sample)
 {
     const auto reject_profile_sample = [this] {
@@ -218,6 +228,7 @@ void Sampler::aggregatorLoop()
         }
         Sample sample;
         while (samples_.try_dequeue(sample)) {
+            journalModuleDefinitions(sample);
             if (!ticked) {
                 acceptSample(sample);
             }

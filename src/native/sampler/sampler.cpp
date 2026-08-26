@@ -200,6 +200,7 @@ void Sampler::resetSession()
     const std::int32_t current_window = currentWindow();
     next_history_prune_window_ = current_window;
     modules_ = ModuleTable{kModuleCapacity};
+    pending_recovery_module_definitions_.clear();
     window_ticks_.clear();
     next_tick_history_prune_window_ = current_window;
     current_tick_.store(0);
@@ -380,7 +381,8 @@ void Sampler::samplerLoop()
                     module_overflow_frames_.fetch_add(1, std::memory_order_relaxed);
                 }
                 if (recovery_sink_ && modules_.size() > prev_module_count) {
-                    recovery_sink_->journalModuleDef(key.module, path);
+                    pending_recovery_module_definitions_.push_back(
+                        RecoveryModuleDefinition{.module_id = key.module, .path = std::string(path)});
                 }
                 key.rva = module_base != 0 ? raw_address - module_base : raw_address;
                 key.raw_address = raw_address;
@@ -396,7 +398,8 @@ void Sampler::samplerLoop()
                     module_overflow_frames_.fetch_add(1, std::memory_order_relaxed);
                 }
                 if (recovery_sink_ && modules_.size() > prev_module_count) {
-                    recovery_sink_->journalModuleDef(key.module, path);
+                    pending_recovery_module_definitions_.push_back(
+                        RecoveryModuleDefinition{.module_id = key.module, .path = std::string(path)});
                 }
                 key.rva = static_cast<std::uint64_t>(frame.address_relative_to_object_start);
                 key.raw_address = static_cast<std::uint64_t>(frame.raw_address);
@@ -410,7 +413,12 @@ void Sampler::samplerLoop()
             if (config_.ignore_sleeping && isSleepFrame(sample.frames.front().raw_address)) {
                 break;
             }
-            enqueueSample(std::move(sample));
+            if (recovery_sink_ && !pending_recovery_module_definitions_.empty()) {
+                sample.recovery_module_definitions = pending_recovery_module_definitions_;
+            }
+            if (enqueueSample(std::move(sample))) {
+                pending_recovery_module_definitions_.clear();
+            }
             break;
         }
         sampler_heartbeat_.beat();
