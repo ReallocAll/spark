@@ -199,28 +199,30 @@ int main()
 
     // Runtime/API default is authoritative over both historical and current fallback metadata.
     {
-        const auto result = resolveGameRuleDefault("minecraft:spawnRadius", "1.20.40", std::string_view{"77"});
+        const auto result = resolveGameRuleDefault("minecraft:spawnRadius", "1.20.30", std::string_view{"77"});
         assert(result.has_value());
         assert(*result == "77");
     }
 
-    // Current fallback table is case-insensitive and namespace-insensitive.
+    // Current fallback table is case-insensitive, namespace-insensitive, and matches fresh BDS 1.26.44.3.
     {
         const auto spawn_radius = resolveGameRuleDefault("Minecraft:SpawnRadius", "26.44");
         const auto random_tick_speed = resolveGameRuleDefault("randomTickSpeed", "1.26.44.3");
         const auto recipes_unlock = resolveGameRuleDefault("recipesUnlock", "26.44");
-        assert(spawn_radius.has_value() && *spawn_radius == "5");
+        const auto max_chain = resolveGameRuleDefault("maxCommandChainLength", "26.44");
+        assert(spawn_radius.has_value() && *spawn_radius == "10");
         assert(random_tick_speed.has_value() && *random_tick_speed == "1");
         assert(recipes_unlock.has_value() && *recipes_unlock == "true");
+        assert(max_chain.has_value() && *max_chain == "65535");
     }
 
     // Historical default changes are sparse overrides, not full version snapshots.
     {
-        const auto old_spawn_radius = resolveGameRuleDefault("spawnRadius", "1.20.40");
-        const auto old_spawn_radius_preview = resolveGameRuleDefault("spawnRadius", "1.20.40.20");
+        const auto old_spawn_radius = resolveGameRuleDefault("spawnRadius", "1.20.30");
+        const auto changed_spawn_radius = resolveGameRuleDefault("spawnRadius", "1.20.40");
         const auto old_recipes_unlock = resolveGameRuleDefault("recipesUnlock", "1.20.30.21");
-        assert(old_spawn_radius.has_value() && *old_spawn_radius == "10");
-        assert(old_spawn_radius_preview.has_value() && *old_spawn_radius_preview == "10");
+        assert(old_spawn_radius.has_value() && *old_spawn_radius == "5");
+        assert(changed_spawn_radius.has_value() && *changed_spawn_radius == "10");
         assert(old_recipes_unlock.has_value() && *old_recipes_unlock == "false");
     }
 
