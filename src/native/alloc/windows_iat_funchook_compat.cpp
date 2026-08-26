@@ -7,6 +7,8 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
+#include <exception>
 #include <memory>
 #include <new>
 #include <string>
@@ -117,7 +119,7 @@ bool moduleDirectory(std::wstring &directory, std::string &error)
 
     std::wstring path(32768, L'\0');
     const DWORD length = ::GetModuleFileNameW(owner, path.data(), static_cast<DWORD>(path.size()));
-    if (length == 0 || length >= path.size()) {
+    if (length == 0 || static_cast<std::size_t>(length) >= path.size()) {
         error = "GetModuleFileNameW for Spark allocation hook module failed: " + std::to_string(::GetLastError());
         return false;
     }
@@ -358,8 +360,13 @@ extern "C" int funchook_install(funchook_t *context, int flags)
             return FUNCHOOK_ERROR_INTERNAL;
         }
 
-        context->hooks = spark::makeNativeWindowsIatHookBackend(reinterpret_cast<void *>(&funchook_install));
-        if (context->hooks == nullptr || !context->hooks->configure(std::move(targets), context->error) ||
+        auto backend = spark::makeNativeWindowsIatHookBackend(reinterpret_cast<void *>(&funchook_install));
+        if (backend == nullptr) {
+            context->error = "native Windows IAT hook backend is unavailable";
+            return FUNCHOOK_ERROR_INTERNAL;
+        }
+        context->hooks = std::make_unique<spark::WindowsIatHooks>(std::move(backend));
+        if (!context->hooks->configure(std::move(targets), context->error) ||
             !context->hooks->install(context->error)) {
             context->hooks.reset();
             return FUNCHOOK_ERROR_INTERNAL;
