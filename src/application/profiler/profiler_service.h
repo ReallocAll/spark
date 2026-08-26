@@ -2,13 +2,11 @@
 #define SPARK_APPLICATION_PROFILER_PROFILER_SERVICE_H
 
 #include <atomic>
-#include <condition_variable>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <map>
-#include <mutex>
-#include <optional>
+#include <memory>
 #include <string>
 #include <thread>
 #include <vector>
@@ -16,6 +14,8 @@
 #include "application/command/command_sender.h"
 #include "application/platform_capabilities.h"
 #include "application/profiler/profile_exporter.h"
+#include "application/profiler/profiler_open_orchestrator.h"
+#include "application/profiler/profiler_timeout.h"
 #include "core/activity/activity_log.h"
 #include "core/command/arguments.h"
 #include "core/config/trusted_viewers.h"
@@ -47,7 +47,7 @@ public:
     void cmdStop(CommandSender &sender, const Arguments &args);
     void cmdInfo(CommandSender &sender);
     void cmdCancel(CommandSender &sender);
-    void cmdOpen(CommandSender &sender);
+    void cmdOpen(CommandSender &sender, const Arguments &args);
     void cmdTrustViewer(CommandSender &sender, const Arguments &args);
 
     // Called every server tick.
@@ -113,17 +113,29 @@ private:
     void sendAllocationHookCoverage(CommandSender &sender);
     void finishProfiler(const std::string &sender_name, bool sender_is_player, bool save, const std::string &comment);
     void runExport() noexcept;
-    void announceResult();
-    bool startBackgroundSession();
+    void announceResult() noexcept;
+    bool startBackgroundSession() noexcept;
     void closeViewerSocket();
-    bool startViewerWorker();
-    void stopViewerWorker();
-    void viewerUpdateLoop() noexcept;
-    void completeViewerOpen(std::uint64_t generation);
+    void resetProfilerTimeout() noexcept;
+    bool armProfilerTimeout(std::int64_t timeout_seconds) noexcept;
     ExportContext captureLiveContext(std::int64_t now_ms);
     std::string buildLiveSamplerData(const ExportContext &context);
-    std::string uploadSamplerData(const ExportContext &context);
-    bool viewerGenerationCurrent(std::uint64_t generation) const;
+    bool viewerOpenPending() const { return viewer_open_ && viewer_open_->viewerOpenPending(); }
+
+    void setViewerOpenFunctionForTesting(
+        std::function<std::string(ViewerSocket &, const ViewerSocket::UploadCallback &)> open_function)
+    {
+        viewer_open_->setViewerOpenFunctionForTesting(std::move(open_function));
+    }
+    void setViewerSocketForTesting(std::shared_ptr<ViewerSocket> socket)
+    {
+        viewer_open_->setViewerSocketForTesting(std::move(socket));
+    }
+    bool hasViewerSocketForTesting() const { return viewer_open_ && viewer_open_->hasViewerSocket(); }
+    std::shared_ptr<ViewerSocket> viewerSocketForTesting() const
+    {
+        return viewer_open_ ? viewer_open_->viewerSocketForTesting() : nullptr;
+    }
 
     StatisticsService &statistics_;
     std::string bds_executable_sha256_;
@@ -138,6 +150,8 @@ private:
 
     std::atomic<bool> exporting_{false};
     std::atomic<bool> export_completion_pending_{false};
+    ProfilerTimeout profiler_timeout_;
+    std::atomic<bool> timeout_completion_pending_{false};
     SessionType session_type_ = SessionType::None;
     bool restart_background_after_export_ = false;
     bool background_enabled_ = true;
@@ -160,35 +174,7 @@ private:
     std::function<std::map<std::string, NetworkInterfaceSnapshot>()> network_snapshot_provider_;
     std::function<ActivityLog *()> activity_log_provider_;
 
-    std::shared_ptr<ViewerSocket> viewer_socket_;
-    std::int64_t last_viewer_upload_ms_ = 0;
-    std::string viewer_sender_name_;
-
-    struct ViewerWorkItem {
-        enum class Type {
-            Open,
-            Update
-        };
-        Type type = Type::Update;
-        ExportContext context;
-        std::shared_ptr<ViewerSocket> socket;
-        std::uint64_t generation = 0;
-        std::string sender_name;
-    };
-
-    std::thread viewer_update_thread_;
-    mutable std::mutex viewer_update_mutex_;
-    std::condition_variable viewer_update_cv_;
-    std::atomic<bool> viewer_worker_running_{false};
-    std::atomic<bool> viewer_worker_failed_{false};
-    std::optional<ViewerWorkItem> viewer_work_;
-    bool viewer_work_active_ = false;
-    bool viewer_open_pending_ = false;
-    std::uint64_t viewer_generation_ = 0;
-    std::string pending_viewer_url_;
-    std::string pending_viewer_sender_;
-    std::shared_ptr<ViewerSocket> completed_viewer_socket_;
-    std::function<std::string(ViewerSocket &, const ViewerSocket::UploadCallback &)> viewer_open_fn_;
+    std::unique_ptr<ProfilerOpenOrchestrator> viewer_open_;
     std::shared_ptr<int> lifetime_ = std::make_shared<int>(0);
 
     // Background profiler retry backoff.

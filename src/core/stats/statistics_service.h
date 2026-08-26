@@ -6,6 +6,7 @@
 #include <map>
 #include <vector>
 
+#include "core/stats/metrics_history.h"
 #include "core/stats/system_stats.h"
 #include "profiling_window.h"
 
@@ -83,6 +84,7 @@ public:
     bool onTick(double duration_ms);
 
     StatisticsSnapshot snapshot() const;
+    [[nodiscard]] MetricsSnapshot metricsSnapshot() const { return metrics_history_.snapshot(); }
     [[nodiscard]] RollingValue placeholderTps(std::int64_t window_ms) const;
     [[nodiscard]] DistributionValues placeholderTickDuration(std::size_t max_samples) const;
     [[nodiscard]] RollingValue placeholderCpu(std::int64_t window_ms, bool process) const;
@@ -90,6 +92,7 @@ public:
                                                        std::int64_t profile_end_unix_ms) const;
     void recordPlayerCount(std::int64_t players);
     void recordWorldGauges(int entities, int chunks);
+    void recordPlayerPing(const MetricsAverages &summary);
 
     // Deterministic clock/CPU entry points used by the offline self-test.
     void startAt(std::int64_t steady_ms, std::int64_t unix_ms, const CpuSnapshot &initial_cpu);
@@ -97,6 +100,7 @@ public:
     void recordCpuSnapshot(const CpuSnapshot &current);
     void recordPlayerCountAt(std::int64_t players, std::int64_t steady_ms);
     void recordWorldGaugesAt(int entities, int chunks, std::int64_t steady_ms);
+    void recordPlayerPingAt(const MetricsAverages &summary, std::int64_t steady_ms);
     StatisticsSnapshot snapshotAt(std::int64_t steady_ms) const;
 
     std::int64_t unixTimeFor(std::int64_t steady_ms) const;
@@ -131,6 +135,7 @@ private:
     DistributionValues msptForRecentSamples(std::size_t max_samples) const;
     RollingValue cpuFor(std::int64_t now_ms, std::int64_t window_ms, bool process) const;
     std::int64_t effectiveStart(std::int64_t now_ms, std::int64_t window_ms) const;
+    void recordMetricsAt(std::int64_t steady_ms);
 
     std::vector<TickSample> ticks_;
     std::vector<CpuSample> cpu_;
@@ -144,8 +149,11 @@ private:
     std::int64_t start_steady_ms_ = 0;
     std::int64_t start_unix_ms_ = 0;
     std::int64_t last_observation_steady_ms_ = 0;
+    std::int64_t last_metrics_steady_ms_ = 0;
     std::int64_t next_cpu_sample_steady_ms_ = 0;
     CpuSnapshot previous_cpu_{};
+    MetricsHistory metrics_history_;
+    bool metrics_recorded_ = false;
     bool started_ = false;
 };
 

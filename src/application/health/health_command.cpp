@@ -1,29 +1,74 @@
 #include "application/health/health_command.h"
 
-#include <chrono>
+#include <algorithm>
 #include <cstdint>
 #include <string>
 #include <utility>
 
+#include "application/health/health_report.h"
 #include "core/command/arguments.h"
-#include "core/profiler/profiler.h"
 #include "core/stats/ping_statistics.h"
-#include "core/stats/system_stats.h"
+#include "core/util/base64.h"
 #include "core/util/format.h"
+#include "core/util/monotonic_time.h"
+#include "core/ws/crypto.h"
 #include "net/bytebin.h"
-#include "net/gzip.h"
-#include "proto/sampler_data.h"
 #include "spark_constants.h"
 
 namespace spark {
 
-HealthCommand::HealthCommand(StatisticsService &statistics, ProfileMetadataProvider &metadata_provider,
-                             std::string bytebin_url, std::string viewer_url, MainThreadDispatcher &dispatcher,
-                             ResultNotifier &notifier)
-    : statistics_(statistics), metadata_provider_(metadata_provider), dispatcher_(dispatcher), notifier_(notifier),
-      bytebin_url_(std::move(bytebin_url)), viewer_url_(std::move(viewer_url))
+namespace {
+
+std::chrono::milliseconds remainingUntil(std::chrono::steady_clock::time_point deadline)
 {
-    upload_fn_ = uploadToBytebin;
+    const auto now = std::chrono::steady_clock::now();
+    if (now >= deadline) {
+        return std::chrono::milliseconds::zero();
+    }
+    return std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now);
+}
+
+}  // namespace
+
+HealthCommand::HealthCommand(StatisticsService &statistics, ProfileMetadataProvider &metadata_provider,
+                             std::string bytebin_url, std::string viewer_url, std::string bytesocks_host,
+                             TrustedViewersState &trusted_viewers, MainThreadDispatcher &dispatcher,
+                             ResultNotifier &notifier, HealthDashboard::ConnectionFactory dashboard_factory,
+                             UploadFunction upload_function)
+    : statistics_(statistics), metadata_provider_(metadata_provider), trusted_viewers_(trusted_viewers),
+      dispatcher_(dispatcher), notifier_(notifier), bytebin_url_(std::move(bytebin_url)),
+      viewer_url_(std::move(viewer_url)), bytesocks_host_(std::move(bytesocks_host))
+{
+    upload_fn_ = upload_function ? std::move(upload_function) : UploadFunction(uploadToBytebin);
+    if (!dashboard_factory) {
+        const std::string bytesocks_host_copy = bytesocks_host_;
+        const std::string bytebin_url_copy = bytebin_url_;
+        const std::string viewer_url_copy = viewer_url_;
+        dashboard_factory = [bytesocks_host_copy, bytebin_url_copy,
+                             viewer_url_copy]() -> std::unique_ptr<HealthDashboardConnection> {
+            Crypto::KeyPair key_pair = Crypto::generateKeyPair();
+            if (key_pair.public_key_x509.empty() || key_pair.private_key_pkcs8.empty()) {
+                return {};
+            }
+            ViewerSocket::Config config;
+            config.bytesocks_host = bytesocks_host_copy;
+            config.bytebin_url = bytebin_url_copy;
+            config.viewer_url = viewer_url_copy;
+            config.user_agent = std::string("endstone-spark/") + kVersion;
+            config.sampler_interval = 0;
+            config.statistics_interval = 10;
+            return makeHealthDashboardViewerSocketConnection(std::move(config), std::move(key_pair));
+        };
+    }
+    dashboard_ = std::make_unique<HealthDashboard>(
+        std::move(dashboard_factory),
+        [this](const HealthData &data, CancellationToken cancellation) {
+            return uploadHealthData(data, std::move(cancellation));
+        },
+        [this](const std::vector<std::uint8_t> &key) {
+            return trusted_viewers_.contains(base64Encode(key.data(), key.size()));
+        },
+        [this](HealthDashboard::OpenResult result) { completeHealthDashboard(std::move(result)); });
     // Lazily create PingStatistics if the platform provides a PlayerPingProvider.
     if (auto *ping_provider = metadata_provider_.playerPingProvider()) {
         ping_statistics_ = std::make_unique<PingStatistics>(*ping_provider);
@@ -35,18 +80,101 @@ HealthCommand::~HealthCommand()
     shutdown();
 }
 
+bool HealthCommand::shutdownWithin(std::chrono::milliseconds timeout)
+{
+    const auto deadline = std::chrono::steady_clock::now() + std::max(timeout, std::chrono::milliseconds::zero());
+    stopping_.store(true, std::memory_order_release);
+    std::atomic_store_explicit(&lifetime_, std::shared_ptr<int>{}, std::memory_order_release);
+    upload_cancellation_.requestStop();
+    if (dashboard_) {
+        dashboard_->requestStop();
+    }
+
+    bool dashboard_stopped = true;
+    if (dashboard_) {
+        dashboard_stopped = dashboard_->shutdownWithin(remainingUntil(deadline));
+    }
+
+    bool upload_stopped = true;
+    if (upload_thread_.joinable()) {
+        if (upload_thread_.get_id() == std::this_thread::get_id()) {
+            upload_stopped = false;
+        }
+        else {
+            std::unique_lock lock(upload_exit_mutex_);
+            upload_stopped = upload_exit_cv_.wait_until(lock, deadline, [this] { return upload_worker_exited_; });
+            lock.unlock();
+            if (upload_stopped) {
+                try {
+                    upload_thread_.join();
+                }
+                catch (...) {
+                    upload_stopped = false;
+                }
+            }
+        }
+    }
+    if (upload_stopped) {
+        uploading_.store(false, std::memory_order_release);
+    }
+    return dashboard_stopped && upload_stopped;
+}
+
 void HealthCommand::shutdown()
 {
-    lifetime_.reset();
-    if (upload_thread_.joinable() && upload_thread_.get_id() != std::this_thread::get_id()) {
-        upload_thread_.join();
+    static_cast<void>(shutdownWithin(kDefaultShutdownBudget));
+}
+
+void HealthCommand::onTick()
+{
+    onTickAt(monotonicUnixMillis());
+}
+
+void HealthCommand::onTickAt(std::int64_t now_ms)
+{
+    if (stopping_.load(std::memory_order_acquire) || !dashboard_) {
+        return;
+    }
+    dashboard_->tick();
+    if (dashboard_->updateDue(now_ms)) {
+        try {
+            HealthData snapshot = captureHealthDataForSender(dashboard_sender_, dashboard_sender_is_player_, now_ms);
+            dashboard_->enqueueUpdate(std::move(snapshot), now_ms);
+        }
+        catch (...) {  // NOLINT(bugprone-empty-catch): dashboard updates are best effort.
+        }
+    }
+    if (dashboard_->consumeFailure()) {
+        const std::string sender = dashboard_sender_;
+        dashboard_sender_.clear();
+        accepted_dashboard_generation_ = 0;
+        if (!sender.empty()) {
+            notifyBestEffort(sender, "Health dashboard connection failed.");
+        }
+    }
+}
+
+void HealthCommand::notifyBestEffort(const std::string &sender_name, const std::string &message) noexcept
+{
+    try {
+        notifier_.notify(sender_name, message);
+    }
+    catch (...) {  // NOLINT(bugprone-empty-catch): tick notifications are best effort.
     }
 }
 
 void HealthCommand::pollPing()
 {
-    if (ping_statistics_) {
-        ping_statistics_->poll();
+    if (stopping_.load(std::memory_order_acquire)) {
+        return;
+    }
+    if (ping_statistics_ && ping_statistics_->poll()) {
+        const PingSummary &summary = ping_statistics_->lastPollSummary();
+        statistics_.recordPlayerPing({.mean = summary.mean(),
+                                      .max = static_cast<double>(summary.max()),
+                                      .min = static_cast<double>(summary.min()),
+                                      .median = static_cast<double>(summary.median()),
+                                      .percentile95 = static_cast<double>(summary.percentile95th())});
     }
 }
 
@@ -60,7 +188,9 @@ std::vector<int> HealthCommand::pingSamples() const
 
 void HealthCommand::pollNetwork()
 {
-    network_monitor_.poll();
+    if (!stopping_.load(std::memory_order_acquire)) {
+        network_monitor_.poll();
+    }
 }
 
 std::map<std::string, NetworkInterfaceSnapshot> HealthCommand::networkSnapshots() const
@@ -111,263 +241,34 @@ void HealthCommand::cmdPing(CommandSender &sender, const Arguments &args)
     sender.sendMessage("  {} ;  {}", formatPingRtts(summary), formatPingRtts(average));
 }
 
-void HealthCommand::sendPerformanceReport(CommandSender &sender, const StatisticsSnapshot &stats)
+void HealthCommand::showHealth(CommandSender &sender, const Arguments &args)
 {
-    sender.sendMessage("{}TPS {}(5s/10s/1m/5m/15m){}: {} / {} / {} / {} / {}", kColorGold, kColorGray, kColorReset,
-                       formatTpsValue(stats.tps.last_5s), formatTpsValue(stats.tps.last_10s),
-                       formatTpsValue(stats.tps.last_1m), formatTpsValue(stats.tps.last_5m),
-                       formatTpsValue(stats.tps.last_15m));
-    sender.sendMessage("{}MSPT 10s {}(mean/min/median/p95/max){}: {}", kColorGold, kColorGray, kColorReset,
-                       formatMsptDistribution(stats.mspt.last_10s));
-    sender.sendMessage("{}MSPT 1m  {}(mean/min/median/p95/max){}: {}", kColorGold, kColorGray, kColorReset,
-                       formatMsptDistribution(stats.mspt.last_1m));
-    sender.sendMessage("{}MSPT 5m  {}(mean/min/median/p95/max){}: {}", kColorGold, kColorGray, kColorReset,
-                       formatMsptDistribution(stats.mspt.last_5m));
-    sender.sendMessage("{}Process CPU {}(10s/1m/15m){}: {} / {} / {}", kColorGold, kColorGray, kColorReset,
-                       formatCpuValue(stats.cpu.process_last_10s), formatCpuValue(stats.cpu.process_last_1m),
-                       formatCpuValue(stats.cpu.process_last_15m));
-    sender.sendMessage("{}System CPU {}(10s/1m/15m){}: {} / {} / {}", kColorGold, kColorGray, kColorReset,
-                       formatCpuValue(stats.cpu.system_last_10s), formatCpuValue(stats.cpu.system_last_1m),
-                       formatCpuValue(stats.cpu.system_last_15m));
-
-    const std::int64_t history_seconds = (stats.history_span_ms + 999) / 1000;
-    if (stats.history_span_ms < StatisticsService::kMaximumHistoryMs) {
-        sender.sendMessage("{}Statistics history: {}{} {}(longer windows currently use the available history)",
-                           kColorGold, kColorGray, formatDuration(history_seconds), kColorGray);
-    }
+    showHealthReport(sender, statistics_, metadata_provider_, network_monitor_.snapshot(), args.boolFlag("memory"),
+                     args.boolFlag("network"));
 }
 
 void HealthCommand::cmdHealth(CommandSender &sender, const Arguments &args)
 {
-    const StatisticsSnapshot statistics = statistics_.snapshot();
-    sendPerformanceReport(sender, statistics);
-
-    const ProcessStats process = gatherProcessStats();
-    const SystemStats system = gatherSystemStats(".");
-    const std::int64_t uptime = metadata_provider_.serverUptimeSeconds();
-    sender.sendMessage("{}Uptime: {}{}", kColorGold, kColorGray, formatDuration(uptime));
-    sender.sendMessage("{}Players online: {}{}", kColorGold, kColorGray, metadata_provider_.playerCount());
-
-    if (process.rss_present && process.virtual_present) {
-        sender.sendMessage("{}Process memory {}(RSS/virtual){}: {} / {}", kColorGold, kColorGray, kColorReset,
-                           formatBytes(static_cast<std::uint64_t>(process.rss_bytes)),
-                           formatBytes(static_cast<std::uint64_t>(process.virtual_bytes)));
+    if (stopping_.load(std::memory_order_acquire)) {
+        sender.sendMessage("Health services are shutting down.");
+        return;
     }
-    else if (process.rss_present) {
-        sender.sendMessage("{}Process RSS: {}{}", kColorGold, kColorGray,
-                           formatBytes(static_cast<std::uint64_t>(process.rss_bytes)));
+    std::string action = args.subCommand();
+    if (action == "health") {
+        action.clear();
     }
-    else if (process.virtual_present) {
-        sender.sendMessage("{}Process virtual memory: {}{}", kColorGold, kColorGray,
-                           formatBytes(static_cast<std::uint64_t>(process.virtual_bytes)));
+    if (action == "show") {
+        showHealth(sender, args);
     }
-    if (process.threads_present) {
-        sender.sendMessage("{}Process threads: {}{}", kColorGold, kColorGray, process.threads);
+    else if (action == "trust-viewer") {
+        trustViewer(sender, args);
     }
-    if (system.memory_present) {
-        sender.sendMessage("{}System memory {}(used/total){}: {} / {}", kColorGold, kColorGray, kColorReset,
-                           formatBytes(static_cast<std::uint64_t>(system.mem_used)),
-                           formatBytes(static_cast<std::uint64_t>(system.mem_total)));
-    }
-    if (system.swap_present) {
-        sender.sendMessage("{}Swap/page file {}(used/total){}: {} / {}", kColorGold, kColorGray, kColorReset,
-                           formatBytes(static_cast<std::uint64_t>(system.swap_used)),
-                           formatBytes(static_cast<std::uint64_t>(system.swap_total)));
-    }
-    if (system.disk_present) {
-        sender.sendMessage("{}Disk {}(used/total){}: {} / {}", kColorGold, kColorGray, kColorReset,
-                           formatBytes(static_cast<std::uint64_t>(system.disk_used)),
-                           formatBytes(static_cast<std::uint64_t>(system.disk_total)));
-    }
-    if (system.cpu_present) {
-        sender.sendMessage("{}CPU: {}{} {}({} logical processors)", kColorGold, kColorGray,
-                           system.cpu_model.empty() ? "unknown model" : system.cpu_model, kColorGray,
-                           system.cpu_threads);
-    }
-    if (system.os_present) {
-        sender.sendMessage("{}OS: {}{} {} {}", kColorGold, kColorGray, system.os_name, system.os_version,
-                           system.os_arch);
-    }
-
-    auto net_snapshots = network_monitor_.snapshot();
-    if (!net_snapshots.empty()) {
-        sender.sendMessage("{}Network {}(RX/TX bytes/s, last 15m mean){}:", kColorGold, kColorGray, kColorReset);
-        for (const auto &[name, snap] : net_snapshots) {
-            if (!snap.rx_bytes_per_second.present || !snap.tx_bytes_per_second.present) {
-                continue;
-            }
-            std::string net_msg = "  " + kColorGray;
-            net_msg += name;
-            net_msg += ": " + kColorGreen;
-            net_msg += formatBytes(static_cast<std::uint64_t>(snap.rx_bytes_per_second.mean)) + "/s";
-            net_msg += kColorGray;
-            net_msg += "  " + kColorGreen;
-            net_msg += formatBytes(static_cast<std::uint64_t>(snap.tx_bytes_per_second.mean)) + "/s";
-            net_msg += kColorGray;
-            sender.sendMessage(net_msg);
-        }
-    }
-
-    if (args.boolFlag("upload")) {
+    else if (action == "upload" || args.boolFlag("upload")) {
         uploadHealthReport(sender);
     }
-}
-
-void HealthCommand::uploadHealthReport(CommandSender &sender)
-{
-    if (uploading_.exchange(true)) {
-        sender.sendMessage("A health report upload is already in progress.");
-        return;
-    }
-    if (upload_thread_.joinable()) {
-        upload_thread_.join();
-    }
-
-    const std::int64_t now_ms =
-        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
-            .count();
-    try {
-        HealthData data = captureHealthData(sender, now_ms);
-        const std::string sender_name = sender.getName();
-        const bool sender_is_player = sender.isPlayer();
-        upload_thread_ = std::thread([this, data = std::move(data), sender_name, sender_is_player, now_ms]() mutable {
-            try {
-                runHealthUpload(data, sender_name, sender_is_player, now_ms);
-            }
-            catch (...) {
-                uploading_.store(false);
-            }
-        });
-    }
-    catch (const std::exception &error) {
-        uploading_.store(false);
-        sender.sendErrorMessage("Health report generation failed: {}", error.what());
-        return;
-    }
-    sender.sendMessage("{}Health report upload started.{}", kColorGold, kColorGray);
-}
-
-HealthData HealthCommand::captureHealthData(const CommandSender &sender, std::int64_t now_ms)
-{
-    ExportContext ctx;
-    metadata_provider_.gatherServerMetadata(ctx, now_ms);
-    ctx.statistics = statistics_.snapshot();
-    ctx.system_stats = gatherSystemStats(".");
-    ctx.system_stats.uptime_present = true;
-    ctx.system_stats.uptime_ms = ctx.uptime_ms;
-    ctx.system_stats.present = true;
-    ctx.window_stats = statistics_.profileWindows(0, now_ms);
-    ctx.ping_samples = pingSamples();
-    ctx.net_snapshots = networkSnapshots();
-
-    HealthData data;
-    data.creator_name = sender.getName();
-    data.creator_is_player = sender.isPlayer();
-    data.endstone_version = ctx.endstone_version;
-    data.minecraft_version = ctx.minecraft_version;
-    data.generated_time_ms = now_ms;
-
-    data.platform_stats.present = true;
-    data.platform_stats.player_count = ctx.player_count;
-    data.platform_stats.online_mode = ctx.online_mode;
-    data.platform_stats.uptime_ms = ctx.uptime_ms;
-    const ProcessStats process = gatherProcessStats();
-    data.platform_stats.process_mem_present = process.rss_present;
-    data.platform_stats.process_mem_bytes = process.rss_bytes;
-    data.platform_stats.process_virtual_present = process.virtual_present;
-    data.platform_stats.process_virtual_bytes = process.virtual_bytes;
-    if (!ctx.ping_samples.empty()) {
-        PingRollingAverage temp(PingStatistics::kWindowSize);
-        for (int v : ctx.ping_samples) {
-            temp.add(v);
-        }
-        data.platform_stats.ping_present = true;
-        data.platform_stats.ping_mean = temp.mean();
-        data.platform_stats.ping_max = static_cast<double>(temp.max());
-        data.platform_stats.ping_min = static_cast<double>(temp.min());
-        data.platform_stats.ping_median = static_cast<double>(temp.median());
-        data.platform_stats.ping_p95 = static_cast<double>(temp.percentile95th());
-    }
-
-    data.system_stats = ctx.system_stats;
-    if (!ctx.net_snapshots.empty()) {
-        data.system_stats.net_present = true;
-        data.system_stats.net_averages = ctx.net_snapshots;
-    }
-
-    data.statistics = ctx.statistics;
-    data.plugins = ctx.plugins;
-    data.server_configurations = ctx.server_configurations;
-    data.window_stats = ctx.window_stats;
-
-    if (!ctx.bds_executable_sha256.empty()) {
-        data.extra_platform_metadata["BDS executable SHA-256"] = "\"" + ctx.bds_executable_sha256 + "\"";
-    }
-    data.extra_platform_metadata["Statistics history available ms"] = std::to_string(ctx.statistics.history_span_ms);
-
-    return data;
-}
-
-void HealthCommand::runHealthUpload(const HealthData &data, std::string sender_name, bool sender_is_player,
-                                    std::int64_t now_ms)
-{
-    UploadResult result;
-    try {
-        std::string body = buildHealthData(data);
-        std::string compressed = gzipCompress(body);
-        result = upload_fn_(compressed, bytebin_url_, kHealthContentType, std::string("endstone-spark/") + kVersion);
-    }
-    catch (const std::exception &e) {
-        result.error = std::string("health report generation failed: ") + e.what();
-    }
-    {
-        std::scoped_lock lock(upload_mutex_);
-        upload_result_ = std::move(result);
-        upload_sender_ = std::move(sender_name);
-        upload_sender_is_player_ = sender_is_player;
-        upload_time_ms_ = now_ms;
-    }
-    const std::weak_ptr<int> lifetime = lifetime_;
-    try {
-        dispatcher_.runOnMainThread([this, lifetime]() {
-            if (lifetime.expired()) {
-                return;
-            }
-            announceHealthUpload();
-        });
-    }
-    catch (...) {
-        uploading_.store(false);
-    }
-}
-
-void HealthCommand::announceHealthUpload()
-{
-    UploadResult result;
-    std::string sender_name;
-    bool sender_is_player = false;
-    std::int64_t now_ms = 0;
-    {
-        std::scoped_lock lock(upload_mutex_);
-        result = std::move(upload_result_);
-        sender_name = std::move(upload_sender_);
-        sender_is_player = upload_sender_is_player_;
-        now_ms = upload_time_ms_;
-    }
-    if (result.ok) {
-        const std::string url = viewer_url_ + result.key;
-        notifier_.notify(sender_name, "Health report uploaded! " + url);
-        if (activity_log_provider_) {
-            ActivityLog *log = activity_log_provider_();
-            if (log) {
-                log->add(Activity::url(sender_name, sender_is_player, now_ms, "Health report", url));
-            }
-        }
-    }
     else {
-        notifier_.notify(sender_name, "Health report upload failed: " + result.error);
+        openHealthDashboard(sender);
     }
-    uploading_.store(false);
 }
 
 }  // namespace spark

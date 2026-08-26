@@ -22,6 +22,8 @@ public:
 
     bool contains(const std::string &b64_key) const;
     void add(const std::string &b64_key);
+    // Adds a key and persists the resulting state, rolling back on failure.
+    bool addAndSave(const std::string &b64_key);
 
     const std::vector<std::string> &keys() const { return keys_; }
     const std::string &lastError() const { return last_error_; }

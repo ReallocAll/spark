@@ -9,13 +9,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Match upstream live-viewer cadence with standalone statistics every 10 seconds
+  and globally aligned sampler payload rotation every minute.
+- Record upstream-compatible rolling TPS, tick-duration, CPU, world, and ping metric series in health and sampler data.
+- Use globally aligned profiling windows and stop timed profiles on a monotonic deadline even while server ticks are stalled.
+- Measure server uptime from the monotonic clock anchor so wall-clock adjustments cannot skew health reports.
+- Poll ping and network metrics on monotonic deadlines so server lag does not stretch their sampling cadence.
+- Align command argument parsing with Java spark and hide inaccessible commands from help output.
+- Align profiler action precedence, umbrella permissions, and zero-interval mode defaults with Java spark.
+- Add Java-compatible health report commands and a live health dashboard with
+  background uploads, rolling statistics updates, and trusted viewer clients.
+- Allow `/spark profiler open --comment <text>` to override live profile comments.
+- Report the number of ticks included by `--only-ticks-over` in sampler metadata.
+- Add native memory and per-interface packet-rate details to `health show`.
+- Include current Endstone game-rule values in exported Spark world metadata.
+- Register Spark's native backend with bStats using service ID 33350.
 - Register an optional `spark` expansion with Endstone PlaceholderAPI, exposing
   Java spark-compatible TPS, tick-duration, and process/system CPU placeholders
   from Spark's live rolling statistics. Spark continues normally when PAPI is not
   installed or active.
+- Support Java-compatible Spark configuration environment variables.
+
+### Changed
+
+- **BREAKING**: Temporarily disable Windows native allocation profiling in v0.6;
+  `--alloc` now reports that safe allocator entry patching is unavailable. Linux
+  x86-64 allocation profiling remains supported.
 
 ### Fixed
 
+- Include players in aggregate world entity gauges while continuing to report the
+  player count separately.
+- Exclude native allocation-hook instrumentation branches from execution profiles
+  so Plugins View does not charge allocator internals to Spark.
+- Align the emitted spark profile data version with upstream `DATA_VERSION = 2`.
+- Reject ambiguous live-viewer trust approval when different verified keys reuse
+  the same client ID.
+- Keep viewer and health notification failures from escaping onto the server tick
+  path or skipping connection cleanup.
+- Avoid recalculating and sorting rolling TPS and tick-duration metrics on every server tick when the history is only
+  recorded every 10 seconds.
+- Prevent stale or concurrently closed live-viewer transports from restoring an open connection state, and run initial
+  uploads without holding the transport lock.
+- Serialize health-dashboard opening and shutdown without invoking completion callbacks under internal locks.
+- Reject invalid rolling windows and bound metadata and world-statistics edge cases.
+- Synchronize retained-allocation snapshots with lifecycle record reuse.
+- Include world metadata in the initial health report payload.
+- Require a valid signature before accepting a trusted live-viewer client,
+  reject malformed WebSocket protobuf/base64 input, and bound live-viewer
+  receive and send queues.
+- Encode sampler tick-length thresholds in the upstream protocol's microsecond unit.
 - Match Java spark's tick-duration placeholder windows and percentile ranks, and
   avoid rebuilding unrelated rolling statistics for each placeholder value.
 

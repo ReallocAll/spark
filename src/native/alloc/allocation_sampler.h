@@ -92,6 +92,9 @@ public:
     // prologue patching on every start/stop cycle.
     bool stop(std::string &error);
 
+    // Stops tracking and the producer without draining, finalizing, uninstalling hooks, or joining.
+    void requestStop() noexcept;
+
     // Final lifecycle cleanup. This is safe to call even when no session is
     // running and must be called before the plugin module can be unloaded.
     bool shutdown(std::string &error);
@@ -143,6 +146,19 @@ public:
     std::uint64_t moduleRegistryCount() const;
     static std::uint64_t moduleRegistryCapacity();
     static std::uint64_t profileNodeCapacity();
+    static std::uint64_t profileTimeEntryCapacity();
+    std::uint64_t profileStorageSampleDrops() const;
+    bool profileStorageExhausted() const;
+    static std::uint64_t pendingSampleCapacity();
+    std::uint64_t pendingSampleDrops() const;
+    std::uint64_t pendingCapacityDrops() const;
+    std::uint64_t pendingStaleDrops() const;
+    std::uint64_t pendingFinalDrops() const;
+    std::uint64_t moduleOverflowFrames() const;
+    std::uint64_t retainedHistoryWindows() const;
+    std::uint64_t historySamplesPruned() const;
+    std::uint64_t historyBytesPruned() const;
+    bool historyTruncated() const;
     bool dataIncomplete() const;
     std::uint64_t averageLifetimeMs() const;
     std::uint64_t maximumLifetimeMs() const;

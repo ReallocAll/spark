@@ -1,6 +1,7 @@
 #ifndef ENDSTONE_SPARK_WS_PROTO_H
 #define ENDSTONE_SPARK_WS_PROTO_H
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -8,7 +9,9 @@
 
 namespace spark {
 
-// SocketChannelInfo (spark_sampler.proto field 8 in SamplerData)
+inline constexpr std::size_t kMaxIncomingWsPacketBytes = 64 * 1024;
+
+// SocketChannelInfo (spark.proto; used by SamplerData and HealthData)
 struct SocketChannelInfo {
     std::string channel_id;
     std::vector<std::uint8_t> public_key;  // X.509 DER
@@ -63,6 +66,12 @@ std::string encodeServerConnectResponse(const std::string &client_id,
 
 std::string encodeServerUpdateSamplerData(const std::string &payload_id,
                                           const std::vector<std::uint8_t> &private_key_pkcs8);
+
+// Encode a signed ServerUpdateStatistics packet. Each argument is the
+// serialized spark PlatformStatistics, SystemStatistics, or Metrics message.
+std::string encodeServerUpdateStatistics(const std::string &platform, const std::string &system,
+                                         const std::string &metrics,
+                                         const std::vector<std::uint8_t> &private_key_pkcs8);
 
 // Encode a "close" pong (ok=false, data=0) to signal shutdown.
 std::string encodeServerClose(const std::vector<std::uint8_t> &private_key_pkcs8);

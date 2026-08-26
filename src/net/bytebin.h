@@ -3,6 +3,8 @@
 
 #include <string>
 
+#include "net/cancellation.h"
+
 namespace spark {
 
 struct UploadResult {
@@ -13,7 +15,8 @@ struct UploadResult {
 
 // POST a (already gzipped) payload to a bytebin instance and return the content key.
 UploadResult uploadToBytebin(const std::string &gzipped_body, const std::string &bytebin_url,
-                             const std::string &content_type, const std::string &user_agent);
+                             const std::string &content_type, const std::string &user_agent,
+                             CancellationToken cancellation = {});
 
 }  // namespace spark
 

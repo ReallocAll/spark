@@ -6,6 +6,8 @@
 #include <filesystem>
 #include <utility>
 
+#include "application/command/profiler_action_resolver.h"
+#include "core/util/monotonic_time.h"
 #include "native/sampler/heartbeat.h"
 #include "net/profile_file.h"
 
@@ -31,7 +33,8 @@ SparkApplication::SparkApplication(std::string bds_executable_sha256, const std:
                 config_.background_profiler_interval, config_.background_profiler_thread_grouper,
                 config_.background_profiler_thread_dumper, trusted_viewers_, dispatcher_, metadata_provider_,
                 notifier_),
-      health_(statistics_, metadata_provider_, config_.bytebin_url, config_.viewer_url, dispatcher_, notifier_),
+      health_(statistics_, metadata_provider_, config_.bytebin_url, config_.viewer_url, config_.bytesocks_host,
+              trusted_viewers_, dispatcher_, notifier_),
       activity_log_(std::move(activity_log_file)), activity_command_(activity_log_), tick_monitor_(notifier_),
       watchdog_(server_heartbeat_)
 {
@@ -59,45 +62,42 @@ SparkApplication::SparkApplication(std::string bds_executable_sha256, const std:
 
 void SparkApplication::registerCommands()
 {
-    registry_.registerCommand(
-        {"profiler", "sampler"}, "start/stop/info/cancel/open/trust-viewer an execution or allocation profile",
-        "spark.profiler", [this](CommandSender &sender, const Arguments &args) {
-            const std::string &action = args.subCommand();
-            if (action == "info") {
-                profiler_.cmdInfo(sender);
-                return;
-            }
-            if (action == "open") {
-                profiler_.cmdOpen(sender);
-            }
-            else if (action == "trust-viewer") {
-                profiler_.cmdTrustViewer(sender, args);
-            }
-            else if (action == "cancel") {
-                profiler_.cmdCancel(sender);
-            }
-            else if (action == "stop" || action == "upload" || args.boolFlag("stop") || args.boolFlag("upload")) {
-                profiler_.cmdStop(sender, args);
-            }
-            else if (action == "start") {
-                profiler_.cmdStart(sender, args);
-            }
-            else {
-                profiler_.cmdInfo(sender);
-            }
-        });
-    registry_.registerCommand({"tps", "cpu"}, "rolling TPS, MSPT percentiles, and CPU usage", "spark.tps",
+    registry_.registerCommand({"profiler", "sampler"},
+                              "start/stop/info/cancel/open/trust-viewer an execution or allocation profile",
+                              "spark.profiler", true, [this](CommandSender &sender, const Arguments &args) {
+                                  switch (resolveProfilerAction(args)) {
+                                  case ProfilerAction::Info:
+                                      profiler_.cmdInfo(sender);
+                                      break;
+                                  case ProfilerAction::Open:
+                                      profiler_.cmdOpen(sender, args);
+                                      break;
+                                  case ProfilerAction::TrustViewer:
+                                      profiler_.cmdTrustViewer(sender, args);
+                                      break;
+                                  case ProfilerAction::Cancel:
+                                      profiler_.cmdCancel(sender);
+                                      break;
+                                  case ProfilerAction::Stop:
+                                      profiler_.cmdStop(sender, args);
+                                      break;
+                                  case ProfilerAction::Start:
+                                      profiler_.cmdStart(sender, args);
+                                      break;
+                                  }
+                              });
+    registry_.registerCommand({"tps", "cpu"}, "rolling TPS, MSPT percentiles, and CPU usage", "spark.tps", false,
                               [this](CommandSender &sender, const Arguments &) { health_.cmdTps(sender); });
-    registry_.registerCommand({"ping"}, "player ping RTT statistics", "spark.ping",
+    registry_.registerCommand({"ping"}, "player ping RTT statistics", "spark.ping", false,
                               [this](CommandSender &sender, const Arguments &args) { health_.cmdPing(sender, args); });
     registry_.registerCommand(
-        {"health", "healthreport", "ht"}, "performance and host resource report", "spark.health",
+        {"health", "healthreport", "ht"}, "show, upload, or open the health dashboard", "spark.health", true,
         [this](CommandSender &sender, const Arguments &args) { health_.cmdHealth(sender, args); });
     registry_.registerCommand(
-        {"activity", "activitylog", "log"}, "show recent profiler and health report activity", "spark.activity",
+        {"activity", "activitylog", "log"}, "show recent profiler and health report activity", "spark.activity", false,
         [this](CommandSender &sender, const Arguments &args) { activity_command_.cmdActivity(sender, args); });
     registry_.registerCommand(
-        {"tickmonitor", "tickmonitoring"}, "report unusually long ticks", "spark.tickmonitor",
+        {"tickmonitor", "tickmonitoring"}, "report unusually long ticks", "spark.tickmonitor", false,
         [this](CommandSender &sender, const Arguments &args) { tick_monitor_.cmdTickMonitor(sender, args); });
 }
 
@@ -114,14 +114,14 @@ void SparkApplication::onTick(double mspt)
         auto [entities, chunks] = metadata_provider_.worldGauges();
         statistics_.recordWorldGauges(entities, chunks);
     }
-    // Poll ping every ~10 seconds (200 ticks at 20 TPS).
-    if (++tick_counter_ % 200 == 0) {
+    const MonitoringDue monitoring_due = monitoring_schedule_.poll(monotonicUnixMillis());
+    if (monitoring_due.ping) {
         health_.pollPing();
     }
-    // Poll network every ~60 seconds (1200 ticks at 20 TPS).
-    if (tick_counter_ % 1200 == 0) {
+    if (monitoring_due.network) {
         health_.pollNetwork();
     }
+    health_.onTick();
     tick_monitor_.onTick(mspt);
     profiler_.onTick(mspt);
 }
@@ -133,10 +133,26 @@ void SparkApplication::enable()
     profiler_.startBackgroundProfiler();
 }
 
+bool SparkApplication::shutdown(std::string &error)
+{
+    error.clear();
+    if (!health_.shutdownWithin(std::chrono::seconds(2))) {
+        error = "health dashboard/upload shutdown timed out";
+        return false;
+    }
+    profiler_.shutdown();
+    watchdog_.stop();
+    return true;
+}
+
 void SparkApplication::shutdown()
 {
-    profiler_.shutdown();
+    std::string error;
+    if (shutdown(error)) {
+        return;
+    }
     health_.shutdown();
+    profiler_.shutdown();
     watchdog_.stop();
 }
 

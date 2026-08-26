@@ -44,7 +44,7 @@ int main()
     writer_config.session_id = 123456;
     spark::RecoveryWriter writer(writer_config);
     assert(writer.start());
-    writer.journalSessionConfig(4000, 0, false, false, false, 1, 0, false, "Console", false, {}, {});
+    writer.journalSessionConfig(4000, 0, false, false, false, 1, 0, false, "Console", false, {}, {}, 0);
     writer.journalModuleDef(0, "bedrock_server");
     writer.journalThreadDef(1, 1, "Server thread");
     spark::Sample sample;

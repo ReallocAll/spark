@@ -1,5 +1,6 @@
 #include <cassert>
 #include <map>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -94,6 +95,18 @@ void testPingRollingAverage()
     assert(ra.max() == 40);
 }
 
+void testPingRollingAverageRejectsZeroCapacity()
+{
+    bool rejected = false;
+    try {
+        PingRollingAverage average(0);
+    }
+    catch (const std::invalid_argument &) {
+        rejected = true;
+    }
+    assert(rejected);
+}
+
 void testPingStatistics()
 {
     MockPingProvider provider({{"Alice", 50}, {"Bob", 100}, {"Charlie", 200}});
@@ -163,6 +176,7 @@ int main()
 {
     testPingSummary();
     testPingRollingAverage();
+    testPingRollingAverageRejectsZeroCapacity();
     testPingStatistics();
     testPingStatisticsEmpty();
     testPingStatisticsZeroPing();

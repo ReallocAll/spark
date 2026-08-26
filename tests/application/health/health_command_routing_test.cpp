@@ -1,0 +1,276 @@
+#include <cassert>
+#include <chrono>
+#include <condition_variable>
+#include <cstdint>
+#include <filesystem>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "application/health/health_command.h"
+#include "core/config/trusted_viewers.h"
+#include "core/util/base64.h"
+
+namespace spark {
+
+struct HealthCommandTestAccess {
+    static void onTickAt(HealthCommand &command, std::int64_t now_ms) { command.onTickAt(now_ms); }
+};
+
+namespace {
+
+class Sender final : public CommandSender {
+public:
+    [[nodiscard]] std::string getName() const override { return "Alice"; }
+    [[nodiscard]] bool isPlayer() const override { return true; }
+
+    std::vector<std::string> messages;
+    std::vector<std::string> errors;
+
+private:
+    void sendImpl(const std::string &message) override { messages.push_back(message); }
+    void errorImpl(const std::string &message) override { errors.push_back(message); }
+};
+
+class Dispatcher final : public MainThreadDispatcher {
+public:
+    void runOnMainThread(std::function<void()> task) override { task(); }
+};
+
+class Notifier final : public ResultNotifier {
+public:
+    void notify(const std::string &, const std::string &message) override
+    {
+        std::scoped_lock lock(mutex);
+        messages.push_back(message);
+        cv.notify_all();
+    }
+
+    bool waitForMessageCount(std::size_t count)
+    {
+        std::unique_lock lock(mutex);
+        return cv.wait_for(lock, std::chrono::seconds(2), [&] { return messages.size() >= count; });
+    }
+
+    std::mutex mutex;
+    std::condition_variable cv;
+    std::vector<std::string> messages;
+};
+
+class Metadata final : public ProfileMetadataProvider {
+public:
+    void gatherServerMetadata(ExportContext &context, std::int64_t) override
+    {
+        context.endstone_version = "test-endstone";
+        context.minecraft_version = "test-minecraft";
+        context.player_count = 3;
+        context.uptime_ms = 12000;
+        context.server_configurations["server.properties"] = "{}";
+    }
+    void gatherWorldMetadata(ExportContext &) override {}
+    std::int64_t serverUptimeSeconds() override { return 12; }
+    std::int64_t playerCount() override { return 3; }
+    PlayerPingProvider *playerPingProvider() override { return nullptr; }
+};
+
+struct ConnectionProbe {
+    std::mutex mutex;
+    std::condition_variable cv;
+    int open_count = 0;
+    int upload_count = 0;
+    int send_count = 0;
+    bool open = false;
+    bool client = false;
+    std::optional<SocketChannelInfo> channel;
+};
+
+class Connection final : public HealthDashboardConnection {
+public:
+    explicit Connection(ConnectionProbe &probe) : probe_(probe) {}
+
+    std::string open(const UploadCallback &upload, const CancellationToken &cancellation) override
+    {
+        if (cancellation.stopRequested()) {
+            return {};
+        }
+        const UploadResult result = upload(cancellation);
+        std::scoped_lock lock(probe_.mutex);
+        ++probe_.open_count;
+        ++probe_.upload_count;
+        probe_.open = result.ok;
+        probe_.cv.notify_all();
+        return result.ok ? "https://viewer/" + result.key : std::string();
+    }
+    bool tick() override
+    {
+        std::scoped_lock lock(probe_.mutex);
+        return probe_.open;
+    }
+    [[nodiscard]] bool isOpen() const override
+    {
+        std::scoped_lock lock(probe_.mutex);
+        return probe_.open;
+    }
+    [[nodiscard]] bool hasClient() const override
+    {
+        std::scoped_lock lock(probe_.mutex);
+        return probe_.client;
+    }
+    void requestStop() noexcept override
+    {
+        std::scoped_lock lock(probe_.mutex);
+        probe_.open = false;
+        probe_.cv.notify_all();
+    }
+    bool closeWithin(std::chrono::milliseconds) noexcept override
+    {
+        close();
+        return true;
+    }
+    void close() override
+    {
+        std::scoped_lock lock(probe_.mutex);
+        probe_.open = false;
+        probe_.cv.notify_all();
+    }
+    [[nodiscard]] SocketChannelInfo channelInfo() const override
+    {
+        return {.channel_id = "health-channel", .public_key = {1, 2, 3}};
+    }
+    bool sendStatistics(const std::string &, const std::string &, const std::string &) override
+    {
+        std::scoped_lock lock(probe_.mutex);
+        ++probe_.send_count;
+        probe_.cv.notify_all();
+        return probe_.open && probe_.client;
+    }
+    [[nodiscard]] std::vector<std::uint8_t> pendingKey(const std::string &id) const override
+    {
+        return id == "pending" ? std::vector<std::uint8_t>{9, 8, 7} : std::vector<std::uint8_t>{};
+    }
+    void sendClientTrusted(const std::string &id) override { trusted_id_ = id; }
+    void setIsKeyTrustedCallback(IsKeyTrustedCallback callback) override { trusted_ = std::move(callback); }
+
+private:
+    ConnectionProbe &probe_;
+    std::string trusted_id_;
+    IsKeyTrustedCallback trusted_;
+};
+
+struct Fixture {
+    Fixture()
+        : trusted_viewers(std::filesystem::temp_directory_path() / "spark-health-command-routing-test.json"),
+          activity_log(std::filesystem::temp_directory_path() / "spark-health-command-routing-test.json.log")
+    {
+        std::filesystem::remove(trustedViewersFile());
+        std::filesystem::remove(activityLogFile());
+    }
+
+    ~Fixture()
+    {
+        std::filesystem::remove(trustedViewersFile());
+        std::filesystem::remove(activityLogFile());
+    }
+
+    static std::filesystem::path trustedViewersFile()
+    {
+        return std::filesystem::temp_directory_path() / "spark-health-command-routing-test.json";
+    }
+    static std::filesystem::path activityLogFile()
+    {
+        return std::filesystem::temp_directory_path() / "spark-health-command-routing-test.json.log";
+    }
+
+    StatisticsService statistics;
+    Metadata metadata;
+    Dispatcher dispatcher;
+    Notifier notifier;
+    TrustedViewersState trusted_viewers;
+    ActivityLog activity_log;
+    ConnectionProbe connection_probe;
+    int factory_count = 0;
+};
+
+HealthCommand makeCommand(Fixture &fixture, HealthDashboard::ConnectionFactory factory = {},
+                          HealthCommand::UploadFunction upload = {})
+{
+    return {fixture.statistics,      fixture.metadata,   "https://bytebin/", "https://viewer/",  "bytesocks",
+            fixture.trusted_viewers, fixture.dispatcher, fixture.notifier,   std::move(factory), std::move(upload)};
+}
+
+}  // namespace
+}  // namespace spark
+
+int main()
+{
+    using spark::Arguments;
+    using spark::base64Encode;
+    using spark::CancellationToken;
+    using spark::Connection;
+    using spark::Fixture;
+    using spark::HealthCommandTestAccess;
+    using spark::HealthDashboard;
+    using spark::HealthDashboardConnection;
+    using spark::Sender;
+    using spark::UploadResult;
+    Fixture fixture;
+
+    int uploads = 0;
+    auto upload = [&uploads](const std::string &, const std::string &, const std::string &, const std::string &,
+                             const CancellationToken &) {
+        ++uploads;
+        return UploadResult{.ok = true, .key = "health-key"};
+    };
+    {
+        auto health = makeCommand(fixture, {}, upload);
+        Sender sender;
+        health.cmdHealth(sender, Arguments({"show"}, true));
+        assert(uploads == 0);
+        assert(sender.errors.empty());
+        health.cmdHealth(sender, Arguments({"upload"}, true));
+        assert(fixture.notifier.waitForMessageCount(1));
+        health.cmdHealth(sender, Arguments({"health", "--upload"}, true));
+        assert(fixture.notifier.waitForMessageCount(2));
+    }
+
+    auto factory = [&fixture]() {
+        ++fixture.factory_count;
+        return std::unique_ptr<HealthDashboardConnection>(std::make_unique<Connection>(fixture.connection_probe));
+    };
+    {
+        auto health = makeCommand(fixture, HealthDashboard::ConnectionFactory(std::move(factory)), upload);
+        health.setActivityLogProvider([&fixture]() { return &fixture.activity_log; });
+        Sender sender;
+        health.cmdHealth(sender, Arguments({}, true));
+        health.cmdHealth(sender, Arguments({"unknown"}, true));
+        assert(sender.messages.back().find("already open") != std::string::npos);
+        assert(fixture.notifier.waitForMessageCount(3));
+        assert(fixture.notifier.messages.back().find("https://viewer/initial") != std::string::npos ||
+               fixture.notifier.messages.back().find("health-key") != std::string::npos);
+
+        {
+            std::scoped_lock lock(fixture.connection_probe.mutex);
+            fixture.connection_probe.client = true;
+        }
+        const auto now_ms =
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
+                .count() +
+            10000;
+        HealthCommandTestAccess::onTickAt(health, now_ms);
+        {
+            std::unique_lock lock(fixture.connection_probe.mutex);
+            assert(fixture.connection_probe.cv.wait_for(lock, std::chrono::seconds(5),
+                                                        [&] { return fixture.connection_probe.send_count == 1; }));
+        }
+        health.cmdHealth(sender, Arguments({"trust-viewer", "--id", "pending"}, true));
+        const std::vector<std::uint8_t> trusted_key{9, 8, 7};
+        assert(fixture.trusted_viewers.contains(base64Encode(trusted_key.data(), trusted_key.size())));
+        assert(sender.messages.back().find("now trusted") != std::string::npos);
+        assert(fixture.activity_log.entries().size() == 1);
+        health.shutdown();
+    }
+    assert(fixture.factory_count == 1);
+    return 0;
+}

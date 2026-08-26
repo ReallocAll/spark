@@ -65,6 +65,11 @@ bool isAllDigits(std::string_view s)
     return std::ranges::all_of(s, [](char value) { return value >= '0' && value <= '9'; });
 }
 
+bool isCanonicalUnsignedInteger(std::string_view value)
+{
+    return isAllDigits(value) && (value.size() == 1 || value.front() != '0');
+}
+
 void appendJsonString(std::string &out, std::string_view value)
 {
     out += '"';
@@ -163,7 +168,7 @@ std::string serverPropertiesToJsonString(const std::map<std::string, std::string
         first = false;
         appendJsonString(out, key);
         out += ':';
-        if (value == "true" || value == "false" || isAllDigits(value)) {
+        if (value == "true" || value == "false" || isCanonicalUnsignedInteger(value)) {
             out += value;
         }
         else {

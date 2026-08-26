@@ -16,6 +16,7 @@ struct PingSummary {
     explicit PingSummary(std::vector<int> values);
 
     int total() const { return static_cast<int>(sorted_.size()); }
+    double mean() const;
     int min() const;
     int median() const;
     int percentile95th() const;
@@ -30,7 +31,7 @@ private:
 // Each add() contributes one median value; query-time statistics are
 // computed from the accumulated samples.
 struct PingRollingAverage {
-    explicit PingRollingAverage(std::size_t window_size) : capacity_(window_size) { samples_.reserve(window_size); }
+    explicit PingRollingAverage(std::size_t window_size);
 
     void add(int value);
     std::size_t samples() const { return count_; }
@@ -81,6 +82,10 @@ public:
     // the rolling average was updated (i.e. there were players with ping > 0).
     bool poll();
 
+    // Summary captured by the most recent successful poll, without another
+    // platform provider call.
+    const PingSummary &lastPollSummary() const { return last_poll_summary_; }
+
     // Current snapshot of all player pings.
     PingSummary currentSummary() const;
 
@@ -92,6 +97,7 @@ public:
 private:
     PlayerPingProvider &provider_;
     PingRollingAverage rolling_average_;
+    PingSummary last_poll_summary_;
 };
 
 }  // namespace spark
