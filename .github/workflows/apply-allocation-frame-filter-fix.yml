@@ -39,9 +39,6 @@ jobs:
           text = text.replace(old_loop, new_loop)
           path.write_text(text)
           PY
-      - name: Format changed source
-        run: |
-          clang-format-20 -i src/native/alloc/allocation_sampler_windows.cpp
       - name: Commit production fix
         run: |
           git config user.name github-actions[bot]
