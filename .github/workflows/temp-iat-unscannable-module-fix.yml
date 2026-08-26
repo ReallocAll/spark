@@ -5,7 +5,7 @@ on:
     branches:
       - fix/windows-allocation-safe-hooks
     paths:
-      - ".github/workflows/temp-iat-unscannable-module-fix.yml"
+      - .github/workflows/temp-iat-unscannable-module-fix.yml
 
 permissions:
   contents: write
@@ -19,13 +19,13 @@ jobs:
           ref: fix/windows-allocation-safe-hooks
 
       - name: Apply backend and regression-test patch
-        shell: python
         run: |
+          python - <<'PY'
           from pathlib import Path
 
           backend = Path("src/native/alloc/windows_iat_hooks_windows.cpp")
           text = backend.read_text(encoding="utf-8")
-          old = '''            WindowsIatModuleIdentity identity;
+          old = """            WindowsIatModuleIdentity identity;
             std::string identity_error;
             if (!moduleIdentity(pinned.get(), identity, &identity_error)) {
                 error = identity_error;
@@ -34,8 +34,8 @@ jobs:
             if (!enumerateModule(pinned.get(), identity, targets, slots, error)) {
                 return false;
             }
-'''
-          new = '''            WindowsIatModuleIdentity identity;
+"""
+          new = """            WindowsIatModuleIdentity identity;
             if (!moduleIdentity(pinned.get(), identity)) {
                 continue;  // A nonconforming loaded module cannot be scanned safely.
             }
@@ -46,16 +46,15 @@ jobs:
                 slots.resize(slot_count);  // Never retain candidates from a partially parsed module.
                 continue;
             }
-'''
+"""
           if old not in text:
               raise SystemExit("backend patch anchor not found")
           backend.write_text(text.replace(old, new, 1), encoding="utf-8")
 
           test = Path("tests/native/alloc/windows_iat_native_test.cpp")
           text = test.read_text(encoding="utf-8")
-          anchor = '''bool concurrentInstallUninstallStress(spark::WindowsIatHooks &hooks, HMODULE consumer, std::string &error)
-'''
-          helper = '''bool outOfRangeImportDirectoryRefresh(spark::WindowsIatHooks &hooks, HMODULE provider, HMODULE consumer,
+          anchor = "bool concurrentInstallUninstallStress(spark::WindowsIatHooks &hooks, HMODULE consumer, std::string &error)\n"
+          helper = """bool outOfRangeImportDirectoryRefresh(spark::WindowsIatHooks &hooks, HMODULE provider, HMODULE consumer,
                                       std::string &error)
 {
     auto *base = reinterpret_cast<std::byte *>(provider);
@@ -97,34 +96,34 @@ jobs:
            exerciseConsumer(consumer, 1);
 }
 
-'''
+"""
           if anchor not in text:
               raise SystemExit("test helper anchor not found")
           text = text.replace(anchor, helper + anchor, 1)
-          old_call = '''        !exerciseConsumer(consumer, 1) || !concurrentInstallUninstallStress(hooks, consumer, error) ||
+          old_call = """        !exerciseConsumer(consumer, 1) || !concurrentInstallUninstallStress(hooks, consumer, error) ||
         !oversizedImportDirectoryRefresh(hooks, consumer, error)) {
-'''
-          new_call = '''        !exerciseConsumer(consumer, 1) || !concurrentInstallUninstallStress(hooks, consumer, error) ||
+"""
+          new_call = """        !exerciseConsumer(consumer, 1) || !concurrentInstallUninstallStress(hooks, consumer, error) ||
         !oversizedImportDirectoryRefresh(hooks, consumer, error) ||
         !outOfRangeImportDirectoryRefresh(hooks, provider, consumer, error)) {
-'''
+"""
           if old_call not in text:
               raise SystemExit("test call anchor not found")
           test.write_text(text.replace(old_call, new_call, 1), encoding="utf-8")
+          PY
 
-      - name: Format changed C++
+      - name: Install and run clang-format 20
         run: |
-          sudo apt-get update
-          sudo apt-get install -y clang-format-20
-          clang-format-20 -i src/native/alloc/windows_iat_hooks_windows.cpp tests/native/alloc/windows_iat_native_test.cpp
+          python -m pip install --disable-pip-version-check clang-format==20.1.8
+          clang-format -i src/native/alloc/windows_iat_hooks_windows.cpp tests/native/alloc/windows_iat_native_test.cpp
+          git diff --check
 
       - name: Commit patch and remove temporary workflow
-        shell: bash
         run: |
           set -euo pipefail
-          rm .github/workflows/temp-iat-unscannable-module-fix.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/native/alloc/windows_iat_hooks_windows.cpp tests/native/alloc/windows_iat_native_test.cpp .github/workflows/temp-iat-unscannable-module-fix.yml
+          git rm .github/workflows/temp-iat-unscannable-module-fix.yml
+          git add src/native/alloc/windows_iat_hooks_windows.cpp tests/native/alloc/windows_iat_native_test.cpp
           git commit -m "fix: skip unscannable Windows IAT modules safely"
           git push origin HEAD:fix/windows-allocation-safe-hooks
