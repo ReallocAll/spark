@@ -142,9 +142,8 @@ inline std::optional<std::string_view> currentGameRuleFallback(std::string_view 
     return it->second;
 }
 
-inline std::optional<std::string> resolveGameRuleDefault(
-    std::string_view name, std::string_view minecraft_version,
-    std::optional<std::string_view> runtime_default = std::nullopt)
+inline std::optional<std::string> resolveGameRuleDefault(std::string_view name, std::string_view minecraft_version,
+                                                         std::optional<std::string_view> runtime_default = std::nullopt)
 {
     // Runtime/API knowledge is authoritative whenever the platform can provide it.
     if (runtime_default.has_value()) {
@@ -155,11 +154,11 @@ inline std::optional<std::string> resolveGameRuleDefault(
     const std::string normalized_version = detail::normalizeMinecraftVersion(minecraft_version);
 
     if (!normalized_version.empty()) {
-        const auto historical = std::find_if(
-            std::begin(detail::kHistoricalOverrides), std::end(detail::kHistoricalOverrides),
-            [&normalized_name, &normalized_version](const auto &entry) {
-                return entry.name == normalized_name && entry.version == normalized_version;
-            });
+        const auto historical =
+            std::find_if(std::begin(detail::kHistoricalOverrides), std::end(detail::kHistoricalOverrides),
+                         [&normalized_name, &normalized_version](const auto &entry) {
+                             return entry.name == normalized_name && entry.version == normalized_version;
+                         });
         if (historical != std::end(detail::kHistoricalOverrides)) {
             return std::string(historical->value);
         }
@@ -175,10 +174,10 @@ inline std::optional<std::string> resolveGameRuleDefault(
 inline std::optional<GameRuleMigration> gameRuleMigration(std::string_view name)
 {
     const std::string normalized = detail::normalizeGameRuleName(name);
-    const auto it = std::find_if(std::begin(detail::kMigrations), std::end(detail::kMigrations),
-                                 [&normalized](const auto &entry) {
-                                     return entry.old_name == normalized || entry.new_name == normalized;
-                                 });
+    const auto it =
+        std::find_if(std::begin(detail::kMigrations), std::end(detail::kMigrations), [&normalized](const auto &entry) {
+            return entry.old_name == normalized || entry.new_name == normalized;
+        });
     if (it == std::end(detail::kMigrations)) {
         return std::nullopt;
     }
