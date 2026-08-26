@@ -70,8 +70,9 @@ private:
     bool disable_broadcast_;
 };
 
-// Maintains rolling entity and loaded-chunk counts via Endstone events
-// with periodic full-scan reconciliation to correct drift.
+// Maintains rolling entity and loaded-chunk counts via Endstone events with
+// periodic reconciliation. Block actors are intentionally scanned less often
+// because Chunk::getBlockActors() captures a BlockState for every entry.
 class EndstoneWorldGaugeProvider {
 public:
     EndstoneWorldGaugeProvider(::endstone::Plugin &plugin, ::endstone::Server &server)
@@ -80,15 +81,16 @@ public:
     }
 
     void init();
-    std::pair<int, int> worldGauges();
+    WorldGaugeValues worldGauges();
 
 private:
-    void reconcile();
+    void reconcile(bool include_tile_entities);
 
     ::endstone::Plugin &plugin_;
     ::endstone::Server &server_;
     EndstoneWorldGaugeEventAdapter event_adapter_;
     std::int64_t last_reconcile_steady_ms_ = 0;
+    std::int64_t last_tile_reconcile_steady_ms_ = 0;
     bool initialized_ = false;
 };
 
@@ -105,7 +107,7 @@ public:
     std::vector<NativePluginSource> nativePluginSources() override;
     std::int64_t serverUptimeSeconds() override;
     std::int64_t playerCount() override;
-    std::pair<int, int> worldGauges() override;
+    WorldGaugeValues worldGauges() override;
     PlayerPingProvider *playerPingProvider() override;
 
 private:

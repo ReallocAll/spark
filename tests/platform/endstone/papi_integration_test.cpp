@@ -97,15 +97,21 @@ using spark::endstone_adapter::EndstoneWorldGaugeEventAdapter;
 using spark::endstone_adapter::WorldGaugeChunkKey;
 using spark::endstone_adapter::WorldGaugeCounts;
 using spark::endstone_adapter::WorldGaugeSnapshot;
+using spark::endstone_adapter::WorldGaugeTileEntityCount;
 
 WorldGaugeChunkKey chunk(std::string dimension, int x, int z)
 {
     return {.dimension = std::move(dimension), .x = x, .z = z};
 }
 
-void expectGaugeCounts(const EndstoneWorldGaugeEventAdapter &adapter, int players, int entities, int chunks)
+void expectGaugeCounts(const EndstoneWorldGaugeEventAdapter &adapter, int players, int entities, int chunks,
+                       int tile_entities = 0, bool tile_entities_present = false)
 {
-    const WorldGaugeCounts expected{.players = players, .entities = entities, .chunks = chunks};
+    const WorldGaugeCounts expected{.players = players,
+                                    .entities = entities,
+                                    .tile_entities = tile_entities,
+                                    .chunks = chunks,
+                                    .tile_entities_present = tile_entities_present};
     assert(adapter.counts() == expected);
 }
 
@@ -194,11 +200,63 @@ void testWorldGaugeLifecycle()
     expectGaugeCounts(from_events, 0, 0, 0);
 }
 
+void testTileEntityGaugeLifecycle()
+{
+    const WorldGaugeChunkKey overworld = chunk("minecraft:overworld", 2, 3);
+    const WorldGaugeChunkKey nether = chunk("minecraft:nether", 2, 3);
+    const WorldGaugeChunkKey end = chunk("minecraft:the_end", -4, 7);
+
+    EndstoneWorldGaugeEventAdapter adapter;
+    WorldGaugeSnapshot complete;
+    complete.chunks = {overworld, nether};
+    complete.tile_entities = {{.chunk = overworld, .count = 2}, {.chunk = nether, .count = 3}};
+    complete.tile_entities_complete = true;
+    adapter.reconcile(complete);
+    expectGaugeCounts(adapter, 0, 0, 2, 5, true);
+
+    WorldGaugeSnapshot ordinary_reconcile;
+    ordinary_reconcile.chunks = {overworld, nether};
+    adapter.reconcile(ordinary_reconcile);
+    expectGaugeCounts(adapter, 0, 0, 2, 5, true);
+
+    adapter.chunkUnloaded(overworld);
+    expectGaugeCounts(adapter, 0, 0, 1, 3, true);
+
+    adapter.chunkLoaded(end);
+    expectGaugeCounts(adapter, 0, 0, 2, 3, false);
+
+    WorldGaugeSnapshot refreshed;
+    refreshed.chunks = {nether, end};
+    refreshed.tile_entities = {{.chunk = nether, .count = 1}, {.chunk = end, .count = 4}};
+    refreshed.tile_entities_complete = true;
+    adapter.reconcile(refreshed);
+    expectGaugeCounts(adapter, 0, 0, 2, 5, true);
+
+    WorldGaugeSnapshot zero_scan;
+    zero_scan.chunks = {nether, end};
+    zero_scan.tile_entities_complete = true;
+    adapter.reconcile(zero_scan);
+    expectGaugeCounts(adapter, 0, 0, 2, 0, true);
+
+    WorldGaugeSnapshot discovered_chunk;
+    discovered_chunk.chunks = {nether, end, overworld};
+    adapter.reconcile(discovered_chunk);
+    expectGaugeCounts(adapter, 0, 0, 3, 0, false);
+
+    WorldGaugeSnapshot negative_scan;
+    negative_scan.chunks = {overworld};
+    negative_scan.tile_entities = {WorldGaugeTileEntityCount{.chunk = overworld, .count = -10}};
+    negative_scan.tile_entities_complete = true;
+    adapter.reconcile(negative_scan);
+    expectGaugeCounts(adapter, 0, 0, 1, 0, true);
+}
+
 }  // namespace
 
 int main()
 {
     testWorldGaugeLifecycle();
+    testTileEntityGaugeLifecycle();
 
     FakePlugin owner;
     spark::StatisticsService statistics;

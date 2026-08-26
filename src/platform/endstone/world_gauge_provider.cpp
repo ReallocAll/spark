@@ -1,4 +1,5 @@
 #include <chrono>
+#include <limits>
 #include <string>
 
 #include "platform/endstone/adapters.h"
@@ -8,6 +9,7 @@ namespace spark::endstone_adapter {
 namespace {
 
 constexpr std::int64_t KReconcileIntervalMs = 30000;
+constexpr std::int64_t KTileEntityReconcileIntervalMs = 60000;
 
 std::int64_t steadyNowMs()
 {
@@ -18,6 +20,12 @@ std::int64_t steadyNowMs()
 WorldGaugeChunkKey chunkKey(const ::endstone::Chunk &chunk)
 {
     return {.dimension = std::string(chunk.getDimension()->getId()), .x = chunk.getX(), .z = chunk.getZ()};
+}
+
+int boundedSize(std::size_t size)
+{
+    const auto maximum = static_cast<std::size_t>(std::numeric_limits<int>::max());
+    return static_cast<int>((std::min)(size, maximum));
 }
 
 }  // namespace
@@ -53,36 +61,57 @@ void EndstoneWorldGaugeProvider::init()
         [this](::endstone::ChunkUnloadEvent &event) { event_adapter_.chunkUnloaded(chunkKey(event.getChunk())); },
         ::endstone::EventPriority::Monitor);
 
-    reconcile();
+    reconcile(false);
+    last_tile_reconcile_steady_ms_ = steadyNowMs();
 }
 
-std::pair<int, int> EndstoneWorldGaugeProvider::worldGauges()
+WorldGaugeValues EndstoneWorldGaugeProvider::worldGauges()
 {
     const std::int64_t now = steadyNowMs();
-    if (now - last_reconcile_steady_ms_ >= KReconcileIntervalMs) {
-        reconcile();
+    if (now - last_tile_reconcile_steady_ms_ >= KTileEntityReconcileIntervalMs) {
+        last_tile_reconcile_steady_ms_ = now;
+        reconcile(true);
     }
+    else if (now - last_reconcile_steady_ms_ >= KReconcileIntervalMs) {
+        reconcile(false);
+    }
+
     const WorldGaugeCounts counts = event_adapter_.counts();
-    return {counts.entities, counts.chunks};
+    return {.entities = counts.entities,
+            .tile_entities = counts.tile_entities,
+            .chunks = counts.chunks,
+            .tile_entities_present = counts.tile_entities_present};
 }
 
-void EndstoneWorldGaugeProvider::reconcile()
+void EndstoneWorldGaugeProvider::reconcile(bool include_tile_entities)
 {
     last_reconcile_steady_ms_ = steadyNowMs();
 
     WorldGaugeSnapshot snapshot;
+    bool tile_scan_ok = include_tile_entities;
     ::endstone::Level &level = server_.getLevel();
     for (const auto &dimension : level.getDimensions()) {
         for (const auto &actor : dimension->getActors()) {
             snapshot.actor_ids.push_back(actor->getId());
         }
         for (const auto &chunk : dimension->getLoadedChunks()) {
-            snapshot.chunks.push_back(chunkKey(*chunk));
+            const WorldGaugeChunkKey key = chunkKey(*chunk);
+            snapshot.chunks.push_back(key);
+            if (!include_tile_entities) {
+                continue;
+            }
+            try {
+                snapshot.tile_entities.push_back({.chunk = key, .count = boundedSize(chunk->getBlockActors().size())});
+            }
+            catch (...) {
+                tile_scan_ok = false;
+            }
         }
     }
     for (const auto &player : server_.getOnlinePlayers()) {
         snapshot.player_ids.push_back(player->getId());
     }
+    snapshot.tile_entities_complete = tile_scan_ok;
     event_adapter_.reconcile(snapshot);
 }
 

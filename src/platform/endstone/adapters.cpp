@@ -286,7 +286,7 @@ PlayerPingProvider *EndstoneMetadataProvider::playerPingProvider()
     return ping_provider_.get();
 }
 
-std::pair<int, int> EndstoneMetadataProvider::worldGauges()
+WorldGaugeValues EndstoneMetadataProvider::worldGauges()
 {
     if (!world_gauges_) {
         world_gauges_ = std::make_unique<EndstoneWorldGaugeProvider>(plugin_, server_);
