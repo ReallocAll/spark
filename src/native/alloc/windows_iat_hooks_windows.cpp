@@ -213,13 +213,15 @@ public:
             }
 
             WindowsIatModuleIdentity identity;
-            std::string identity_error;
-            if (!moduleIdentity(pinned.get(), identity, &identity_error)) {
-                error = identity_error;
-                return false;
+            if (!moduleIdentity(pinned.get(), identity)) {
+                continue;  // A nonconforming loaded module cannot be scanned safely.
             }
-            if (!enumerateModule(pinned.get(), identity, targets, slots, error)) {
-                return false;
+
+            const std::size_t slot_count = slots.size();
+            std::string module_error;
+            if (!enumerateModule(pinned.get(), identity, targets, slots, module_error)) {
+                slots.resize(slot_count);  // Never retain candidates from a partially parsed module.
+                continue;
             }
         }
         return true;
