@@ -292,6 +292,9 @@ std::string buildWindowStatistics(const WindowStats &window)
     if (window.entities_present) {
         writer.int32(8, window.entities);
     }
+    if (window.tile_entities_present) {
+        writer.int32(9, window.tile_entities);
+    }
     if (window.chunks_present) {
         writer.int32(10, window.chunks);
     }

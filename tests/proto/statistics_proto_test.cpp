@@ -80,13 +80,31 @@ int main()
     spark::WindowStats window;
     window.ticks_present = true;
     window.ticks = 17;
+    window.tile_entities_present = true;
+    window.tile_entities = 5;
     window.duration_ms = 800;
     window.start_time_ms = 1000;
     window.end_time_ms = 1800;
     const std::string window_bytes = spark::proto_detail::buildWindowStatistics(window);
     if (!check(spark::proto_test::hasVarint(window_bytes, 1, 17), "window ticks were not encoded") ||
+        !check(spark::proto_test::hasVarint(window_bytes, 9, 5), "window tile entities were not encoded") ||
         !check(spark::proto_test::hasVarint(window_bytes, 11, 1000), "window start was not encoded") ||
         !check(spark::proto_test::hasVarint(window_bytes, 13, 800), "window duration was not encoded")) {
+        return 1;
+    }
+
+    spark::WindowStats zero_tile_entities;
+    zero_tile_entities.tile_entities_present = true;
+    const std::string zero_tile_bytes = spark::proto_detail::buildWindowStatistics(zero_tile_entities);
+    if (!check(spark::proto_test::hasVarint(zero_tile_bytes, 9, 0), "real zero tile entities were omitted")) {
+        return 1;
+    }
+
+    spark::WindowStats unavailable_tile_entities;
+    unavailable_tile_entities.tile_entities = 9;
+    unavailable_tile_entities.tile_entities_present = false;
+    const std::string unavailable_tile_bytes = spark::proto_detail::buildWindowStatistics(unavailable_tile_entities);
+    if (!check(!spark::proto_test::hasField(unavailable_tile_bytes, 9), "unavailable tile entities were encoded")) {
         return 1;
     }
     return 0;

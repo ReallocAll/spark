@@ -22,6 +22,13 @@ public:
     virtual void runOnMainThread(std::function<void()> task) = 0;
 };
 
+struct WorldGaugeValues {
+    int entities = 0;
+    int tile_entities = 0;
+    int chunks = 0;
+    bool tile_entities_present = false;
+};
+
 // Gathers server and world metadata for profile export context and provides
 // runtime server stats for health reports. The Endstone adapter implements
 // this by querying the Endstone Server API.
@@ -34,9 +41,9 @@ public:
     // Runtime queries used by /spark health (not export-specific).
     virtual std::int64_t serverUptimeSeconds() = 0;
     virtual std::int64_t playerCount() = 0;
-    // Returns {entity_count, loaded_chunk_count} for rolling statistics.
-    // Default returns {0, 0} when world gauges are not available.
-    virtual std::pair<int, int> worldGauges() { return {0, 0}; }
+    // Returns rolling world gauges. tile_entities_present stays false until a
+    // complete low-frequency block-actor reconciliation has succeeded.
+    virtual WorldGaugeValues worldGauges() { return {}; }
     // Returns the player ping provider, or nullptr if ping is not available.
     virtual PlayerPingProvider *playerPingProvider() = 0;
 };

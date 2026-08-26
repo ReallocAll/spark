@@ -168,12 +168,13 @@ void StatisticsService::recordPlayerCountAt(std::int64_t players, std::int64_t s
     gauges_[index] = sample;
 }
 
-void StatisticsService::recordWorldGauges(int entities, int chunks)
+void StatisticsService::recordWorldGauges(int entities, int tile_entities, int chunks, bool tile_entities_present)
 {
-    recordWorldGaugesAt(entities, chunks, last_observation_steady_ms_);
+    recordWorldGaugesAt(entities, tile_entities, chunks, tile_entities_present, last_observation_steady_ms_);
 }
 
-void StatisticsService::recordWorldGaugesAt(int entities, int chunks, std::int64_t steady_ms)
+void StatisticsService::recordWorldGaugesAt(int entities, int tile_entities, int chunks, bool tile_entities_present,
+                                            std::int64_t steady_ms)
 {
     if (!started_ || gauge_size_ == 0) {
         return;
@@ -181,8 +182,10 @@ void StatisticsService::recordWorldGaugesAt(int entities, int chunks, std::int64
     steady_ms = (std::max)(steady_ms, last_observation_steady_ms_);
     std::size_t index = (gauge_begin_ + gauge_size_ - 1) % gauges_.size();
     gauges_[index].entities = entities;
+    gauges_[index].tile_entities = tile_entities;
     gauges_[index].chunks = chunks;
     gauges_[index].world_gauges_set = true;
+    gauges_[index].tile_entities_present = tile_entities_present;
     gauges_[index].steady_ms = (std::max)(gauges_[index].steady_ms, steady_ms);
     last_observation_steady_ms_ = (std::max)(last_observation_steady_ms_, steady_ms);
 
@@ -190,7 +193,8 @@ void StatisticsService::recordWorldGaugesAt(int entities, int chunks, std::int64
         return;
     }
     const GaugeSample &sample = gauges_[index];
-    metrics_history_.recordWorldInfo(unixTimeFor(steady_ms), sample.players, sample.entities, sample.chunks);
+    metrics_history_.recordWorldInfo(unixTimeFor(steady_ms), sample.players, sample.entities, sample.chunks,
+                                     sample.tile_entities, sample.tile_entities_present);
 }
 
 void StatisticsService::recordPlayerPing(const MetricsAverages &summary)

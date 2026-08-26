@@ -83,7 +83,7 @@ bool MetricsHistory::appendAverages(std::vector<AveragesEntry> &series, std::siz
 }
 
 bool MetricsHistory::appendWorld(std::int64_t timestamp_ms, std::int32_t players, std::int32_t entities,
-                                 std::int32_t chunks, std::int32_t tile_entities)
+                                 std::int32_t chunks, std::int32_t tile_entities, bool tile_entities_present)
 {
     if (!due(timestamp_ms, world_info_size_,
              world_info_size_ == 0
@@ -100,7 +100,8 @@ bool MetricsHistory::appendWorld(std::int64_t timestamp_ms, std::int32_t players
                               .players = players,
                               .entities = entities,
                               .tile_entities = tile_entities,
-                              .chunks = chunks};
+                              .chunks = chunks,
+                              .tile_entities_present = tile_entities_present};
     if (world_info_size_ == world_info_.size()) {
         world_info_[world_info_head_] = value;
         world_info_head_ = (world_info_head_ + 1) % world_info_.size();
@@ -134,9 +135,9 @@ bool MetricsHistory::recordCpuUsageSystem(std::int64_t timestamp_ms, double valu
 }
 
 bool MetricsHistory::recordWorldInfo(std::int64_t timestamp_ms, std::int32_t players, std::int32_t entities,
-                                     std::int32_t chunks, std::int32_t tile_entities)
+                                     std::int32_t chunks, std::int32_t tile_entities, bool tile_entities_present)
 {
-    return appendWorld(timestamp_ms, players, entities, chunks, tile_entities);
+    return appendWorld(timestamp_ms, players, entities, chunks, tile_entities, tile_entities_present);
 }
 
 bool MetricsHistory::recordPlayerPing(std::int64_t timestamp_ms, const MetricsAverages &value)
@@ -175,7 +176,8 @@ MetricsSnapshot MetricsHistory::snapshot() const
                                      .players = entry.players,
                                      .entities = entry.entities,
                                      .tile_entities = entry.tile_entities,
-                                     .chunks = entry.chunks});
+                                     .chunks = entry.chunks,
+                                     .tile_entities_present = entry.tile_entities_present});
     }
     return result;
 }

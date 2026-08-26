@@ -31,6 +31,7 @@ struct MetricsWorldInfoSample {
     std::int32_t entities = 0;
     std::int32_t tile_entities = 0;
     std::int32_t chunks = 0;
+    bool tile_entities_present = false;
 };
 
 // An immutable-by-convention copy of the metric series at one export point.
@@ -68,7 +69,7 @@ public:
     bool recordCpuUsageProcess(std::int64_t timestamp_ms, double value);
     bool recordCpuUsageSystem(std::int64_t timestamp_ms, double value);
     bool recordWorldInfo(std::int64_t timestamp_ms, std::int32_t players, std::int32_t entities, std::int32_t chunks,
-                         std::int32_t tile_entities = 0);
+                         std::int32_t tile_entities = 0, bool tile_entities_present = false);
     bool recordPlayerPing(std::int64_t timestamp_ms, const MetricsAverages &value);
 
     [[nodiscard]] MetricsSnapshot snapshot() const;
@@ -88,6 +89,7 @@ private:
         std::int32_t entities = 0;
         std::int32_t tile_entities = 0;
         std::int32_t chunks = 0;
+        bool tile_entities_present = false;
     };
 
     static bool due(std::int64_t timestamp_ms, std::size_t size, std::int64_t newest_timestamp_ms);
@@ -96,7 +98,7 @@ private:
     static bool appendAverages(std::vector<AveragesEntry> &series, std::size_t &head, std::size_t &size,
                                std::int64_t timestamp_ms, const MetricsAverages &value);
     bool appendWorld(std::int64_t timestamp_ms, std::int32_t players, std::int32_t entities, std::int32_t chunks,
-                     std::int32_t tile_entities);
+                     std::int32_t tile_entities, bool tile_entities_present);
 
     std::vector<DoubleEntry> tps_;
     std::vector<AveragesEntry> tick_duration_;
