@@ -1,136 +1,6 @@
-#include <atomic>
 #include <cassert>
-#include <chrono>
-#include <condition_variable>
-#include <mutex>
-#include <stdexcept>
-#include <string_view>
-#include <thread>
-#include <utility>
-#include <vector>
 
-#include <curl/curl.h>
-
-#include "core/ws/viewer_socket.h"
-#include "net/websocket.h"
-
-namespace spark {
-
-struct WebSocketClientTestAccess {
-    enum class SendStep {
-        Idle,
-        Progress,
-        Retry,
-        Fatal
-    };
-
-    static void startExitedWorker(WebSocketClient &client, std::mutex &mutex, std::condition_variable &cv, bool &exited)
-    {
-        client.running_.store(true);
-        client.thread_ = std::thread([&client, &mutex, &cv, &exited]() {
-            client.running_.store(false);
-            {
-                std::scoped_lock lock(mutex);
-                exited = true;
-            }
-            cv.notify_one();
-        });
-    }
-
-    static bool joinable(const WebSocketClient &client) { return client.thread_.joinable(); }
-
-    static bool running(const WebSocketClient &client) { return client.running_.load(); }
-
-    static bool startThrowingCallbackWorker(WebSocketClient &client, std::atomic<std::uint64_t> &cleanup_count)
-    {
-        client.host_ = "localhost";
-        client.channel_id_ = "test";
-        client.user_agent_ = "test";
-        client.incoming_message_for_testing_ = "message";
-        client.resource_cleanup_count_for_testing_ = &cleanup_count;
-        client.message_cb_ = [](const std::string &) {
-            throw std::runtime_error("injected");
-        };
-        client.local_close_requested_.store(false);
-        client.running_.store(true);
-        return client.startReceiveWorker();
-    }
-
-    static void startLocalCloseWorker(WebSocketClient &client, std::atomic<bool> &close_attempted)
-    {
-        client.running_.store(true);
-        client.local_close_requested_.store(false);
-        client.thread_ = std::thread([&client, &close_attempted] {
-            while (client.running_.load()) {
-                std::this_thread::yield();
-            }
-            close_attempted.store(client.local_close_requested_.exchange(false));
-        });
-    }
-
-    static void enqueue(WebSocketClient &client, const std::string &message)
-    {
-        client.running_.store(true);
-        client.send(message);
-    }
-
-    static SendStep processSend(WebSocketClient &client,
-                                const std::function<std::pair<int, std::size_t>(std::string_view)> &send_function)
-    {
-        const auto step = client.processNextSend([&send_function](const char *data, std::size_t size) {
-            const auto [code, sent] = send_function(std::string_view(data, size));
-            return WebSocketClient::SendAttempt{.code = code, .sent = sent};
-        });
-        switch (step) {
-        case WebSocketClient::SendStep::Idle:
-            return SendStep::Idle;
-        case WebSocketClient::SendStep::Progress:
-            return SendStep::Progress;
-        case WebSocketClient::SendStep::Retry:
-            return SendStep::Retry;
-        case WebSocketClient::SendStep::Fatal:
-            return SendStep::Fatal;
-        }
-        return SendStep::Fatal;
-    }
-
-    static std::string pendingSend(const WebSocketClient &client)
-    {
-        return client.pending_send_.value_or(std::string()).substr(client.pending_send_offset_);
-    }
-
-    static std::size_t queued(const WebSocketClient &client) { return client.send_queue_.size(); }
-
-    static void receiveFailure(WebSocketClient &client, int code) { client.handleReceiveFailure(code); }
-};
-
-struct ViewerSocketTestAccess {
-    static void markOpen(ViewerSocket &socket)
-    {
-        socket.prepareOpen();
-        socket.open_.store(true);
-    }
-
-    static void terminate(ViewerSocket &socket, WebSocketClient::TerminationKind kind, const std::string &detail = {})
-    {
-        socket.onTransportClosed({.kind = kind, .detail = detail});
-    }
-};
-
-}  // namespace spark
-
-namespace {
-
-bool waitForExit(const spark::WebSocketClient &client)
-{
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
-    while (spark::WebSocketClientTestAccess::running(client) && std::chrono::steady_clock::now() < deadline) {
-        std::this_thread::yield();
-    }
-    return !spark::WebSocketClientTestAccess::running(client);
-}
-
-}  // namespace
+#include "websocket_lifecycle_test_support.h"
 
 int main()
 {
@@ -159,13 +29,13 @@ int main()
 
     std::atomic<std::uint64_t> cleanup_count{0};
     assert(spark::WebSocketClientTestAccess::startThrowingCallbackWorker(client, cleanup_count));
-    assert(waitForExit(client));
+    assert(spark::websocket_lifecycle_test::waitForExit(client));
     assert(cleanup_count.load(std::memory_order_acquire) == 2);
     client.close();
     assert(!spark::WebSocketClientTestAccess::joinable(client));
 
     assert(spark::WebSocketClientTestAccess::startThrowingCallbackWorker(client, cleanup_count));
-    assert(waitForExit(client));
+    assert(spark::websocket_lifecycle_test::waitForExit(client));
     assert(cleanup_count.load(std::memory_order_acquire) == 4);
     client.close();
     assert(!spark::WebSocketClientTestAccess::joinable(client));
@@ -240,6 +110,126 @@ int main()
     }
 
     {
+        spark::WebSocketClient deferred;
+        const std::thread::id caller = std::this_thread::get_id();
+        std::atomic<bool> ran_on_worker{false};
+        assert(spark::WebSocketClientTestAccess::enqueueDeferred(
+            deferred,
+            [&ran_on_worker, caller]() {
+                ran_on_worker.store(std::this_thread::get_id() != caller);
+                return std::string("deferred");
+            },
+            32));
+        std::thread worker([&deferred]() {
+            assert(spark::WebSocketClientTestAccess::processSend(deferred, [](std::string_view data) {
+                       return std::pair{CURLE_OK, data.size()};
+                   }) == spark::WebSocketClientTestAccess::SendStep::Progress);
+            spark::WebSocketClientTestAccess::setRunning(deferred, false);
+        });
+        worker.join();
+        assert(ran_on_worker.load());
+        deferred.close();
+    }
+
+    {
+        spark::WebSocketClient throwing;
+        const bool accepted = spark::WebSocketClientTestAccess::enqueueDeferred(
+            throwing, []() -> std::string { throw std::runtime_error("deferred failure"); }, 1);
+        assert(accepted);
+        assert(spark::WebSocketClientTestAccess::processSend(throwing, [](std::string_view data) {
+                   return std::pair{CURLE_OK, data.size()};
+               }) == spark::WebSocketClientTestAccess::SendStep::Fatal);
+        assert(throwing.termination().kind == spark::WebSocketClient::TerminationKind::SendError);
+        throwing.close();
+    }
+
+    {
+        spark::WebSocketClient missing_encoder;
+        const bool accepted = spark::WebSocketClientTestAccess::enqueueDeferred(
+            missing_encoder, spark::WebSocketClient::DeferredEncoder{}, 1);
+        assert(!accepted);
+        assert(missing_encoder.termination().kind == spark::WebSocketClient::TerminationKind::SendError);
+        missing_encoder.close();
+    }
+
+    {
+        spark::WebSocketClient exact;
+        const std::size_t maximum = spark::WebSocketClientTestAccess::maximumOutgoingMessageBytes();
+        assert(spark::WebSocketClientTestAccess::enqueueDeferred(
+            exact, [maximum]() { return std::string(maximum, 'x'); }, 1));
+        assert(spark::WebSocketClientTestAccess::processSend(exact, [](std::string_view data) {
+                   return std::pair{CURLE_OK, data.size()};
+               }) == spark::WebSocketClientTestAccess::SendStep::Progress);
+        exact.close();
+
+        spark::WebSocketClient direct_exact;
+        spark::WebSocketClientTestAccess::enqueue(direct_exact, std::string(maximum, 'x'));
+        assert(spark::WebSocketClientTestAccess::processSend(direct_exact, [](std::string_view data) {
+                   return std::pair{CURLE_OK, data.size()};
+               }) == spark::WebSocketClientTestAccess::SendStep::Progress);
+        direct_exact.close();
+
+        spark::WebSocketClient direct_oversized;
+        spark::WebSocketClientTestAccess::enqueue(direct_oversized, std::string(maximum + 1, 'x'));
+        assert(direct_oversized.termination().kind == spark::WebSocketClient::TerminationKind::SendError);
+        direct_oversized.close();
+
+        spark::WebSocketClient oversized;
+        assert(spark::WebSocketClientTestAccess::enqueueDeferred(
+            oversized, [maximum]() { return std::string(maximum + 1, 'x'); }, 1));
+        assert(spark::WebSocketClientTestAccess::processSend(oversized, [](std::string_view data) {
+                   return std::pair{CURLE_OK, data.size()};
+               }) == spark::WebSocketClientTestAccess::SendStep::Fatal);
+        assert(oversized.termination().kind == spark::WebSocketClient::TerminationKind::SendError);
+        oversized.close();
+    }
+
+    {
+        spark::WebSocketClient bounded_send;
+        for (std::size_t i = 0; i < spark::WebSocketClientTestAccess::maximumQueuedSends(); ++i) {
+            spark::WebSocketClientTestAccess::enqueue(bounded_send, "queued");
+        }
+        spark::WebSocketClientTestAccess::enqueue(bounded_send, "overflow");
+        assert(bounded_send.termination().kind == spark::WebSocketClient::TerminationKind::SendError);
+        assert(!spark::WebSocketClientTestAccess::running(bounded_send));
+        bounded_send.close();
+    }
+
+    {
+        spark::WebSocketClient bounded_deferred;
+        assert(!spark::WebSocketClientTestAccess::enqueueDeferred(
+            bounded_deferred, [] { return std::string("not-run"); },
+            spark::WebSocketClientTestAccess::maximumQueuedSendBytes() + 1));
+        assert(spark::WebSocketClientTestAccess::queued(bounded_deferred) == 0);
+        bounded_deferred.close();
+
+        spark::WebSocketClient count_limited;
+        for (std::size_t i = 0; i < spark::WebSocketClientTestAccess::maximumQueuedSends(); ++i) {
+            assert(spark::WebSocketClientTestAccess::enqueueDeferred(
+                count_limited, [] { return std::string("queued"); }, 1));
+        }
+        assert(spark::WebSocketClientTestAccess::queuedBytes(count_limited) ==
+               spark::WebSocketClientTestAccess::maximumQueuedSends());
+        assert(!spark::WebSocketClientTestAccess::enqueueDeferred(
+            count_limited, [] { return std::string("overflow"); }, 1));
+        count_limited.close();
+    }
+
+    {
+        spark::WebSocketClient bounded_send_bytes;
+        const std::string maximum_message(spark::WebSocketClientTestAccess::maximumOutgoingMessageBytes(), 'x');
+        const std::size_t accepted = spark::WebSocketClientTestAccess::maximumQueuedSendBytes() /
+                                     spark::WebSocketClientTestAccess::maximumOutgoingMessageBytes();
+        for (std::size_t i = 0; i < accepted; ++i) {
+            spark::WebSocketClientTestAccess::enqueue(bounded_send_bytes, maximum_message);
+        }
+        spark::WebSocketClientTestAccess::enqueue(bounded_send_bytes, "overflow");
+        assert(bounded_send_bytes.termination().kind == spark::WebSocketClient::TerminationKind::SendError);
+        assert(!spark::WebSocketClientTestAccess::running(bounded_send_bytes));
+        bounded_send_bytes.close();
+    }
+
+    {
         spark::WebSocketClient failed_receive;
         spark::WebSocketClientTestAccess::receiveFailure(failed_receive, CURLE_RECV_ERROR);
         const auto termination = failed_receive.termination();
@@ -247,19 +237,17 @@ int main()
         assert(!termination.detail.empty());
     }
 
-    spark::ViewerSocket viewer({}, {});
-    spark::ViewerSocketTestAccess::markOpen(viewer);
-    spark::ViewerSocketTestAccess::terminate(viewer, spark::WebSocketClient::TerminationKind::RemoteClose);
-    assert(!viewer.isOpen());
-    assert(viewer.closeReason() == spark::ViewerSocket::CloseReason::RemoteClose);
-    assert(!viewer.takeDiagnostic().empty());
+    {
+        std::string response;
+        const std::size_t maximum = spark::WebSocketClientTestAccess::maximumCreateResponseBytes();
+        std::string exact(maximum, 'x');
+        assert(spark::WebSocketClientTestAccess::writeResponse(exact.data(), 1, exact.size(), response) == maximum);
+        assert(response.size() == maximum);
+        assert(spark::WebSocketClientTestAccess::writeResponse(exact.data(), 1, 1, response) == 0);
+        assert(spark::WebSocketClientTestAccess::writeResponse(nullptr, std::numeric_limits<std::size_t>::max(), 2,
+                                                               response) == 0);
+    }
 
-    spark::ViewerSocketTestAccess::markOpen(viewer);
-    assert(viewer.isOpen());
-    assert(viewer.closeReason() == spark::ViewerSocket::CloseReason::None);
-    viewer.close();
-    assert(!viewer.isOpen());
-    assert(viewer.closeReason() == spark::ViewerSocket::CloseReason::LocalClose);
-    assert(viewer.takeDiagnostic().empty());
+    spark::websocket_lifecycle_test::runViewerLifecycleTests();
     return 0;
 }

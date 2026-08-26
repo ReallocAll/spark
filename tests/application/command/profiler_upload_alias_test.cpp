@@ -203,6 +203,8 @@ void testOtherCommandsUnaffected()
     // cancel and open must still produce their own messages, not stop's.
     const std::string cancel_msg = singleMessage(app, sender, {"profiler", "cancel"});
     assert(cancel_msg == "There isn't an active profiler running.");
+    const std::string uppercase_cancel_msg = singleMessage(app, sender, {"PrOfIlEr", "cancel"});
+    assert(uppercase_cancel_msg == cancel_msg);
 
     // open without a running profiler reports its own message.
     sender.messages.clear();

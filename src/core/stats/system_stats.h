@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -36,11 +37,18 @@ struct WorldEntry {
     std::vector<WorldRegion> regions;
 };
 
+struct GameRuleInfo {
+    std::string name;
+    std::optional<std::string> default_value;
+    std::map<std::string, std::string> world_values;
+};
+
 struct WorldInfo {
     bool present = false;
     int total_entities = 0;
     std::map<std::string, int> entity_counts;  // entity type -> count
     std::vector<WorldEntry> worlds;
+    std::vector<GameRuleInfo> game_rules;
 };
 
 // Server-side statistics sourced from the Endstone API (on the main thread).

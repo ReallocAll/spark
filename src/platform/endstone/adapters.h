@@ -1,7 +1,6 @@
 #ifndef SPARK_PLATFORM_ENDSTONE_ADAPTERS_H
 #define SPARK_PLATFORM_ENDSTONE_ADAPTERS_H
 
-#include <atomic>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -12,23 +11,24 @@
 
 #include "application/command/command_sender.h"
 #include "application/platform_capabilities.h"
+#include "platform/endstone/world_gauge_event_adapter.h"
 
 namespace spark::endstone_adapter {
 
 // Adapts endstone::CommandSender to spark::CommandSender.
 class EndstoneCommandSender : public CommandSender {
 public:
-    explicit EndstoneCommandSender(::endstone::CommandSender &sender) : sender_(sender) {}
+    explicit EndstoneCommandSender(const ::endstone::NotNull<::endstone::CommandSender> &sender) : sender_(*sender) {}
 
     std::string getName() const override { return sender_.getName(); }
-    bool isPlayer() const override { return sender_.asPlayer() != nullptr; }
+    bool isPlayer() const override { return sender_.is<::endstone::Player>(); }
     bool hasPermission(const std::string &name) const override { return sender_.hasPermission(name); }
 
 private:
     void sendImpl(const std::string &message) override;
     void errorImpl(const std::string &message) override;
 
-    ::endstone::CommandSender &sender_;
+    const ::endstone::CommandSender &sender_;
 };
 
 // Schedules tasks on the Endstone main thread.
@@ -87,8 +87,7 @@ private:
 
     ::endstone::Plugin &plugin_;
     ::endstone::Server &server_;
-    std::atomic<int> entity_count_{0};
-    std::atomic<int> chunk_count_{0};
+    EndstoneWorldGaugeEventAdapter event_adapter_;
     std::int64_t last_reconcile_steady_ms_ = 0;
     bool initialized_ = false;
 };

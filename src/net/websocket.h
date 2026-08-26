@@ -2,6 +2,7 @@
 #define ENDSTONE_SPARK_WEBSOCKET_H
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <functional>
@@ -10,6 +11,9 @@
 #include <queue>
 #include <string>
 #include <thread>
+#include <utility>
+
+#include "net/cancellation.h"
 
 namespace spark {
 
@@ -35,19 +39,27 @@ public:
 
     using MessageCallback = std::function<void(const std::string &)>;
     using CloseCallback = std::function<void(const Termination &)>;
+    using DeferredEncoder = std::function<std::string()>;
 
     WebSocketClient();
     ~WebSocketClient();
 
     // Connect to the given bytesocks host. Returns the channel ID on success,
     // or an empty string on failure.
-    std::string connect(const std::string &host, const std::string &user_agent);
+    std::string connect(const std::string &host, const std::string &user_agent, CancellationToken cancellation = {});
 
     // Enqueue a text message to send. Thread-safe.
-    void send(const std::string &message);
+    void send(const std::string &message) noexcept;
+
+    // Enqueue an encoder to run on the transport worker. Thread-safe.
+    // accounted_input_bytes bounds captured input retained by the queue.
+    bool sendDeferred(DeferredEncoder encoder, std::size_t accounted_input_bytes) noexcept;
+
+    void requestStop() noexcept;
+    bool closeWithin(std::chrono::milliseconds timeout) noexcept;
 
     // Close the connection and join the background thread.
-    void close();
+    void close() noexcept;
 
     bool isOpen() const { return running_.load(); }
     Termination termination() const;
@@ -58,10 +70,25 @@ public:
 private:
     friend struct WebSocketClientTestAccess;
 
+    struct SendJob {
+        std::string message;
+        DeferredEncoder encoder;
+        std::size_t accounted_bytes = 0;
+    };
+
+    static constexpr std::size_t kMaxCreateResponseBytes = 64 * 1024;
+
     bool startReceiveWorker();
     void runReceiveLoop();
     void recordTermination(TerminationKind kind, std::string detail = {});
     void notifyTermination() noexcept;
+    void signalWorkerExit() noexcept;
+    static std::size_t writeCallback(char *ptr, std::size_t size, std::size_t nmemb, void *userdata) noexcept;
+    bool enqueueSendJob(SendJob job) noexcept;
+    void rejectSendQueue() noexcept;
+    void recordSendFailure(const char *detail) noexcept;
+    std::string createChannel(const std::string &host, const std::string &user_agent,
+                              const CancellationToken &cancellation);
 
     struct SendAttempt {
         int code = 0;
@@ -75,19 +102,30 @@ private:
     };
     using SendFunction = std::function<SendAttempt(const char *, std::size_t)>;
     SendStep processNextSend(const SendFunction &send_function);
+    bool drainLocalClose(const SendFunction &send_function);
     void handleReceiveFailure(int code);
+
+    static constexpr std::size_t kMaxIncomingMessageBytes = 64 * 1024;
+    static constexpr std::size_t kMaxOutgoingMessageBytes = 4 * 1024 * 1024;
+    static constexpr std::size_t kMaxQueuedSends = 64;
+    static constexpr std::size_t kMaxQueuedSendBytes = 8 * 1024 * 1024;
 
     std::string channel_id_;
     std::string host_;
     std::string user_agent_;
+    CancellationToken cancellation_;
 
     std::atomic<bool> running_{false};
     std::atomic<bool> local_close_requested_{false};
     std::thread thread_;
+    std::mutex worker_exit_mutex_;
+    std::condition_variable worker_exit_cv_;
+    bool worker_exited_ = true;
 
     std::mutex send_mutex_;
     std::condition_variable send_cv_;
-    std::queue<std::string> send_queue_;
+    std::queue<SendJob> send_queue_;
+    std::size_t queued_send_bytes_ = 0;
     std::optional<std::string> pending_send_;
     std::size_t pending_send_offset_ = 0;
 
@@ -98,6 +136,7 @@ private:
     CloseCallback close_cb_;
     std::string incoming_message_for_testing_;
     std::atomic<std::uint64_t> *resource_cleanup_count_for_testing_ = nullptr;
+    std::function<std::string(const CancellationToken &)> create_channel_for_testing_;
 };
 
 }  // namespace spark

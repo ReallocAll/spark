@@ -1,12 +1,13 @@
 #include "application/activity/activity_command.h"
 
-#include <chrono>
+#include <algorithm>
 #include <cstdint>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "core/util/format.h"
+#include "core/util/monotonic_time.h"
 
 namespace spark {
 
@@ -59,9 +60,12 @@ void ActivityCommand::cmdActivity(CommandSender &sender, const Arguments &args)
         return;
     }
 
-    const std::int64_t now_ms =
-        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
-            .count();
+    const std::int64_t now_ms = monotonicUnixMillis();
+    std::erase_if(entries, [now_ms](const Activity &activity) { return activity.shouldExpire(now_ms); });
+    if (entries.empty()) {
+        sender.sendMessage("{}There are no entries present in the log.{}", kColorGold, kColorGray);
+        return;
+    }
 
     constexpr std::size_t k_per_page = 4;
     const std::size_t total = entries.size();

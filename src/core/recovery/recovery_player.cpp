@@ -1,9 +1,9 @@
 #include "core/recovery/recovery_player.h"
 
 #include <algorithm>
-#include <chrono>
 #include <cstdint>
 #include <deque>
+#include <limits>
 #include <map>
 #include <memory>
 #include <optional>
@@ -22,6 +22,7 @@
 #include "core/profiler/profile_mode.h"
 #include "core/profiler/thread_grouper.h"
 #include "core/recovery/journal_reader.h"
+#include "core/util/monotonic_time.h"
 #include "native/sampler/call_tree.h"
 #include "native/sampler/sampler.h"
 #include "native/sampler/types.h"
@@ -36,8 +37,7 @@ namespace {
 
 std::int64_t nowMs()
 {
-    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
-        .count();
+    return monotonicUnixMillis();
 }
 
 #ifdef _WIN32
@@ -82,11 +82,30 @@ RecoveredProfile RecoveryPlayer::replay(const std::filesystem::path &directory)
 
     JournalReadResult journal = JournalReader::readSession(directory);
     if (!journal.valid) {
-        result.error = "no valid journal found";
+        if (journal.duplicate_sequences) {
+            result.error = "journal contains duplicate record sequences";
+        }
+        else if (journal.gap_detected) {
+            result.error = "journal contains a missing segment";
+        }
+        else if (journal.limit_exceeded) {
+            result.error = "journal exceeds reader limits";
+        }
+        else if (journal.tail_truncated || journal.tail_corrupt) {
+            result.error = "journal has an invalid tail";
+        }
+        else {
+            result.error = "no valid journal found";
+        }
         return result;
     }
 
+    if (journal.session_id > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
+        result.error = "journal session_id exceeds INT64_MAX";
+        return result;
+    }
     result.session_start_ms = static_cast<std::int64_t>(journal.session_id);
+    const std::int64_t replay_end_ms = nowMs();
     result.has_clean_end = journal.has_clean_end;
     result.corrupt_records = journal.corrupt_records;
     result.truncated_records = journal.truncated_records;
@@ -165,6 +184,30 @@ RecoveredProfile RecoveryPlayer::replay(const std::filesystem::path &directory)
     CallTree global_tree;
     std::map<std::uint64_t, ThreadCallTree> thread_trees;
     std::unordered_map<std::uint64_t, std::string> thread_names;
+    std::optional<std::int32_t> max_sample_window;
+    for (const auto &rec : journal.records) {
+        if (rec.type != RecordType::Sample) {
+            continue;
+        }
+        std::uint64_t thread_id;
+        std::uint64_t tick_id;
+        std::uint64_t weight;
+        std::int32_t window;
+        std::vector<FrameKey> frames;
+        if (rec.asSample(thread_id, tick_id, window, weight, frames)) {
+            max_sample_window = max_sample_window ? std::max(*max_sample_window, window) : window;
+        }
+    }
+
+    std::optional<std::int32_t> retained_window_cutoff;
+    if (max_sample_window) {
+        constexpr std::int64_t min_window = std::numeric_limits<std::int32_t>::min();
+        constexpr std::int64_t max_window = std::numeric_limits<std::int32_t>::max();
+        const std::int64_t cutoff = std::clamp(
+            static_cast<std::int64_t>(*max_sample_window) - profiling_window::kHistorySize, min_window, max_window);
+        retained_window_cutoff = static_cast<std::int32_t>(cutoff);
+    }
+
     std::optional<std::uint64_t> min_tick_id;
     std::optional<std::uint64_t> max_tick_id;
     std::optional<std::int32_t> min_window;
@@ -191,25 +234,47 @@ RecoveredProfile RecoveryPlayer::replay(const std::filesystem::path &directory)
             std::uint64_t weight;
             std::int32_t window;
             std::vector<FrameKey> frames;
-            if (rec.asSample(thread_id, tick_id, window, weight, frames)) {
+            if (rec.asSample(thread_id, tick_id, window, weight, frames) && retained_window_cutoff &&
+                window >= *retained_window_cutoff) {
                 min_tick_id = min_tick_id ? std::min(*min_tick_id, tick_id) : tick_id;
                 max_tick_id = max_tick_id ? std::max(*max_tick_id, tick_id) : tick_id;
                 min_window = min_window ? std::min(*min_window, window) : window;
             }
         }
-        else if (rec.type == RecordType::TickEvent) {
-            std::uint64_t tick_id;
-            double mspt;
-            if (rec.asTickEvent(tick_id, mspt)) {
-                min_tick_id = min_tick_id ? std::min(*min_tick_id, tick_id) : tick_id;
-                max_tick_id = max_tick_id ? std::max(*max_tick_id, tick_id) : tick_id;
-            }
-        }
+    }
+
+    const bool legacy_window_replay = journal.version == kLegacyJournalVersion;
+    const std::int32_t retained_window_start = min_window.value_or(0);
+    const SessionConfig &sc = journal.session_config;
+    if (!legacy_window_replay &&
+        (!sc.present || !sc.has_window_adjustment || sc.window_adjustment_ms < profiling_window::kAdjustmentMinMs ||
+         sc.window_adjustment_ms > profiling_window::kAdjustmentMaxMs)) {
+        result.error = "v3 journal is missing a valid window adjustment";
+        return result;
     }
 
     const std::uint64_t retained_tick_start = min_tick_id.value_or(0);
-    const std::int32_t retained_window_start = min_window.value_or(0);
-    result.session_start_ms += static_cast<std::int64_t>(retained_window_start) * profiling_window::kSizeMs;
+    if (min_tick_id && max_tick_id &&
+        *max_tick_id - *min_tick_id >= static_cast<std::uint64_t>(std::numeric_limits<std::int32_t>::max())) {
+        result.error = "retained tick span exceeds INT32_MAX";
+        return result;
+    }
+    if (legacy_window_replay) {
+        const std::int64_t window_offset_ms =
+            static_cast<std::int64_t>(retained_window_start) * profiling_window::kSizeMs;
+        constexpr std::int64_t min_time = std::numeric_limits<std::int64_t>::min();
+        constexpr std::int64_t max_time = std::numeric_limits<std::int64_t>::max();
+        if ((window_offset_ms > 0 && result.session_start_ms > max_time - window_offset_ms) ||
+            (window_offset_ms < 0 && result.session_start_ms < min_time - window_offset_ms)) {
+            result.error = "legacy journal session start overflows INT64_MAX";
+            return result;
+        }
+        result.session_start_ms += window_offset_ms;
+    }
+    else {
+        result.session_start_ms = std::max(
+            result.session_start_ms, profiling_window::windowStartTime(retained_window_start, sc.window_adjustment_ms));
+    }
 
     // TickEvent records don't carry a window field, so we build a tick_id ->
     // window map from Sample records (which do) and use it to assign each tick
@@ -226,11 +291,14 @@ RecoveredProfile RecoveryPlayer::replay(const std::filesystem::path &directory)
             std::uint64_t thread_id, tick_id, weight;
             std::int32_t window;
             std::vector<FrameKey> frames;
-            if (!rec.asSample(thread_id, tick_id, window, weight, frames)) {
+            if (!rec.asSample(thread_id, tick_id, window, weight, frames) || !retained_window_cutoff ||
+                window < *retained_window_cutoff) {
                 continue;
             }
 
-            window -= retained_window_start;
+            if (legacy_window_replay) {
+                window -= retained_window_start;
+            }
             tick_to_window[tick_id] = window;
             for (auto &frame : frames) {
                 auto remap_it = module_remap.find(frame.module);
@@ -259,7 +327,8 @@ RecoveredProfile RecoveryPlayer::replay(const std::filesystem::path &directory)
         else if (rec.type == RecordType::TickEvent) {
             std::uint64_t tick_id;
             double mspt;
-            if (rec.asTickEvent(tick_id, mspt)) {
+            if (rec.asTickEvent(tick_id, mspt) && min_tick_id && max_tick_id && tick_id >= *min_tick_id &&
+                tick_id <= *max_tick_id) {
                 tick_events.push_back({.tick_id = tick_id, .mspt = mspt});
             }
         }
@@ -277,7 +346,7 @@ RecoveredProfile RecoveryPlayer::replay(const std::filesystem::path &directory)
     };
     std::map<std::int32_t, WindowAccumulator> window_acc;
     for (const auto &te : tick_events) {
-        std::int32_t window = 0;
+        std::int32_t window = legacy_window_replay ? 0 : retained_window_start;
         auto it = tick_to_window.find(te.tick_id);
         if (it != tick_to_window.end()) {
             window = it->second;
@@ -307,11 +376,22 @@ RecoveredProfile RecoveryPlayer::replay(const std::filesystem::path &directory)
             std::ranges::sort(sorted);
             ws.mspt_median = sorted[sorted.size() / 2];
         }
-        ws.start_time_ms = result.session_start_ms + static_cast<std::int64_t>(window) * profiling_window::kSizeMs;
-        ws.end_time_ms = ws.start_time_ms + profiling_window::kSizeMs;
-        ws.duration_ms = static_cast<int>(profiling_window::kSizeMs);
+        if (legacy_window_replay) {
+            ws.start_time_ms = result.session_start_ms + static_cast<std::int64_t>(window) * profiling_window::kSizeMs;
+            ws.end_time_ms = ws.start_time_ms + profiling_window::kSizeMs;
+            ws.duration_ms = static_cast<int>(profiling_window::kSizeMs);
+        }
+        else {
+            const std::int64_t window_start = profiling_window::windowStartTime(window, sc.window_adjustment_ms);
+            const std::int64_t window_end = profiling_window::windowEndTime(window, sc.window_adjustment_ms);
+            ws.start_time_ms = std::max(window_start, result.session_start_ms);
+            ws.end_time_ms = std::min(window_end, replay_end_ms);
+            ws.end_time_ms = std::max(ws.end_time_ms, ws.start_time_ms);
+            ws.duration_ms = static_cast<int>(ws.end_time_ms - ws.start_time_ms);
+        }
         ws.tps_present = true;
-        ws.tps = static_cast<double>(acc.ticks) * 1000.0 / static_cast<double>(ws.duration_ms);
+        ws.tps =
+            ws.duration_ms > 0 ? static_cast<double>(acc.ticks) * 1000.0 / static_cast<double>(ws.duration_ms) : 0.0;
         window_stats[window] = ws;
     }
 
@@ -321,14 +401,13 @@ RecoveredProfile RecoveryPlayer::replay(const std::filesystem::path &directory)
     }
 
     // Build profile metadata from the session config record.
-    const SessionConfig &sc = journal.session_config;
     if (sc.present && sc.live_only) {
         result.error = "allocation live-only recovery is not supported";
         return result;
     }
     ProfileMetadata meta;
     meta.start_time_ms = result.session_start_ms;
-    meta.end_time_ms = nowMs();
+    meta.end_time_ms = replay_end_ms;
     meta.interval = sc.present ? static_cast<std::int32_t>(sc.interval_us) : 4000;
     meta.mode = sc.present && sc.profile_type == 1 ? ProfileMode::Allocation : ProfileMode::Execution;
     meta.number_of_ticks = static_cast<std::int32_t>(result.tick_count);
@@ -344,7 +423,8 @@ RecoveredProfile RecoveryPlayer::replay(const std::filesystem::path &directory)
         meta.thread_patterns = sc.thread_patterns;
     }
     meta.ticked = sc.present && sc.only_ticks_over_ms > 0;
-    meta.tick_threshold_ms = sc.present && sc.only_ticks_over_ms > 0 ? sc.only_ticks_over_ms : 0;
+    meta.tick_threshold_us =
+        sc.present && sc.only_ticks_over_ms > 0 ? static_cast<std::int64_t>(sc.only_ticks_over_ms) * 1000 : 0;
     meta.window_stats = window_stats;
 
     // Collect thread views for serialization.

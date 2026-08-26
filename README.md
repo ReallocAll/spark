@@ -128,7 +128,9 @@ Run the command again to disable the monitor.
 
 `/spark profiler open` opens a real-time spark viewer while an execution or
 allocation profiler is running. It connects to the spark WebSocket relay,
-uploads sampler data every 10 seconds, and displays the viewer URL in chat. A
+uploads sampler data every minute and sends standalone rolling statistics every
+10 seconds, then displays the viewer URL in chat. Sampler rotations follow the
+globally aligned profiling windows. A
 normal `--alloc` viewer is cumulative from session start; an
 `--alloc-live-only` viewer shows sampled allocations retained at each update.
 The viewer stays live until the profiler is stopped, cancelled, or times out.
@@ -249,7 +251,9 @@ TPS marker, and Minecraft color codes. These placeholders are player-independent
 
 ### Native allocation profiler
 
-`--alloc` profiles successful native allocation requests across process threads.
+`--alloc` profiles successful native allocation requests across process threads on
+Linux x86-64. On Windows, the option remains available for command compatibility
+but fails explicitly because safe allocator entry patching is unavailable.
 Every thread has an independent randomized byte-sampling phase and a non-reused
 session identity, so short-lived threads and operating-system thread-ID reuse do
 not merge unrelated stacks. Samples are weighted by requested bytes using a
@@ -266,14 +270,13 @@ expression, string construction, or thread-name query runs in an allocator hook,
 and a free or realloc on an unselected thread can still retire an allocation
 created by a selected thread.
 
-`--alloc-live-only` follows sampled allocations through realloc and free calls,
+On Linux x86-64, `--alloc-live-only` follows sampled allocations through realloc and free calls,
 including releases from other threads, and reports only allocations still live
 at export time. This applies to each Live Viewer update and the final stopped
 profile. It is intended to identify retained-memory and leak candidates;
 repeated profiles are needed to distinguish growth from legitimate long-lived
 state.
 
-Windows intercepts process-wide UCRT and process-heap entry points with funchook.
 Linux atomically redirects supported allocator relocations in the main executable
 and loaded ELF modules, including Endstone, native plugins, and Python when they
 import the effective libc allocator. Loaded modules are rescanned at session start
@@ -290,13 +293,7 @@ hook, observed-byte, sampling-point, live/freed lifecycle, and drop diagnostics 
 explicitly labeled process-wide. If an allocation-origin thread exits before its
 name can be read, a named selector fails closed for that identity rather than
 attributing it using a possibly reused operating-system thread ID.
-Hooks remain disabled pass-throughs between sessions and are fully removed after
-in-flight calls finish during plugin shutdown, allowing a clean plugin reload.
-Windows retries fresh suspended-thread snapshots for up to 30 seconds when a
-thread is concurrently starting or exiting, without patching while any context
-cannot be inspected.
-
-Coverage is limited to the listed allocator entry points/imports. Static CRT
+Linux allocation coverage is limited to the listed allocator entry points/imports. Static CRT
 copies, inlined or private allocators, arenas and object pools that do not reach a
 covered entry point, `VirtualAlloc`/`VirtualFree`, and `mmap`/`munmap` are not
 sampled. A Linux module loaded and unloaded entirely between rescans can escape
@@ -348,21 +345,31 @@ Unknown fields are silently ignored.
 | `backgroundProfilerThreadDumper` | string | `"default"` | Thread selection: `default` (server thread) or `all`. |
 | `disableResponseBroadcast` | bool | `false` | Restrict result notifications to the originating player. |
 
+The native plugin also accepts the Java-compatible environment variables
+`SPARK_VIEWERURL`, `SPARK_BYTEBINURL`, `SPARK_BYTESOCKSHOST`,
+`SPARK_BACKGROUNDPROFILER`, `SPARK_BACKGROUNDPROFILERINTERVAL`,
+`SPARK_BACKGROUNDPROFILERTHREADGROUPER`, `SPARK_BACKGROUNDPROFILERTHREADDUMPER`,
+and `SPARK_DISABLERESPONSEBROADCAST`. Environment values override TOML values
+in memory and are not written to `config.toml`. Boolean values follow Java's
+`Boolean.parseBoolean` behavior; invalid interval text leaves the TOML value
+unchanged, while endpoint, thread-mode, and out-of-range interval values make
+startup reject the configuration.
+
 Trusted viewer public keys are stored separately in `trusted-viewers.json` (a
 JSON array of base64-encoded X.509 keys). The `trust-viewer` command appends to
 this file without touching `config.toml`.
 
 ## Building
 
-> CMake fetches upstream funchook `v1.1.3` because its bundled distorm decoder is
-> used by both x86-64 symbol guessers. The Windows allocation profiler also links
-> funchook itself; Linux allocation profiling still uses atomic ELF import-slot
-> redirection and does not link the funchook hook library.
+> CMake fetches upstream funchook `v1.1.3` for its bundled distorm decoder, which
+> is used by both x86-64 symbol guessers. No funchook hook library is linked;
+> Linux allocation profiling uses atomic ELF import-slot redirection, and Windows
+> allocation profiling is temporarily unavailable.
 
 The platform requirements are:
 
-* **Linux:** Clang, libc++, Ninja, and Conan 2.
-* **Windows:** LLVM clang-cl, Visual Studio Build Tools, the Windows SDK,
+* **Linux:** Clang 18 or newer, libc++, Ninja, and Conan 2.
+* **Windows:** LLVM clang-cl 18 or newer, Visual Studio Build Tools, the Windows SDK,
   Ninja, and Conan 2. clang-cl must target the MSVC ABI.
 
 Install Conan, resolve the dependencies, then configure CMake directly with the
@@ -378,7 +385,7 @@ cmake -S . -B build -G Ninja "-DCMAKE_TOOLCHAIN_FILE=build/RelWithDebInfo/genera
 cmake --build build
 ```
 
-With self-test tools enabled, `spark_selftest --allocation-only` exercises exact,
+With self-test tools enabled, Linux `spark_selftest --allocation-only` exercises exact,
 regex, multiple, dynamic, and no-match allocation thread selection, cross-thread
 free/realloc and live-only lifecycles, session reuse, thread overflow, and bounded
 queue/index pressure. `spark_allocation_benchmark` prints repeatable CSV medians for
@@ -387,7 +394,9 @@ single/four-thread, live-only, and forced saturation cases.
 `spark_selftest --statistics-only` deterministically verifies independent TPS and
 CPU windows, true MSPT median/p95 calculations, partial-history spans, and exact
 per-second profile boundaries. The default self-test also decodes key rolling and
-window fields from the generated current-protocol payload.
+window fields from the generated current-protocol payload. On Windows,
+`spark_windows_allocation_unavailable_test` verifies the deterministic allocation
+profiling refusal and harmless shutdown path.
 
 On Linux, the bundled profile selects libunwind because the SIGPROF sampler
 requires cpptrace's async-signal-safe unwinding path. Windows does not use

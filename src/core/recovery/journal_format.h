@@ -3,8 +3,10 @@
 
 #include <zlib.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -15,7 +17,8 @@ namespace spark {
 
 // Journal format constants.
 inline constexpr char kJournalMagic[8] = {'S', 'P', 'R', 'K', 'J', 'N', 'R', 'L'};
-inline constexpr std::uint16_t kJournalVersion = 2;
+inline constexpr std::uint16_t kLegacyJournalVersion = 2;
+inline constexpr std::uint16_t kJournalVersion = 3;
 
 // Metadata snapshot constants.  The snapshot is a sidecar file that preserves
 // SessionConfig, all ModuleDefs, and all ThreadDefs so a rolling journal can
@@ -63,8 +66,10 @@ public:
     void bytes(const void *p, std::size_t n) { append(p, n); }
     void str(std::string_view s)
     {
-        u16(static_cast<std::uint16_t>(s.size()));
-        append(s.data(), s.size());
+        const std::size_t length =
+            std::min(s.size(), static_cast<std::size_t>(std::numeric_limits<std::uint16_t>::max()));
+        u16(static_cast<std::uint16_t>(length));
+        append(s.data(), length);
     }
 
 private:
@@ -95,11 +100,12 @@ inline std::vector<std::uint8_t> serializeRecord(RecordType type, std::uint32_t 
 
 // Serialize the file header.
 inline std::vector<std::uint8_t> serializeFileHeader(std::uint64_t session_id, std::uint64_t created_ns,
-                                                     std::uint32_t segment_number)
+                                                     std::uint32_t segment_number,
+                                                     std::uint16_t version = kJournalVersion)
 {
     JournalBuffer h;
     h.bytes(kJournalMagic, 8);
-    h.u16(kJournalVersion);
+    h.u16(version);
     h.u16(0);  // reserved
     h.u64(session_id);
     h.u64(created_ns);
@@ -134,9 +140,11 @@ inline JournalBuffer buildSamplePayload(const Sample &sample)
     p.u64(sample.tick_id);
     p.i32(sample.window);
     p.u64(sample.weight);
-    const std::uint16_t frame_count = static_cast<std::uint16_t>(sample.frames.size());
-    p.u16(frame_count);
-    for (const auto &frame : sample.frames) {
+    const std::size_t frame_count =
+        std::min(sample.frames.size(), static_cast<std::size_t>(std::numeric_limits<std::uint16_t>::max()));
+    p.u16(static_cast<std::uint16_t>(frame_count));
+    for (std::size_t i = 0; i < frame_count; ++i) {
+        const auto &frame = sample.frames[i];
         p.u32(frame.module);
         p.u64(frame.rva);
     }
@@ -179,7 +187,8 @@ inline JournalBuffer buildSessionConfigPayload(std::uint32_t interval_us, std::i
                                                std::uint8_t thread_grouper, std::uint8_t profile_type, bool live_only,
                                                std::string_view creator_name, bool creator_is_player,
                                                std::string_view comment,
-                                               const std::vector<std::string> &thread_patterns)
+                                               const std::vector<std::string> &thread_patterns,
+                                               std::int32_t window_adjustment_ms)
 {
     JournalBuffer p;
     p.u32(interval_us);
@@ -193,10 +202,13 @@ inline JournalBuffer buildSessionConfigPayload(std::uint32_t interval_us, std::i
     p.str(creator_name);
     p.u8(creator_is_player ? 1 : 0);
     p.str(comment);
-    p.u16(static_cast<std::uint16_t>(thread_patterns.size()));
-    for (const auto &pat : thread_patterns) {
-        p.str(pat);
+    const std::size_t pattern_count =
+        std::min(thread_patterns.size(), static_cast<std::size_t>(std::numeric_limits<std::uint16_t>::max()));
+    p.u16(static_cast<std::uint16_t>(pattern_count));
+    for (std::size_t i = 0; i < pattern_count; ++i) {
+        p.str(thread_patterns[i]);
     }
+    p.i32(window_adjustment_ms);
     return p;
 }
 
@@ -224,10 +236,11 @@ inline std::vector<std::uint8_t> serializeMetadataSnapshot(std::uint64_t session
                                                            const std::vector<SnapshotThreadDef> &threads)
 {
     JournalBuffer payload;
-    const std::uint16_t sc_len = static_cast<std::uint16_t>(session_config_payload.size());
-    payload.u16(sc_len);
+    const std::size_t sc_len =
+        std::min(session_config_payload.size(), static_cast<std::size_t>(std::numeric_limits<std::uint16_t>::max()));
+    payload.u16(static_cast<std::uint16_t>(sc_len));
     if (sc_len > 0) {
-        payload.bytes(session_config_payload.data(), session_config_payload.size());
+        payload.bytes(session_config_payload.data(), sc_len);
     }
     payload.u32(static_cast<std::uint32_t>(modules.size()));
     for (const auto &m : modules) {

@@ -6,6 +6,8 @@
 #include <charconv>
 #include <cstdio>
 #include <cstring>
+#include <limits>
+#include <map>
 #include <set>
 #include <unordered_set>
 
@@ -173,6 +175,9 @@ bool JournalRecord::asCleanEnd(std::uint64_t &timestamp_ns) const
 
 bool JournalRecord::asSessionConfig(SessionConfig &config) const
 {
+    config.present = false;
+    config.has_window_adjustment = false;
+    config.window_adjustment_ms = 0;
     ByteCursor c(payload.data(), payload.size());
     if (!c.u32(config.interval_us)) {
         return false;
@@ -239,168 +244,255 @@ bool JournalRecord::asSessionConfig(SessionConfig &config) const
         }
         config.thread_patterns.emplace_back(sv.data(), sv.size());
     }
+    if (c.remaining() == sizeof(std::int32_t)) {
+        if (!c.i32(config.window_adjustment_ms)) {
+            return false;
+        }
+        config.has_window_adjustment = true;
+    }
+    else if (c.remaining() != 0) {
+        return false;
+    }
     config.present = true;
     return true;
 }
 
 // --- JournalReader ---
 
-bool JournalReader::readSegment(const std::filesystem::path &path, JournalReadResult &result,
-                                std::optional<std::uint32_t> expected_segment)
+namespace {
+
+enum class SegmentReadStatus {
+    Ok,
+    SessionMismatch,
+    Fatal,
+};
+
+void markFatal(JournalReadResult &result, bool unreadable = false, bool malformed = false, bool limit = false)
 {
+    result.valid = false;
+    result.fatal_error = true;
+    result.unreadable_segment = result.unreadable_segment || unreadable;
+    result.malformed_segment = result.malformed_segment || malformed;
+    result.limit_exceeded = result.limit_exceeded || limit;
+}
+
+SegmentReadStatus tailTruncated(JournalReadResult &result, bool is_final)
+{
+    ++result.truncated_records;
+    if (!is_final) {
+        markFatal(result, false, true);
+        return SegmentReadStatus::Fatal;
+    }
+    result.tail_truncated = true;
+    return SegmentReadStatus::Ok;
+}
+
+SegmentReadStatus readSegmentImpl(const std::filesystem::path &path, JournalReadResult &result,
+                                  std::optional<std::uint32_t> expected_segment, bool is_final, bool account_bytes,
+                                  bool account_segment, const JournalReaderLimits &limits)
+{
+    std::error_code ec;
+    const auto file_size_value = std::filesystem::file_size(path, ec);
+    if (ec) {
+        markFatal(result, true);
+        return SegmentReadStatus::Fatal;
+    }
+    if (file_size_value > limits.segment_bytes) {
+        result.total_bytes = limits.total_bytes;
+        markFatal(result, false, false, true);
+        return SegmentReadStatus::Fatal;
+    }
+    const auto file_size = static_cast<std::uint64_t>(file_size_value);
+    if (file_size < kFileHeaderSize) {
+        if (account_bytes) {
+            result.total_bytes = std::min(limits.total_bytes, result.total_bytes + file_size);
+        }
+        markFatal(result, false, true);
+        return SegmentReadStatus::Fatal;
+    }
+    if (account_bytes) {
+        if (file_size > limits.total_bytes || result.total_bytes > limits.total_bytes - file_size) {
+            result.total_bytes = limits.total_bytes;
+            markFatal(result, false, false, true);
+            return SegmentReadStatus::Fatal;
+        }
+        result.total_bytes += file_size;
+    }
+    if (account_segment) {
+        if (result.segment_count >= limits.segments) {
+            markFatal(result, false, false, true);
+            return SegmentReadStatus::Fatal;
+        }
+        ++result.segment_count;
+    }
+
     std::FILE *f = std::fopen(path.string().c_str(), "rb");
     if (!f) {
-        return false;
+        markFatal(result, true);
+        return SegmentReadStatus::Fatal;
     }
 
-    // Read entire file into memory.
-    std::fseek(f, 0, SEEK_END);
-    const auto file_size = std::ftell(f);
-    std::fseek(f, 0, SEEK_SET);
-    if (file_size <= 0) {
+    std::vector<std::uint8_t> buf;
+    try {
+        buf.resize(static_cast<std::size_t>(file_size));
+    }
+    catch (...) {
         std::fclose(f);
-        return false;
+        markFatal(result, false, false, true);
+        return SegmentReadStatus::Fatal;
     }
-
-    std::vector<std::uint8_t> buf(static_cast<std::size_t>(file_size));
-    std::size_t read = std::fread(buf.data(), 1, buf.size(), f);
+    const std::size_t read = std::fread(buf.data(), 1, buf.size(), f);
+    const bool read_failed = read != buf.size() || std::ferror(f) != 0 || std::fgetc(f) != EOF;
     std::fclose(f);
-    if (read != buf.size()) {
-        return false;
+    if (read_failed) {
+        markFatal(result, true);
+        return SegmentReadStatus::Fatal;
     }
 
     ByteCursor c(buf.data(), buf.size());
 
     // File header.
     std::uint8_t magic[8];
-    if (!c.bytes(magic, 8)) {
-        return false;
-    }
-    if (std::memcmp(magic, kJournalMagic, 8) != 0) {
-        return false;
-    }
     std::uint16_t version;
-    if (!c.u16(version)) {
-        return false;
-    }
-    if (version != kJournalVersion) {
-        return false;
-    }
     std::uint16_t reserved;
-    if (!c.u16(reserved)) {
-        return false;
-    }
     std::uint64_t session_id;
-    if (!c.u64(session_id)) {
-        return false;
-    }
     std::uint64_t created_ns;
-    if (!c.u64(created_ns)) {
-        return false;
-    }
     std::uint32_t segment_number;
-    if (!c.u32(segment_number)) {
-        return false;
+    if (!c.bytes(magic, 8) || std::memcmp(magic, kJournalMagic, 8) != 0 || !c.u16(version) || !c.u16(reserved) ||
+        !c.u64(session_id) || !c.u64(created_ns) || !c.u32(segment_number)) {
+        markFatal(result, false, true);
+        return SegmentReadStatus::Fatal;
     }
-
+    if (version != kLegacyJournalVersion && version != kJournalVersion || reserved != 0) {
+        markFatal(result, false, true);
+        return SegmentReadStatus::Fatal;
+    }
     if (expected_segment && segment_number != *expected_segment) {
-        return false;
+        markFatal(result, false, true);
+        return SegmentReadStatus::Fatal;
     }
 
     if (!result.valid) {
+        result.version = version;
         result.session_id = session_id;
         result.created_ns = created_ns;
         result.valid = true;
     }
-    else if (result.session_id != session_id) {
-        return false;
+    else {
+        if (result.version != version) {
+            markFatal(result, false, true);
+            return SegmentReadStatus::Fatal;
+        }
+        if (result.session_id != session_id) {
+            return SegmentReadStatus::SessionMismatch;
+        }
     }
 
     // Records.
     while (!c.eof()) {
-        std::uint8_t type_byte;
-        if (!c.u8(type_byte)) {
-            result.truncated_records++;
-            break;
-        }
-        std::uint8_t rsv;
-        if (!c.u8(rsv)) {
-            result.truncated_records++;
-            break;
-        }
-        std::uint32_t seq;
-        if (!c.u32(seq)) {
-            result.truncated_records++;
-            break;
-        }
-        std::uint32_t payload_len;
-        if (!c.u32(payload_len)) {
-            result.truncated_records++;
-            break;
-        }
-        if (payload_len > kMaxPayloadSize) {
-            result.corrupt_records++;
-            break;
-        }
-        std::uint32_t crc;
-        if (!c.u32(crc)) {
-            result.truncated_records++;
-            break;
+        if (c.remaining() < kRecordHeaderSize) {
+            return tailTruncated(result, is_final);
         }
 
-        // Check payload is fully present.
+        std::uint8_t type_byte;
+        std::uint8_t record_reserved;
+        std::uint32_t seq;
+        std::uint32_t payload_len;
+        std::uint32_t crc;
+        if (!c.u8(type_byte) || !c.u8(record_reserved) || !c.u32(seq) || !c.u32(payload_len) || !c.u32(crc)) {
+            return tailTruncated(result, is_final);
+        }
+        if (record_reserved != 0 || type_byte < static_cast<std::uint8_t>(RecordType::ModuleDef) ||
+            type_byte > static_cast<std::uint8_t>(RecordType::SessionConfig)) {
+            markFatal(result, false, true);
+            return SegmentReadStatus::Fatal;
+        }
+        if (payload_len > kMaxPayloadSize) {
+            markFatal(result, false, true);
+            return SegmentReadStatus::Fatal;
+        }
         if (c.remaining() < payload_len) {
-            result.truncated_records++;
-            break;
+            return tailTruncated(result, is_final);
         }
 
         const std::uint8_t *payload_ptr = buf.data() + (buf.size() - c.remaining());
-
-        // Verify CRC.
-        auto actual_crc = static_cast<std::uint32_t>(crc32(0L, payload_ptr, payload_len));
+        const auto actual_crc = static_cast<std::uint32_t>(crc32(0L, payload_ptr, payload_len));
         if (actual_crc != crc) {
-            result.corrupt_records++;
-            break;  // stop reading this segment
+            ++result.corrupt_records;
+            if (is_final && c.remaining() == payload_len) {
+                result.tail_corrupt = true;
+                return SegmentReadStatus::Ok;
+            }
+            markFatal(result, false, true);
+            return SegmentReadStatus::Fatal;
+        }
+
+        if (result.record_count >= limits.records) {
+            markFatal(result, false, false, true);
+            return SegmentReadStatus::Fatal;
         }
 
         std::string_view payload_sv;
         if (!c.stringView(payload_sv, payload_len)) {
-            result.truncated_records++;
-            break;
+            return tailTruncated(result, is_final);
         }
 
         JournalRecord rec;
         rec.type = static_cast<RecordType>(type_byte);
         rec.sequence = seq;
-        rec.payload.assign(payload_sv.data(), payload_sv.data() + payload_sv.size());
-
-        // Cross-producer queue order is not guaranteed, so sequence numbers
-        // need not be monotonic in the file.
-
-        if (rec.type == RecordType::CleanEnd) {
+        try {
+            rec.payload.assign(payload_sv.data(), payload_sv.data() + payload_sv.size());
+            if (rec.type == RecordType::SessionConfig) {
+                SessionConfig parsed_config;
+                if (!rec.asSessionConfig(parsed_config)) {
+                    markFatal(result, false, true);
+                    return SegmentReadStatus::Fatal;
+                }
+                if (!result.session_config.present) {
+                    result.session_config = std::move(parsed_config);
+                }
+            }
+            result.records.push_back(std::move(rec));
+        }
+        catch (...) {
+            markFatal(result, false, false, true);
+            return SegmentReadStatus::Fatal;
+        }
+        ++result.record_count;
+        if (result.records.back().type == RecordType::CleanEnd) {
             result.has_clean_end = true;
         }
-        if (rec.type == RecordType::SessionConfig && !result.session_config.present) {
-            rec.asSessionConfig(result.session_config);
-        }
-        result.records.push_back(std::move(rec));
     }
 
-    return true;
+    return SegmentReadStatus::Ok;
 }
 
-JournalReadResult JournalReader::readSession(const std::filesystem::path &directory)
+}  // namespace
+
+bool JournalReader::readSegment(const std::filesystem::path &path, JournalReadResult &result,
+                                std::optional<std::uint32_t> expected_segment, JournalReaderLimits limits)
+{
+    return readSegmentImpl(path, result, expected_segment, true, true, true, limits) == SegmentReadStatus::Ok;
+}
+
+JournalReadResult JournalReader::readSession(const std::filesystem::path &directory, JournalReaderLimits limits)
 {
     JournalReadResult result;
     std::error_code ec;
 
     // Collect segment files sorted by segment number.
-    std::set<std::pair<std::uint32_t, std::filesystem::path>> segments;
-    for (const auto &entry : std::filesystem::directory_iterator(directory, ec)) {
-        if (ec) {
-            break;
-        }
-        if (!entry.is_regular_file()) {
+    std::map<std::uint32_t, std::filesystem::path> segments;
+    bool duplicate_segment_numbers = false;
+    std::filesystem::directory_iterator iterator(directory, ec);
+    const std::filesystem::directory_iterator end;
+    for (; !ec && iterator != end; iterator.increment(ec)) {
+        const auto &entry = *iterator;
+        std::error_code entry_ec;
+        if (!entry.is_regular_file(entry_ec)) {
+            if (entry_ec) {
+                markFatal(result, true);
+                return result;
+            }
             continue;
         }
         auto name = entry.path().filename().string();
@@ -415,27 +507,90 @@ JournalReadResult JournalReader::readSession(const std::filesystem::path &direct
         std::uint32_t num = 0;
         const auto [end, error] = std::from_chars(num_str.data(), num_str.data() + num_str.size(), num);
         if (error == std::errc{} && end == num_str.data() + num_str.size()) {
-            segments.emplace(num, entry.path());
+            if (!segments.emplace(num, entry.path()).second) {
+                duplicate_segment_numbers = true;
+            }
         }
     }
+    if (ec) {
+        markFatal(result, true);
+        return result;
+    }
+
+    if (segments.empty()) {
+        return result;
+    }
+    if (duplicate_segment_numbers) {
+        result.segment_count = static_cast<std::uint32_t>(
+            std::min<std::size_t>(segments.size(), std::numeric_limits<std::uint32_t>::max()));
+        markFatal(result, false, true);
+        return result;
+    }
+    if (segments.size() > limits.segments) {
+        result.segment_count = limits.segments;
+        markFatal(result, false, false, true);
+        return result;
+    }
+
+    std::uint64_t aggregate_bytes = 0;
+    for (const auto &[num, path] : segments) {
+        (void)num;
+        const auto file_size_value = std::filesystem::file_size(path, ec);
+        if (ec) {
+            markFatal(result, true);
+            return result;
+        }
+        if (file_size_value > limits.segment_bytes) {
+            result.total_bytes = limits.total_bytes;
+            markFatal(result, false, false, true);
+            return result;
+        }
+        const auto file_size = static_cast<std::uint64_t>(file_size_value);
+        if (file_size < kFileHeaderSize) {
+            result.total_bytes = aggregate_bytes + file_size;
+            markFatal(result, false, true);
+            return result;
+        }
+        if (file_size > limits.total_bytes || aggregate_bytes > limits.total_bytes - file_size) {
+            result.total_bytes = limits.total_bytes;
+            markFatal(result, false, false, true);
+            return result;
+        }
+        aggregate_bytes += file_size;
+    }
+    result.total_bytes = aggregate_bytes;
+    result.segment_count = static_cast<std::uint32_t>(segments.size());
 
     std::optional<std::uint32_t> expected_segment;
+    std::size_t segment_index = 0;
     for (const auto &[num, path] : segments) {
         if (!expected_segment) {
             expected_segment = num;
             result.first_segment_number = num;
             result.head_truncated = num != 0;
         }
-        if (num != *expected_segment || !readSegment(path, result, num)) {
+        if (num != *expected_segment) {
+            result.gap_detected = true;
+            markFatal(result, false, true);
+            break;
+        }
+        const auto status =
+            readSegmentImpl(path, result, num, segment_index + 1 == segments.size(), false, false, limits);
+        if (status == SegmentReadStatus::SessionMismatch) {
+            break;
+        }
+        if (status == SegmentReadStatus::Fatal) {
             break;
         }
         ++*expected_segment;
+        ++segment_index;
     }
 
     std::unordered_set<std::uint32_t> sequences;
     for (const auto &record : result.records) {
         if (!sequences.insert(record.sequence).second) {
             result.duplicate_sequences = true;
+            markFatal(result, false, true);
             break;
         }
     }

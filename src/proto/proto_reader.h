@@ -15,15 +15,21 @@ class ProtoReader {
 public:
     explicit ProtoReader(std::string_view data) : data_(data) {}
 
-    bool eof() const { return pos_ >= data_.size(); }
+    [[nodiscard]] bool eof() const { return pos_ >= data_.size(); }
+    [[nodiscard]] bool valid() const { return valid_; }
 
     // Read the next field tag + wire type. Returns false at end of message.
     bool nextField(int &field, int &wire_type)
     {
-        if (pos_ >= data_.size()) {
+        if (!valid_ || pos_ >= data_.size()) {
             return false;
         }
         auto tag = readVarint();
+        constexpr std::uint64_t kMaxFieldNumber = (1ULL << 29) - 1;
+        if (!valid_ || (tag >> 3) == 0 || (tag >> 3) > kMaxFieldNumber) {
+            valid_ = false;
+            return false;
+        }
         field = static_cast<int>(tag >> 3);
         wire_type = static_cast<int>(tag & 0x07);
         return true;
@@ -32,16 +38,23 @@ public:
     std::uint64_t readVarint()
     {
         std::uint64_t value = 0;
-        int shift = 0;
-        while (pos_ < data_.size()) {
-            auto byte = static_cast<unsigned char>(data_[pos_++]);
-            value |= static_cast<std::uint64_t>(byte & 0x7f) << shift;
-            if (!(byte & 0x80)) {
-                break;
+        for (int byte_index = 0; byte_index < 10; ++byte_index) {
+            if (pos_ >= data_.size()) {
+                valid_ = false;
+                return 0;
             }
-            shift += 7;
+            auto byte = static_cast<unsigned char>(data_[pos_++]);
+            if (byte_index == 9 && byte > 1) {
+                valid_ = false;
+                return 0;
+            }
+            value |= static_cast<std::uint64_t>(byte & 0x7f) << (byte_index * 7);
+            if (!(byte & 0x80)) {
+                return value;
+            }
         }
-        return value;
+        valid_ = false;
+        return 0;
     }
 
     std::int32_t readInt32() { return static_cast<std::int32_t>(readVarint()); }
@@ -51,11 +64,14 @@ public:
     std::string_view readString()
     {
         auto len = readVarint();
-        if (pos_ + len > data_.size()) {
-            len = data_.size() - pos_;
+        if (!valid_ || len > data_.size() - pos_) {
+            valid_ = false;
+            pos_ = data_.size();
+            return {};
         }
-        std::string_view result(data_.data() + pos_, len);
-        pos_ += len;
+        const auto length = static_cast<std::size_t>(len);
+        std::string_view result(data_.data() + pos_, length);
+        pos_ += length;
         return result;
     }
 
@@ -68,42 +84,65 @@ public:
     ProtoReader readMessage()
     {
         auto len = readVarint();
-        if (pos_ + len > data_.size()) {
-            len = data_.size() - pos_;
+        if (!valid_ || len > data_.size() - pos_) {
+            valid_ = false;
+            pos_ = data_.size();
+            return ProtoReader(std::string_view{});
         }
-        ProtoReader sub(data_.substr(pos_, len));
-        pos_ += len;
+        const auto length = static_cast<std::size_t>(len);
+        ProtoReader sub(data_.substr(pos_, length));
+        pos_ += length;
         return sub;
     }
 
     void skip(int wire_type)
     {
+        if (!valid_) {
+            return;
+        }
         switch (wire_type) {
         case 0:
             readVarint();
             break;
         case 1:
-            pos_ += 8;
+            skipBytes(8);
             break;
         case 2: {
             auto len = readVarint();
-            pos_ += len;
+            if (valid_) {
+                if (len > data_.size() - pos_) {
+                    valid_ = false;
+                    pos_ = data_.size();
+                }
+                else {
+                    pos_ += static_cast<std::size_t>(len);
+                }
+            }
         } break;
         case 5:
-            pos_ += 4;
+            skipBytes(4);
             break;
         default:
+            valid_ = false;
             pos_ = data_.size();
             break;
-        }
-        if (pos_ > data_.size()) {
-            pos_ = data_.size();
         }
     }
 
 private:
+    void skipBytes(std::size_t count)
+    {
+        if (count > data_.size() - pos_) {
+            valid_ = false;
+            pos_ = data_.size();
+            return;
+        }
+        pos_ += count;
+    }
+
     std::string_view data_;
     std::size_t pos_ = 0;
+    bool valid_ = true;
 };
 
 }  // namespace spark
