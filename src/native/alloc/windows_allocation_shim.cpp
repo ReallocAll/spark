@@ -10,9 +10,9 @@
 
 namespace {
 
-spark::WindowsCallbackLifetimeGate gGate;
-spark::WindowsAllocationShimTable gOriginals{};
-spark::WindowsAllocationShimTable gHandlers{};
+spark::WindowsCallbackLifetimeGate GGate;
+spark::WindowsAllocationShimTable GOriginals{};
+spark::WindowsAllocationShimTable GHandlers{};
 
 bool validOriginals(const spark::WindowsAllocationShimTable &table) noexcept
 {
@@ -31,30 +31,30 @@ Function chooseHandler(Function handler, Function original) noexcept
 extern "C" __declspec(dllexport) int __cdecl sparkAllocationShimPin() noexcept
 {
     HMODULE module = nullptr;
-    const auto address = reinterpret_cast<LPCWSTR>(reinterpret_cast<std::uintptr_t>(&sparkAllocationShimPin));
+    LPCWSTR address = reinterpret_cast<LPCWSTR>(&sparkAllocationShimPin);
     const DWORD flags = GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN;
     return ::GetModuleHandleExW(flags, address, &module) != FALSE ? 1 : 0;
 }
 
-extern "C" __declspec(dllexport) int __cdecl
-sparkAllocationShimConfigure(const spark::WindowsAllocationShimTable *originals) noexcept
+extern "C" __declspec(dllexport) int __cdecl sparkAllocationShimConfigure(
+    const spark::WindowsAllocationShimTable *originals) noexcept
 {
-    if (originals == nullptr || !gGate.drained() || !validOriginals(*originals)) {
+    if (originals == nullptr || !GGate.drained() || !validOriginals(*originals)) {
         return 0;
     }
-    gOriginals = *originals;
+    GOriginals = *originals;
     return 1;
 }
 
-extern "C" __declspec(dllexport) int __cdecl
-sparkAllocationShimActivate(const spark::WindowsAllocationShimTable *handlers) noexcept
+extern "C" __declspec(dllexport) int __cdecl sparkAllocationShimActivate(
+    const spark::WindowsAllocationShimTable *handlers) noexcept
 {
-    if (handlers == nullptr || !gGate.drained()) {
+    if (handlers == nullptr || !GGate.drained()) {
         return 0;
     }
-    gHandlers = *handlers;
-    if (!gGate.open()) {
-        gHandlers = {};
+    GHandlers = *handlers;
+    if (!GGate.open()) {
+        GHandlers = {};
         return 0;
     }
     return 1;
@@ -62,322 +62,318 @@ sparkAllocationShimActivate(const spark::WindowsAllocationShimTable *handlers) n
 
 extern "C" __declspec(dllexport) int __cdecl sparkAllocationShimBeginDeactivate() noexcept
 {
-    return gGate.close() ? 1 : 0;
+    return GGate.close() ? 1 : 0;
 }
 
 extern "C" __declspec(dllexport) int __cdecl sparkAllocationShimDrained() noexcept
 {
-    return gGate.drained() ? 1 : 0;
+    return GGate.drained() ? 1 : 0;
 }
 
 extern "C" __declspec(dllexport) int __cdecl sparkAllocationShimFinishDeactivate() noexcept
 {
-    if (!gGate.drained()) {
+    if (!GGate.drained()) {
         return 0;
     }
-    gHandlers = {};
+    GHandlers = {};
     return 1;
 }
 
 extern "C" __declspec(dllexport) void *__cdecl sparkAllocationShimMalloc(std::size_t size) noexcept
 {
-    const spark::WindowsMallocFn original = gOriginals.malloc_fn;
+    spark::WindowsMallocFn original = GOriginals.malloc_fn;
     if (original == nullptr) {
         return nullptr;
     }
-    if (!gGate.tryEnter()) {
+    if (!GGate.tryEnter()) {
         return original(size);
     }
-    const spark::WindowsMallocFn target = chooseHandler(gHandlers.malloc_fn, original);
+    spark::WindowsMallocFn target = chooseHandler(GHandlers.malloc_fn, original);
     void *result = target(size);
-    (void)gGate.leave();
+    (void)GGate.leave();
     return result;
 }
 
 extern "C" __declspec(dllexport) void *__cdecl sparkAllocationShimCalloc(std::size_t count, std::size_t size) noexcept
 {
-    const spark::WindowsCallocFn original = gOriginals.calloc_fn;
+    spark::WindowsCallocFn original = GOriginals.calloc_fn;
     if (original == nullptr) {
         return nullptr;
     }
-    if (!gGate.tryEnter()) {
+    if (!GGate.tryEnter()) {
         return original(count, size);
     }
-    const spark::WindowsCallocFn target = chooseHandler(gHandlers.calloc_fn, original);
+    spark::WindowsCallocFn target = chooseHandler(GHandlers.calloc_fn, original);
     void *result = target(count, size);
-    (void)gGate.leave();
+    (void)GGate.leave();
     return result;
 }
 
 extern "C" __declspec(dllexport) void *__cdecl sparkAllocationShimRealloc(void *pointer, std::size_t size) noexcept
 {
-    const spark::WindowsReallocFn original = gOriginals.realloc_fn;
+    spark::WindowsReallocFn original = GOriginals.realloc_fn;
     if (original == nullptr) {
         return nullptr;
     }
-    if (!gGate.tryEnter()) {
+    if (!GGate.tryEnter()) {
         return original(pointer, size);
     }
-    const spark::WindowsReallocFn target = chooseHandler(gHandlers.realloc_fn, original);
+    spark::WindowsReallocFn target = chooseHandler(GHandlers.realloc_fn, original);
     void *result = target(pointer, size);
-    (void)gGate.leave();
+    (void)GGate.leave();
     return result;
 }
 
 extern "C" __declspec(dllexport) void *__cdecl sparkAllocationShimRecalloc(void *pointer, std::size_t count,
-                                                                            std::size_t size) noexcept
+                                                                           std::size_t size) noexcept
 {
-    const spark::WindowsRecallocFn original = gOriginals.recalloc_fn;
+    spark::WindowsRecallocFn original = GOriginals.recalloc_fn;
     if (original == nullptr) {
         return nullptr;
     }
-    if (!gGate.tryEnter()) {
+    if (!GGate.tryEnter()) {
         return original(pointer, count, size);
     }
-    const spark::WindowsRecallocFn target = chooseHandler(gHandlers.recalloc_fn, original);
+    spark::WindowsRecallocFn target = chooseHandler(GHandlers.recalloc_fn, original);
     void *result = target(pointer, count, size);
-    (void)gGate.leave();
+    (void)GGate.leave();
     return result;
 }
 
 extern "C" __declspec(dllexport) void __cdecl sparkAllocationShimFree(void *pointer) noexcept
 {
-    const spark::WindowsFreeFn original = gOriginals.free_fn;
+    spark::WindowsFreeFn original = GOriginals.free_fn;
     if (original == nullptr) {
         return;
     }
-    if (!gGate.tryEnter()) {
+    if (!GGate.tryEnter()) {
         original(pointer);
         return;
     }
-    const spark::WindowsFreeFn target = chooseHandler(gHandlers.free_fn, original);
+    spark::WindowsFreeFn target = chooseHandler(GHandlers.free_fn, original);
     target(pointer);
-    (void)gGate.leave();
+    (void)GGate.leave();
 }
 
 extern "C" __declspec(dllexport) void *__cdecl sparkAllocationShimAlignedMalloc(std::size_t size,
-                                                                                 std::size_t alignment) noexcept
+                                                                                std::size_t alignment) noexcept
 {
-    const spark::WindowsAlignedMallocFn original = gOriginals.aligned_malloc_fn;
+    spark::WindowsAlignedMallocFn original = GOriginals.aligned_malloc_fn;
     if (original == nullptr) {
         return nullptr;
     }
-    if (!gGate.tryEnter()) {
+    if (!GGate.tryEnter()) {
         return original(size, alignment);
     }
-    const spark::WindowsAlignedMallocFn target = chooseHandler(gHandlers.aligned_malloc_fn, original);
+    spark::WindowsAlignedMallocFn target = chooseHandler(GHandlers.aligned_malloc_fn, original);
     void *result = target(size, alignment);
-    (void)gGate.leave();
+    (void)GGate.leave();
     return result;
 }
 
 extern "C" __declspec(dllexport) void *__cdecl sparkAllocationShimAlignedRealloc(void *pointer, std::size_t size,
-                                                                                  std::size_t alignment) noexcept
+                                                                                 std::size_t alignment) noexcept
 {
-    const spark::WindowsAlignedReallocFn original = gOriginals.aligned_realloc_fn;
+    spark::WindowsAlignedReallocFn original = GOriginals.aligned_realloc_fn;
     if (original == nullptr) {
         return nullptr;
     }
-    if (!gGate.tryEnter()) {
+    if (!GGate.tryEnter()) {
         return original(pointer, size, alignment);
     }
-    const spark::WindowsAlignedReallocFn target = chooseHandler(gHandlers.aligned_realloc_fn, original);
+    spark::WindowsAlignedReallocFn target = chooseHandler(GHandlers.aligned_realloc_fn, original);
     void *result = target(pointer, size, alignment);
-    (void)gGate.leave();
+    (void)GGate.leave();
     return result;
 }
 
 extern "C" __declspec(dllexport) void *__cdecl sparkAllocationShimAlignedRecalloc(void *pointer, std::size_t count,
-                                                                                   std::size_t size,
-                                                                                   std::size_t alignment) noexcept
+                                                                                  std::size_t size,
+                                                                                  std::size_t alignment) noexcept
 {
-    const spark::WindowsAlignedRecallocFn original = gOriginals.aligned_recalloc_fn;
+    spark::WindowsAlignedRecallocFn original = GOriginals.aligned_recalloc_fn;
     if (original == nullptr) {
         return nullptr;
     }
-    if (!gGate.tryEnter()) {
+    if (!GGate.tryEnter()) {
         return original(pointer, count, size, alignment);
     }
-    const spark::WindowsAlignedRecallocFn target = chooseHandler(gHandlers.aligned_recalloc_fn, original);
+    spark::WindowsAlignedRecallocFn target = chooseHandler(GHandlers.aligned_recalloc_fn, original);
     void *result = target(pointer, count, size, alignment);
-    (void)gGate.leave();
+    (void)GGate.leave();
     return result;
 }
 
-extern "C" __declspec(dllexport) void *__cdecl sparkAllocationShimAlignedOffsetMalloc(std::size_t size,
+extern "C"
+    __declspec(dllexport) void *__cdecl sparkAllocationShimAlignedOffsetMalloc(std::size_t size, std::size_t alignment,
+                                                                               std::size_t offset) noexcept
+{
+    spark::WindowsAlignedOffsetMallocFn original = GOriginals.aligned_offset_malloc_fn;
+    if (original == nullptr) {
+        return nullptr;
+    }
+    if (!GGate.tryEnter()) {
+        return original(size, alignment, offset);
+    }
+    spark::WindowsAlignedOffsetMallocFn target = chooseHandler(GHandlers.aligned_offset_malloc_fn, original);
+    void *result = target(size, alignment, offset);
+    (void)GGate.leave();
+    return result;
+}
+
+extern "C" __declspec(dllexport) void *__cdecl sparkAllocationShimAlignedOffsetRealloc(void *pointer, std::size_t size,
                                                                                        std::size_t alignment,
                                                                                        std::size_t offset) noexcept
 {
-    const spark::WindowsAlignedOffsetMallocFn original = gOriginals.aligned_offset_malloc_fn;
+    spark::WindowsAlignedOffsetReallocFn original = GOriginals.aligned_offset_realloc_fn;
     if (original == nullptr) {
         return nullptr;
     }
-    if (!gGate.tryEnter()) {
-        return original(size, alignment, offset);
-    }
-    const spark::WindowsAlignedOffsetMallocFn target = chooseHandler(gHandlers.aligned_offset_malloc_fn, original);
-    void *result = target(size, alignment, offset);
-    (void)gGate.leave();
-    return result;
-}
-
-extern "C" __declspec(dllexport) void *__cdecl sparkAllocationShimAlignedOffsetRealloc(void *pointer,
-                                                                                        std::size_t size,
-                                                                                        std::size_t alignment,
-                                                                                        std::size_t offset) noexcept
-{
-    const spark::WindowsAlignedOffsetReallocFn original = gOriginals.aligned_offset_realloc_fn;
-    if (original == nullptr) {
-        return nullptr;
-    }
-    if (!gGate.tryEnter()) {
+    if (!GGate.tryEnter()) {
         return original(pointer, size, alignment, offset);
     }
-    const spark::WindowsAlignedOffsetReallocFn target = chooseHandler(gHandlers.aligned_offset_realloc_fn, original);
+    spark::WindowsAlignedOffsetReallocFn target = chooseHandler(GHandlers.aligned_offset_realloc_fn, original);
     void *result = target(pointer, size, alignment, offset);
-    (void)gGate.leave();
+    (void)GGate.leave();
     return result;
 }
 
-extern "C" __declspec(dllexport) void *__cdecl sparkAllocationShimAlignedOffsetRecalloc(void *pointer,
-                                                                                         std::size_t count,
-                                                                                         std::size_t size,
-                                                                                         std::size_t alignment,
-                                                                                         std::size_t offset) noexcept
+extern "C" __declspec(dllexport) void *__cdecl sparkAllocationShimAlignedOffsetRecalloc(
+    void *pointer, std::size_t count, std::size_t size, std::size_t alignment, std::size_t offset) noexcept
 {
-    const spark::WindowsAlignedOffsetRecallocFn original = gOriginals.aligned_offset_recalloc_fn;
+    spark::WindowsAlignedOffsetRecallocFn original = GOriginals.aligned_offset_recalloc_fn;
     if (original == nullptr) {
         return nullptr;
     }
-    if (!gGate.tryEnter()) {
+    if (!GGate.tryEnter()) {
         return original(pointer, count, size, alignment, offset);
     }
-    const spark::WindowsAlignedOffsetRecallocFn target = chooseHandler(gHandlers.aligned_offset_recalloc_fn, original);
+    spark::WindowsAlignedOffsetRecallocFn target = chooseHandler(GHandlers.aligned_offset_recalloc_fn, original);
     void *result = target(pointer, count, size, alignment, offset);
-    (void)gGate.leave();
+    (void)GGate.leave();
     return result;
 }
 
 extern "C" __declspec(dllexport) void __cdecl sparkAllocationShimAlignedFree(void *pointer) noexcept
 {
-    const spark::WindowsFreeFn original = gOriginals.aligned_free_fn;
+    spark::WindowsFreeFn original = GOriginals.aligned_free_fn;
     if (original == nullptr) {
         return;
     }
-    if (!gGate.tryEnter()) {
+    if (!GGate.tryEnter()) {
         original(pointer);
         return;
     }
-    const spark::WindowsFreeFn target = chooseHandler(gHandlers.aligned_free_fn, original);
+    spark::WindowsFreeFn target = chooseHandler(GHandlers.aligned_free_fn, original);
     target(pointer);
-    (void)gGate.leave();
+    (void)GGate.leave();
 }
 
 extern "C" __declspec(dllexport) void *__cdecl sparkAllocationShimMallocBase(std::size_t size) noexcept
 {
-    const spark::WindowsMallocFn original = gOriginals.malloc_base_fn;
+    spark::WindowsMallocFn original = GOriginals.malloc_base_fn;
     if (original == nullptr) {
         return nullptr;
     }
-    if (!gGate.tryEnter()) {
+    if (!GGate.tryEnter()) {
         return original(size);
     }
-    const spark::WindowsMallocFn target = chooseHandler(gHandlers.malloc_base_fn, original);
+    spark::WindowsMallocFn target = chooseHandler(GHandlers.malloc_base_fn, original);
     void *result = target(size);
-    (void)gGate.leave();
+    (void)GGate.leave();
     return result;
 }
 
-extern "C" __declspec(dllexport) void *__cdecl sparkAllocationShimCallocBase(std::size_t count,
-                                                                              std::size_t size) noexcept
+extern "C"
+    __declspec(dllexport) void *__cdecl sparkAllocationShimCallocBase(std::size_t count, std::size_t size) noexcept
 {
-    const spark::WindowsCallocFn original = gOriginals.calloc_base_fn;
+    spark::WindowsCallocFn original = GOriginals.calloc_base_fn;
     if (original == nullptr) {
         return nullptr;
     }
-    if (!gGate.tryEnter()) {
+    if (!GGate.tryEnter()) {
         return original(count, size);
     }
-    const spark::WindowsCallocFn target = chooseHandler(gHandlers.calloc_base_fn, original);
+    spark::WindowsCallocFn target = chooseHandler(GHandlers.calloc_base_fn, original);
     void *result = target(count, size);
-    (void)gGate.leave();
+    (void)GGate.leave();
     return result;
 }
 
 extern "C" __declspec(dllexport) void *__cdecl sparkAllocationShimReallocBase(void *pointer, std::size_t size) noexcept
 {
-    const spark::WindowsReallocFn original = gOriginals.realloc_base_fn;
+    spark::WindowsReallocFn original = GOriginals.realloc_base_fn;
     if (original == nullptr) {
         return nullptr;
     }
-    if (!gGate.tryEnter()) {
+    if (!GGate.tryEnter()) {
         return original(pointer, size);
     }
-    const spark::WindowsReallocFn target = chooseHandler(gHandlers.realloc_base_fn, original);
+    spark::WindowsReallocFn target = chooseHandler(GHandlers.realloc_base_fn, original);
     void *result = target(pointer, size);
-    (void)gGate.leave();
+    (void)GGate.leave();
     return result;
 }
 
 extern "C" __declspec(dllexport) void __cdecl sparkAllocationShimFreeBase(void *pointer) noexcept
 {
-    const spark::WindowsFreeFn original = gOriginals.free_base_fn;
+    spark::WindowsFreeFn original = GOriginals.free_base_fn;
     if (original == nullptr) {
         return;
     }
-    if (!gGate.tryEnter()) {
+    if (!GGate.tryEnter()) {
         original(pointer);
         return;
     }
-    const spark::WindowsFreeFn target = chooseHandler(gHandlers.free_base_fn, original);
+    spark::WindowsFreeFn target = chooseHandler(GHandlers.free_base_fn, original);
     target(pointer);
-    (void)gGate.leave();
+    (void)GGate.leave();
 }
 
 extern "C" __declspec(dllexport) void *WINAPI sparkAllocationShimHeapAlloc(HANDLE heap, DWORD flags,
-                                                                            SIZE_T size) noexcept
+                                                                           SIZE_T size) noexcept
 {
-    const spark::WindowsHeapAllocFn original = gOriginals.heap_alloc_fn;
+    spark::WindowsHeapAllocFn original = GOriginals.heap_alloc_fn;
     if (original == nullptr) {
         return nullptr;
     }
-    if (!gGate.tryEnter()) {
+    if (!GGate.tryEnter()) {
         return original(heap, flags, size);
     }
-    const spark::WindowsHeapAllocFn target = chooseHandler(gHandlers.heap_alloc_fn, original);
+    spark::WindowsHeapAllocFn target = chooseHandler(GHandlers.heap_alloc_fn, original);
     void *result = target(heap, flags, size);
-    (void)gGate.leave();
+    (void)GGate.leave();
     return result;
 }
 
 extern "C" __declspec(dllexport) void *WINAPI sparkAllocationShimHeapReAlloc(HANDLE heap, DWORD flags, void *pointer,
-                                                                              SIZE_T size) noexcept
+                                                                             SIZE_T size) noexcept
 {
-    const spark::WindowsHeapReAllocFn original = gOriginals.heap_realloc_fn;
+    spark::WindowsHeapReAllocFn original = GOriginals.heap_realloc_fn;
     if (original == nullptr) {
         return nullptr;
     }
-    if (!gGate.tryEnter()) {
+    if (!GGate.tryEnter()) {
         return original(heap, flags, pointer, size);
     }
-    const spark::WindowsHeapReAllocFn target = chooseHandler(gHandlers.heap_realloc_fn, original);
+    spark::WindowsHeapReAllocFn target = chooseHandler(GHandlers.heap_realloc_fn, original);
     void *result = target(heap, flags, pointer, size);
-    (void)gGate.leave();
+    (void)GGate.leave();
     return result;
 }
 
 extern "C" __declspec(dllexport) BOOL WINAPI sparkAllocationShimHeapFree(HANDLE heap, DWORD flags,
-                                                                          void *pointer) noexcept
+                                                                         void *pointer) noexcept
 {
-    const spark::WindowsHeapFreeFn original = gOriginals.heap_free_fn;
+    spark::WindowsHeapFreeFn original = GOriginals.heap_free_fn;
     if (original == nullptr) {
         return FALSE;
     }
-    if (!gGate.tryEnter()) {
+    if (!GGate.tryEnter()) {
         return original(heap, flags, pointer);
     }
-    const spark::WindowsHeapFreeFn target = chooseHandler(gHandlers.heap_free_fn, original);
+    spark::WindowsHeapFreeFn target = chooseHandler(GHandlers.heap_free_fn, original);
     const BOOL result = target(heap, flags, pointer);
-    (void)gGate.leave();
+    (void)GGate.leave();
     return result;
 }

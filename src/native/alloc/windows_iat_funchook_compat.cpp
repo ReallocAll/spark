@@ -76,25 +76,67 @@ bool describeTarget(void *address, TargetDescription &description) noexcept
         const char *shim_export;
         bool required_coverage;
     } candidates[] = {
-        {ucrt, "malloc", "sparkAllocationShimMalloc", true},
-        {ucrt, "calloc", "sparkAllocationShimCalloc", false},
-        {ucrt, "realloc", "sparkAllocationShimRealloc", false},
-        {ucrt, "_recalloc", "sparkAllocationShimRecalloc", false},
-        {ucrt, "free", "sparkAllocationShimFree", true},
-        {ucrt, "_aligned_malloc", "sparkAllocationShimAlignedMalloc", false},
-        {ucrt, "_aligned_realloc", "sparkAllocationShimAlignedRealloc", false},
-        {ucrt, "_aligned_recalloc", "sparkAllocationShimAlignedRecalloc", false},
-        {ucrt, "_aligned_offset_malloc", "sparkAllocationShimAlignedOffsetMalloc", false},
-        {ucrt, "_aligned_offset_realloc", "sparkAllocationShimAlignedOffsetRealloc", false},
-        {ucrt, "_aligned_offset_recalloc", "sparkAllocationShimAlignedOffsetRecalloc", false},
-        {ucrt, "_aligned_free", "sparkAllocationShimAlignedFree", false},
-        {ucrt, "_malloc_base", "sparkAllocationShimMallocBase", false},
-        {ucrt, "_calloc_base", "sparkAllocationShimCallocBase", false},
-        {ucrt, "_realloc_base", "sparkAllocationShimReallocBase", false},
-        {ucrt, "_free_base", "sparkAllocationShimFreeBase", false},
-        {kernel32, "HeapAlloc", "sparkAllocationShimHeapAlloc", false},
-        {kernel32, "HeapReAlloc", "sparkAllocationShimHeapReAlloc", false},
-        {kernel32, "HeapFree", "sparkAllocationShimHeapFree", false},
+        {.module = ucrt, .name = "malloc", .shim_export = "sparkAllocationShimMalloc", .required_coverage = true},
+        {.module = ucrt, .name = "calloc", .shim_export = "sparkAllocationShimCalloc", .required_coverage = false},
+        {.module = ucrt, .name = "realloc", .shim_export = "sparkAllocationShimRealloc", .required_coverage = false},
+        {.module = ucrt, .name = "_recalloc", .shim_export = "sparkAllocationShimRecalloc", .required_coverage = false},
+        {.module = ucrt, .name = "free", .shim_export = "sparkAllocationShimFree", .required_coverage = true},
+        {.module = ucrt,
+         .name = "_aligned_malloc",
+         .shim_export = "sparkAllocationShimAlignedMalloc",
+         .required_coverage = false},
+        {.module = ucrt,
+         .name = "_aligned_realloc",
+         .shim_export = "sparkAllocationShimAlignedRealloc",
+         .required_coverage = false},
+        {.module = ucrt,
+         .name = "_aligned_recalloc",
+         .shim_export = "sparkAllocationShimAlignedRecalloc",
+         .required_coverage = false},
+        {.module = ucrt,
+         .name = "_aligned_offset_malloc",
+         .shim_export = "sparkAllocationShimAlignedOffsetMalloc",
+         .required_coverage = false},
+        {.module = ucrt,
+         .name = "_aligned_offset_realloc",
+         .shim_export = "sparkAllocationShimAlignedOffsetRealloc",
+         .required_coverage = false},
+        {.module = ucrt,
+         .name = "_aligned_offset_recalloc",
+         .shim_export = "sparkAllocationShimAlignedOffsetRecalloc",
+         .required_coverage = false},
+        {.module = ucrt,
+         .name = "_aligned_free",
+         .shim_export = "sparkAllocationShimAlignedFree",
+         .required_coverage = false},
+        {.module = ucrt,
+         .name = "_malloc_base",
+         .shim_export = "sparkAllocationShimMallocBase",
+         .required_coverage = false},
+        {.module = ucrt,
+         .name = "_calloc_base",
+         .shim_export = "sparkAllocationShimCallocBase",
+         .required_coverage = false},
+        {.module = ucrt,
+         .name = "_realloc_base",
+         .shim_export = "sparkAllocationShimReallocBase",
+         .required_coverage = false},
+        {.module = ucrt,
+         .name = "_free_base",
+         .shim_export = "sparkAllocationShimFreeBase",
+         .required_coverage = false},
+        {.module = kernel32,
+         .name = "HeapAlloc",
+         .shim_export = "sparkAllocationShimHeapAlloc",
+         .required_coverage = false},
+        {.module = kernel32,
+         .name = "HeapReAlloc",
+         .shim_export = "sparkAllocationShimHeapReAlloc",
+         .required_coverage = false},
+        {.module = kernel32,
+         .name = "HeapFree",
+         .shim_export = "sparkAllocationShimHeapFree",
+         .required_coverage = false},
     };
     for (const Candidate &candidate : candidates) {
         if (sameExport(candidate.module, candidate.name, address)) {
@@ -110,7 +152,7 @@ bool describeTarget(void *address, TargetDescription &description) noexcept
 bool moduleDirectory(std::wstring &directory, std::string &error)
 {
     HMODULE owner = nullptr;
-    const auto address = reinterpret_cast<LPCWSTR>(reinterpret_cast<std::uintptr_t>(&moduleDirectory));
+    LPCWSTR address = reinterpret_cast<LPCWSTR>(&moduleDirectory);
     if (::GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
                              address, &owner) == FALSE) {
         error = "GetModuleHandleExW for Spark allocation hook module failed: " + std::to_string(::GetLastError());
@@ -150,8 +192,7 @@ bool loadShim(ShimApi &api, std::string &error)
     }
 
     api.pin = proc<spark::WindowsAllocationShimPinFn>(api.module, "sparkAllocationShimPin");
-    api.configure =
-        proc<spark::WindowsAllocationShimConfigureFn>(api.module, "sparkAllocationShimConfigure");
+    api.configure = proc<spark::WindowsAllocationShimConfigureFn>(api.module, "sparkAllocationShimConfigure");
     api.activate = proc<spark::WindowsAllocationShimActivateFn>(api.module, "sparkAllocationShimActivate");
     api.begin_deactivate =
         proc<spark::WindowsAllocationShimBeginDeactivateFn>(api.module, "sparkAllocationShimBeginDeactivate");
@@ -294,59 +335,60 @@ extern "C" funchook_t *funchook_create(void)
     }
 }
 
-extern "C" int funchook_prepare(funchook_t *context, void **target_func, void *hook_func)
+extern "C" int funchook_prepare(funchook_t *funchook, void **target_func, void *hook_func)
 {
-    if (context == nullptr || target_func == nullptr || *target_func == nullptr || hook_func == nullptr) {
+    if (funchook == nullptr || target_func == nullptr || *target_func == nullptr || hook_func == nullptr) {
         return FUNCHOOK_ERROR_INTERNAL;
     }
     try {
         TargetDescription description;
         if (!describeTarget(*target_func, description)) {
-            context->error = "unsupported Windows allocation hook target";
+            funchook->error = "unsupported Windows allocation hook target";
             return FUNCHOOK_ERROR_INTERNAL;
         }
-        context->records.push_back({.name = description.name,
-                                    .shim_export = description.shim_export,
-                                    .original = *target_func,
-                                    .handler = hook_func,
-                                    .required_coverage = description.required_coverage});
+        funchook->records.push_back({.name = description.name,
+                                     .shim_export = description.shim_export,
+                                     .original = *target_func,
+                                     .handler = hook_func,
+                                     .required_coverage = description.required_coverage});
         return FUNCHOOK_ERROR_SUCCESS;
     }
     catch (...) {
-        context->error = "could not prepare Windows IAT allocation hook target";
+        funchook->error = "could not prepare Windows IAT allocation hook target";
         return FUNCHOOK_ERROR_INTERNAL;
     }
 }
 
-extern "C" int funchook_install(funchook_t *context, int flags)
+extern "C" int funchook_install(funchook_t *funchook, int flags)
 {
     (void)flags;
-    if (context == nullptr) {
+    if (funchook == nullptr) {
         return FUNCHOOK_ERROR_INTERNAL;
     }
-    if (context->installed) {
+    if (funchook->installed) {
         return FUNCHOOK_ERROR_SUCCESS;
     }
     try {
-        context->error.clear();
-        if (context->records.empty()) {
-            context->error = "Windows IAT allocation hook target list is empty";
+        funchook->error.clear();
+        if (funchook->records.empty()) {
+            funchook->error = "Windows IAT allocation hook target list is empty";
             return FUNCHOOK_ERROR_INTERNAL;
         }
-        if (!loadShim(context->shim, context->error)) {
+        if (!loadShim(funchook->shim, funchook->error)) {
             return FUNCHOOK_ERROR_INTERNAL;
         }
 
         spark::WindowsAllocationShimTable originals{};
         spark::WindowsAllocationShimTable handlers{};
         std::vector<spark::WindowsIatHookTarget> targets;
-        targets.reserve(context->records.size());
-        for (const HookRecord &record : context->records) {
+        targets.reserve(funchook->records.size());
+        for (const HookRecord &record : funchook->records) {
             setTableEntry(originals, record.name, record.original);
             setTableEntry(handlers, record.name, record.handler);
-            void *replacement = reinterpret_cast<void *>(::GetProcAddress(context->shim.module, record.shim_export));
+            void *replacement = reinterpret_cast<void *>(::GetProcAddress(funchook->shim.module, record.shim_export));
             if (replacement == nullptr) {
-                context->error = std::string("spark_allocation_shim.dll is missing hook export: ") + record.shim_export;
+                funchook->error =
+                    std::string("spark_allocation_shim.dll is missing hook export: ") + record.shim_export;
                 return FUNCHOOK_ERROR_INTERNAL;
             }
             targets.push_back({.import_name = record.name,
@@ -355,57 +397,57 @@ extern "C" int funchook_install(funchook_t *context, int flags)
                                .replacement = replacement,
                                .required = record.required_coverage});
         }
-        if (context->shim.configure(&originals) == 0) {
-            context->error = "Windows allocation shim rejected the original allocator table";
+        if (funchook->shim.configure(&originals) == 0) {
+            funchook->error = "Windows allocation shim rejected the original allocator table";
             return FUNCHOOK_ERROR_INTERNAL;
         }
 
         auto backend = spark::makeNativeWindowsIatHookBackend(reinterpret_cast<void *>(&funchook_install));
         if (backend == nullptr) {
-            context->error = "native Windows IAT hook backend is unavailable";
+            funchook->error = "native Windows IAT hook backend is unavailable";
             return FUNCHOOK_ERROR_INTERNAL;
         }
-        context->hooks = std::make_unique<spark::WindowsIatHooks>(std::move(backend));
-        if (!context->hooks->configure(std::move(targets), context->error) ||
-            !context->hooks->install(context->error)) {
-            context->hooks.reset();
+        funchook->hooks = std::make_unique<spark::WindowsIatHooks>(std::move(backend));
+        if (!funchook->hooks->configure(std::move(targets), funchook->error) ||
+            !funchook->hooks->install(funchook->error)) {
+            funchook->hooks.reset();
             return FUNCHOOK_ERROR_INTERNAL;
         }
-        if (context->shim.activate(&handlers) == 0) {
+        if (funchook->shim.activate(&handlers) == 0) {
             std::string uninstall_error;
-            (void)context->hooks->uninstall(uninstall_error);
-            context->hooks.reset();
-            context->error = "Windows allocation shim could not publish Spark handlers";
+            (void)funchook->hooks->uninstall(uninstall_error);
+            funchook->hooks.reset();
+            funchook->error = "Windows allocation shim could not publish Spark handlers";
             if (!uninstall_error.empty()) {
-                context->error += "; IAT rollback: " + uninstall_error;
+                funchook->error += "; IAT rollback: " + uninstall_error;
             }
             return FUNCHOOK_ERROR_INTERNAL;
         }
-        context->installed = true;
+        funchook->installed = true;
         return FUNCHOOK_ERROR_SUCCESS;
     }
     catch (const std::exception &exception) {
-        context->error = std::string("Windows IAT allocation hook install failed: ") + exception.what();
+        funchook->error = std::string("Windows IAT allocation hook install failed: ") + exception.what();
         return FUNCHOOK_ERROR_INTERNAL;
     }
     catch (...) {
-        context->error = "Windows IAT allocation hook install failed";
+        funchook->error = "Windows IAT allocation hook install failed";
         return FUNCHOOK_ERROR_INTERNAL;
     }
 }
 
-extern "C" int funchook_uninstall(funchook_t *context, int flags)
+extern "C" int funchook_uninstall(funchook_t *funchook, int flags)
 {
     (void)flags;
-    if (context == nullptr) {
+    if (funchook == nullptr) {
         return FUNCHOOK_ERROR_INTERNAL;
     }
-    if (!context->installed) {
+    if (!funchook->installed) {
         return FUNCHOOK_ERROR_NOT_INSTALLED;
     }
 
-    context->error.clear();
-    if (!deactivateShim(context->shim, context->error)) {
+    funchook->error.clear();
+    if (!deactivateShim(funchook->shim, funchook->error)) {
         return FUNCHOOK_ERROR_INTERNAL;
     }
 
@@ -413,34 +455,34 @@ extern "C" int funchook_uninstall(funchook_t *context, int flags)
     // plugin handlers, stale or ownership-uncertain IAT entries are still safe:
     // they can only execute the pinned fallback path. Restoration is therefore
     // best-effort for cleanliness, not a prerequisite for unload safety.
-    if (context->hooks != nullptr) {
+    if (funchook->hooks != nullptr) {
         std::string detach_error;
-        if (!context->hooks->uninstall(detach_error) && context->error.empty()) {
-            context->error = "Windows allocation IAT detach left safe shim entries active: " + detach_error;
+        if (!funchook->hooks->uninstall(detach_error) && funchook->error.empty()) {
+            funchook->error = "Windows allocation IAT detach left safe shim entries active: " + detach_error;
         }
     }
-    context->installed = false;
+    funchook->installed = false;
     return FUNCHOOK_ERROR_SUCCESS;
 }
 
-extern "C" int funchook_destroy(funchook_t *context)
+extern "C" int funchook_destroy(funchook_t *funchook)
 {
-    if (context == nullptr) {
+    if (funchook == nullptr) {
         return FUNCHOOK_ERROR_SUCCESS;
     }
-    if (context->installed) {
-        context->error = "Windows allocation hook context is still installed";
+    if (funchook->installed) {
+        funchook->error = "Windows allocation hook context is still installed";
         return FUNCHOOK_ERROR_INTERNAL;
     }
-    if (context->shim.module != nullptr) {
-        ::FreeLibrary(context->shim.module);
-        context->shim.module = nullptr;
+    if (funchook->shim.module != nullptr) {
+        ::FreeLibrary(funchook->shim.module);
+        funchook->shim.module = nullptr;
     }
-    delete context;
+    delete funchook;
     return FUNCHOOK_ERROR_SUCCESS;
 }
 
-extern "C" const char *funchook_error_message(funchook_t *context)
+extern "C" const char *funchook_error_message(funchook_t *funchook)
 {
-    return context == nullptr ? "Windows IAT allocation hook context is null" : context->error.c_str();
+    return funchook == nullptr ? "Windows IAT allocation hook context is null" : funchook->error.c_str();
 }

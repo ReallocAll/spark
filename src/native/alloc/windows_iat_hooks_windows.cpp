@@ -104,12 +104,11 @@ private:
     HMODULE module_ = nullptr;
 };
 
-PinnedModule pinAddress(std::uintptr_t address) noexcept
+PinnedModule pinAddress(const void *address) noexcept
 {
     HMODULE module = nullptr;
-    if (address == 0 || ::GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
-                                             reinterpret_cast<LPCWSTR>(address),  // NOLINT(performance-no-int-to-ptr)
-                                             &module) == FALSE) {
+    if (address == nullptr || ::GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+                                                   reinterpret_cast<LPCWSTR>(address), &module) == FALSE) {
         return {};
     }
     return PinnedModule(module);
@@ -131,7 +130,7 @@ bool moduleIdentity(HMODULE module, WindowsIatModuleIdentity &identity, std::str
         return false;
     }
 
-    const auto base = reinterpret_cast<std::uintptr_t>(info.lpBaseOfDll);
+    const auto *base = static_cast<const std::byte *>(info.lpBaseOfDll);
     const auto *dos = reinterpret_cast<const IMAGE_DOS_HEADER *>(base);
     if (dos->e_magic != IMAGE_DOS_SIGNATURE || dos->e_lfanew < 0 ||
         !spanInside(static_cast<std::uint32_t>(dos->e_lfanew), sizeof(IMAGE_NT_HEADERS64), info.SizeOfImage)) {
@@ -150,7 +149,7 @@ bool moduleIdentity(HMODULE module, WindowsIatModuleIdentity &identity, std::str
         return false;
     }
 
-    identity = {.base = base,
+    identity = {.base = reinterpret_cast<std::uintptr_t>(base),
                 .image_size = info.SizeOfImage,
                 .timestamp = nt->FileHeader.TimeDateStamp,
                 .checksum = nt->OptionalHeader.CheckSum};
@@ -205,7 +204,7 @@ public:
             if (observed == nullptr || observed == excluded_module_) {
                 continue;
             }
-            PinnedModule pinned = pinAddress(reinterpret_cast<std::uintptr_t>(observed));
+            PinnedModule pinned = pinAddress(observed);
             if (!pinned) {
                 continue;  // Unloaded between enumeration and pinning.
             }
@@ -269,8 +268,8 @@ public:
         }
 
         std::atomic_ref<std::uintptr_t> atomic_slot(*address);
-        std::uintptr_t expected_value = reinterpret_cast<std::uintptr_t>(expected);
-        const std::uintptr_t desired_value = reinterpret_cast<std::uintptr_t>(desired);
+        auto expected_value = reinterpret_cast<std::uintptr_t>(expected);
+        const auto desired_value = reinterpret_cast<std::uintptr_t>(desired);
         const bool exchanged = atomic_slot.compare_exchange_strong(
             expected_value, desired_value, std::memory_order_acq_rel, std::memory_order_acquire);
         void *observed = reinterpret_cast<void *>(expected_value);  // NOLINT(performance-no-int-to-ptr)
@@ -289,7 +288,7 @@ private:
                                 const std::vector<WindowsIatHookTarget> &targets, std::vector<WindowsIatSlot> &slots,
                                 std::string &error)
     {
-        const std::uintptr_t base = identity.base;
+        const auto *base = reinterpret_cast<const std::byte *>(module);
         const auto *dos = reinterpret_cast<const IMAGE_DOS_HEADER *>(base);
         const auto *nt = reinterpret_cast<const IMAGE_NT_HEADERS64 *>(base + static_cast<std::uint32_t>(dos->e_lfanew));
         const IMAGE_DATA_DIRECTORY directory = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
@@ -367,14 +366,15 @@ private:
                 }
             }
         }
-        (void)module;
         return true;
     }
 
     static WindowsIatAccessStatus resolveSlot(const WindowsIatSlot &slot, PinnedModule &pinned,
                                               std::uintptr_t *&address, std::string &error) noexcept
     {
-        pinned = pinAddress(slot.module.base);
+        // Stable module identity stores the image base as an integer across scans.
+        // NOLINTNEXTLINE(performance-no-int-to-ptr)
+        pinned = pinAddress(reinterpret_cast<void *>(slot.module.base));
         if (!pinned || reinterpret_cast<std::uintptr_t>(pinned.get()) != slot.module.base) {
             return WindowsIatAccessStatus::Stale;
         }
@@ -403,8 +403,8 @@ private:
             return WindowsIatAccessStatus::Error;
         }
 
-        const std::uintptr_t raw = current.base + slot.slot_rva;
-        if (raw % alignof(std::uintptr_t) != 0) {
+        auto *raw = reinterpret_cast<std::byte *>(pinned.get()) + slot.slot_rva;
+        if (reinterpret_cast<std::uintptr_t>(raw) % alignof(std::uintptr_t) != 0) {
             try {
                 error = "Windows IAT slot is not pointer-aligned";
             }
@@ -413,7 +413,7 @@ private:
             }
             return WindowsIatAccessStatus::Error;
         }
-        address = reinterpret_cast<std::uintptr_t *>(raw);  // NOLINT(performance-no-int-to-ptr)
+        address = reinterpret_cast<std::uintptr_t *>(raw);
         return WindowsIatAccessStatus::Accessible;
     }
 

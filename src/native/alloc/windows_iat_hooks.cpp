@@ -55,6 +55,7 @@ WindowsIatHooks::~WindowsIatHooks()
     catch (...) {
         // The owning AllocationSampler must prove detach before module unload.
         // The destructor is only a best-effort fallback and must not throw.
+        return;
     }
 }
 
@@ -355,9 +356,13 @@ bool WindowsIatHooks::restoreSlot(const WindowsIatSlot &slot, std::string &error
         (after_status == WindowsIatAccessStatus::Accessible && current != target.replacement)) {
         return true;
     }
-    const std::string reason = !exchange_error.empty()
-                                 ? exchange_error
-                                 : (!read_error.empty() ? read_error : "Windows IAT slot still points at the hook");
+    std::string reason = "Windows IAT slot still points at the hook";
+    if (!read_error.empty()) {
+        reason = read_error;
+    }
+    if (!exchange_error.empty()) {
+        reason = exchange_error;
+    }
     markUnsafe(reason, error);
     return false;
 }
