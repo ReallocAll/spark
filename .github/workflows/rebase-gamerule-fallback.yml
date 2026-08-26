@@ -1,0 +1,28 @@
+name: Rebase Gamerule Fallback
+
+on:
+  push:
+    branches: [feat/gamerule-default-fallback]
+    paths:
+      - ".github/workflows/rebase-gamerule-fallback.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  rebase:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: feat/gamerule-default-fallback
+          fetch-depth: 0
+      - name: Rebase onto current develop
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin develop
+          git rebase origin/develop
+          git push --force-with-lease origin HEAD:feat/gamerule-default-fallback
