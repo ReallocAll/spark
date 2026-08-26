@@ -45,7 +45,7 @@ void testStatisticsRecordingDelayAndAnchors()
     spark::StatisticsService statistics;
     statistics.startAt(1'000, 5'000'000, initialCpu());
     statistics.recordPlayerCountAt(2, 1'000);
-    statistics.recordWorldGaugesAt(10, 20, 1'000);
+    statistics.recordWorldGaugesAt(10, 0, 20, false, 1'000);
     for (std::int64_t timestamp = 1'500; timestamp < 11'000; timestamp += 500) {
         statistics.recordTickAt(10.0, timestamp);
     }
@@ -53,7 +53,7 @@ void testStatisticsRecordingDelayAndAnchors()
 
     statistics.recordTickAt(20.0, 11'000);
     statistics.recordPlayerCountAt(4, 11'001);
-    statistics.recordWorldGaugesAt(30, 40, 11'001);
+    statistics.recordWorldGaugesAt(30, 7, 40, true, 11'001);
     statistics.recordPlayerPingAt({.mean = 30.0, .max = 50.0, .min = 10.0, .median = 30.0, .percentile95 = 50.0},
                                   11'001);
 
@@ -71,7 +71,8 @@ void testStatisticsRecordingDelayAndAnchors()
     assert(snapshot.world_info.front().players == 4);
     assert(snapshot.world_info.front().entities == 30);
     assert(snapshot.world_info.front().chunks == 40);
-    assert(snapshot.world_info.front().tile_entities == 0);
+    assert(snapshot.world_info.front().tile_entities == 7);
+    assert(snapshot.world_info.front().tile_entities_present);
     assert(snapshot.player_ping.front().values.mean == 30.0);
     assert(std::isfinite(snapshot.tps.front().value));
 }
