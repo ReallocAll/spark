@@ -1,0 +1,52 @@
+name: Apply allocation frame filter fix
+
+on:
+  push:
+    branches:
+      - fix/windows-allocation-safe-hooks
+    paths:
+      - .github/workflows/apply-allocation-frame-filter-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: fix/windows-allocation-safe-hooks
+          fetch-depth: 0
+      - name: Patch instrumentation filtering
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/native/alloc/allocation_sampler_windows.cpp')
+          text = path.read_text()
+
+          old = '''bool isLeadingAllocatorRuntime(const std::string &path)\n{\n    const std::string name = moduleBasename(path);\n    return equalsIgnoreCase(name, "spark.dll") || equalsIgnoreCase(name, "endstone_spark.dll") ||\n           startsWithIgnoreCase(name, "endstone_spark-") || equalsIgnoreCase(name, "spark_allocation_shim.dll") ||\n           equalsIgnoreCase(name, "ucrtbase.dll") || equalsIgnoreCase(name, "vcruntime140.dll") ||\n           equalsIgnoreCase(name, "vcruntime140_1.dll") || equalsIgnoreCase(name, "msvcp140.dll");\n}\n'''
+          new = '''bool isSparkAllocationInstrumentation(const std::string &path)\n{\n    const std::string name = moduleBasename(path);\n    return equalsIgnoreCase(name, "spark.dll") || equalsIgnoreCase(name, "endstone_spark.dll") ||\n           startsWithIgnoreCase(name, "endstone_spark-") || equalsIgnoreCase(name, "spark_allocation_shim.dll");\n}\n\nbool isLeadingAllocatorRuntime(const std::string &path)\n{\n    const std::string name = moduleBasename(path);\n    return equalsIgnoreCase(name, "ucrtbase.dll") || equalsIgnoreCase(name, "vcruntime140.dll") ||\n           equalsIgnoreCase(name, "vcruntime140_1.dll") || equalsIgnoreCase(name, "msvcp140.dll");\n}\n'''
+          if text.count(old) != 1:
+              raise SystemExit('allocator runtime helper pattern did not match exactly once')
+          text = text.replace(old, new)
+
+          old_loop = '''            FrameKey key = frameKeyForAddress(raw, path);\n            if (leading && isLeadingAllocatorRuntime(path)) {\n                continue;\n            }\n            leading = false;\n            sample.frames.push_back(key);\n'''
+          new_loop = '''            FrameKey key = frameKeyForAddress(raw, path);\n            if (isSparkAllocationInstrumentation(path)) {\n                continue;\n            }\n            if (leading && isLeadingAllocatorRuntime(path)) {\n                continue;\n            }\n            leading = false;\n            sample.frames.push_back(key);\n'''
+          if text.count(old_loop) != 2:
+              raise SystemExit(f'expected two sample filtering loops, found {text.count(old_loop)}')
+          text = text.replace(old_loop, new_loop)
+          path.write_text(text)
+          PY
+      - name: Format changed source
+        run: |
+          clang-format-20 -i src/native/alloc/allocation_sampler_windows.cpp
+      - name: Commit production fix
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/native/alloc/allocation_sampler_windows.cpp
+          git diff --cached --check
+          git commit -m "fix: filter Windows allocation instrumentation frames"
+          git push origin HEAD:fix/windows-allocation-safe-hooks
