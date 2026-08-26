@@ -1664,33 +1664,13 @@ struct AllocationSampler::Impl {
             error = "allocation hook state is unknown after an earlier lifecycle failure";
             return false;
         }
-        SuspendedProcessThreads suspended;
-        if (!suspended.suspendStable(error)) {
-            return false;
-        }
 
         const int code = funchook_install(hooks, 0);
-        DWORD rollback_failure = ERROR_SUCCESS;
-        const bool rollback_ok = code == FUNCHOOK_ERROR_SUCCESS || restoreOriginalTargets(rollback_failure);
-        std::string resume_error;
-        const bool resumed = suspended.resume(resume_error);
         if (code != FUNCHOOK_ERROR_SUCCESS) {
             error = hookError("funchook_install", code);
-            if (!rollback_ok) {
-                hook_state_unknown = true;
-                hooks_installed.store(true, std::memory_order_release);
-                error += "; restoring partially installed entry hooks failed: " + std::to_string(rollback_failure);
-            }
-            if (!resume_error.empty()) {
-                error += "; " + resume_error;
-            }
             return false;
         }
         hooks_installed.store(true, std::memory_order_release);
-        if (!resumed) {
-            error = resume_error;
-            return false;
-        }
         return true;
     }
 
@@ -1707,63 +1687,18 @@ struct AllocationSampler::Impl {
             return true;
         }
 
-        SuspendedProcessThreads suspended;
-        if (!suspended.suspendStable(error)) {
-            return false;
-        }
-
-        bool instruction_in_protected_code = false;
-        std::uint32_t inspect_failure = 0;
-        std::uint32_t inspect_thread = 0;
-        const bool inspected = suspended.anyInstructionPointerInRanges(
-            protected_code_ranges, instruction_in_protected_code, inspect_failure, inspect_thread);
-        const bool active_calls = anyActiveHookCalls();
-        if (!inspected || instruction_in_protected_code || active_calls) {
-            std::string resume_error;
-            const bool resumed = suspended.resume(resume_error);
-            if (!inspected) {
-                error = "GetThreadContext failed for thread " + std::to_string(inspect_thread) + ": " +
-                        std::to_string(inspect_failure);
-            }
-            else {
-                error = "allocation hook calls are still active during shutdown";
-            }
-            if (!resumed) {
-                error += "; " + resume_error;
-            }
-            return false;
-        }
-
+        // The IAT backend closes the pinned shim admission gate first, drains
+        // callbacks that already entered Spark, clears the callback table, and
+        // only then restores IAT slots that are still owned by us. Suspending
+        // process threads here would deadlock that drain and is unnecessary for
+        // ownership-safe IAT compare/exchange.
         const int code = funchook_uninstall(hooks, 0);
-        DWORD rollback_failure = ERROR_SUCCESS;
-        const bool restored = code == FUNCHOOK_ERROR_SUCCESS || restoreOriginalTargets(rollback_failure);
-        std::string resume_error;
-        const bool resumed = suspended.resume(resume_error);
-        if (code == FUNCHOOK_ERROR_SUCCESS) {
-            hooks_installed.store(false, std::memory_order_release);
-            hook_state_unknown = false;
-        }
         if (code != FUNCHOOK_ERROR_SUCCESS) {
             error = hookError("funchook_uninstall", code);
-            if (!restored) {
-                hook_state_unknown = true;
-                error += "; restoring allocator entry bytes failed: " + std::to_string(rollback_failure);
-            }
-            else if (hook_state_unknown && code == FUNCHOOK_ERROR_NOT_INSTALLED) {
-                // A failed install can leave funchook's internal installed flag
-                // clear even though an entry write partially succeeded. Manual
-                // byte restoration is authoritative in that state.
-                hooks_installed.store(false, std::memory_order_release);
-            }
-            if (!resume_error.empty()) {
-                error += "; " + resume_error;
-            }
             return false;
         }
-        if (!resumed) {
-            error = resume_error;
-            return false;
-        }
+        hooks_installed.store(false, std::memory_order_release);
+        hook_state_unknown = false;
         return true;
     }
 
@@ -1823,9 +1758,6 @@ struct AllocationSampler::Impl {
             return false;
         }
 
-        if (!waitForQuiescence(error)) {
-            return false;
-        }
         const int code = funchook_destroy(hooks);
         if (code != FUNCHOOK_ERROR_SUCCESS) {
             error = "funchook_destroy failed (code " + std::to_string(code) + ")";
@@ -2360,22 +2292,12 @@ struct AllocationSampler::Impl {
         }
         freeEventPool();
 
-        if (hooks_installed.load(std::memory_order_acquire)) {
-            std::string last_error;
-            const std::uint64_t uninstall_deadline = monotonicMs() + 30000;
-            while (hooks_installed.load(std::memory_order_acquire)) {
-                if (!uninstallHooks(last_error)) {
-                    // GetThreadContext can fail on starting/exiting threads; retry within the deadline.
-                    if (monotonicMs() >= uninstall_deadline) {
-                        break;
-                    }
-                    ::Sleep(1);
-                }
-            }
-            if (hooks_installed.load(std::memory_order_acquire)) {
-                error = "could not remove allocation hooks during shutdown: " + last_error;
-                return false;
-            }
+        // funchook_uninstall is the compatibility entry point for the native
+        // IAT backend. It performs the bounded pinned-shim gate/drain and
+        // ownership-safe detach, so a process-wide retry loop is neither
+        // necessary nor safe.
+        if (hooks_installed.load(std::memory_order_acquire) && !uninstallHooks(error)) {
+            return false;
         }
 
         return destroyHooks(error);
