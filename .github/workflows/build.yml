@@ -150,6 +150,7 @@ jobs:
           path: |
             build/RelWithDebInfo/endstone_spark.dll
             build/RelWithDebInfo/endstone_spark.pdb
+            build/RelWithDebInfo/spark_allocation_shim.dll
           if-no-files-found: error
           retention-days: 14
 
@@ -175,7 +176,7 @@ jobs:
           sudo apt-get install -y clang-tidy-20 libc++-20-dev libc++abi-20-dev
           sudo ln -sf /usr/bin/clang-20 /usr/local/bin/clang
           sudo ln -sf /usr/bin/clang++-20 /usr/local/bin/clang++
-          clang --version | grep -E "clang version 20\."
+          clang --version | grep -E "clang version 20\\."
 
       - name: Set up Python
         uses: actions/setup-python@v6
