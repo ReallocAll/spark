@@ -1,6 +1,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <string>
+#include <string_view>
 #include <vector>
 
 #include "native/sampler/call_tree.h"
@@ -11,6 +13,11 @@ namespace spark {
 
 struct SamplerTestAccess {
     static bool accept(Sampler &sampler, const Sample &sample) { return sampler.acceptSample(sample); }
+
+    static void journalModuleDefinitions(Sampler &sampler, const Sample &sample)
+    {
+        sampler.journalModuleDefinitions(sample);
+    }
 
     static void reset(Sampler &sampler) { sampler.resetSession(); }
 
@@ -24,6 +31,20 @@ struct SamplerTestAccess {
 }  // namespace spark
 
 namespace {
+
+class RecordingRecoverySink final : public spark::RecoverySink {
+public:
+    void journalModuleDef(std::uint32_t module_id, std::string_view path) override
+    {
+        events.push_back("module:" + std::to_string(module_id) + ":" + std::string(path));
+    }
+
+    void journalThreadDef(std::uint64_t, std::uint64_t, std::string_view) override { events.emplace_back("thread"); }
+    void journalSample(const spark::Sample &) override { events.emplace_back("sample"); }
+    void journalTickEvent(std::uint64_t, double) override { events.emplace_back("tick"); }
+
+    std::vector<std::string> events;
+};
 
 spark::FrameKey frame(std::uint64_t rva)
 {
@@ -99,6 +120,28 @@ bool combinedTreeBudgetIsTransactional()
            sampler.droppedSamples() == 1 && sampler.profileStorageExhausted() && sampler.dataIncomplete();
 }
 
+bool recoveryModuleDefinitionsPrecedeSamples()
+{
+    spark::Sampler sampler;
+    spark::SamplerTestAccess::reset(sampler);
+    RecordingRecoverySink sink;
+    sampler.setRecoverySink(&sink);
+
+    spark::Sample sample{
+        .frames = {{.module = 4, .rva = 12, .raw_address = 12}},
+        .recovery_module_definitions = {{.module_id = 4, .path = "module-four.so"}},
+        .thread_id = 7,
+        .thread_name = "thread",
+        .window = 1,
+    };
+    spark::SamplerTestAccess::journalModuleDefinitions(sampler, sample);
+    if (!spark::SamplerTestAccess::accept(sampler, sample)) {
+        return false;
+    }
+    const std::vector<std::string> expected = {"module:4:module-four.so", "thread", "sample"};
+    return sink.events == expected;
+}
+
 bool excessThreadsUseOverflowRoot()
 {
     spark::Sampler sampler;
@@ -123,7 +166,8 @@ bool excessThreadsUseOverflowRoot()
 int main()
 {
     if (!transactionalNodeAndTimeBudget() || !pruningReclaimsExactStorage() || !boundedModulesAndSamplerConstants() ||
-        !combinedTreeBudgetIsTransactional() || !excessThreadsUseOverflowRoot()) {
+        !combinedTreeBudgetIsTransactional() || !recoveryModuleDefinitionsPrecedeSamples() ||
+        !excessThreadsUseOverflowRoot()) {
         std::fprintf(stderr, "bounded aggregation test failed\n");
         return 1;
     }

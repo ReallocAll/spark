@@ -140,6 +140,7 @@ private:
     void samplerLoop();
     void aggregatorLoop();
     bool acceptSample(const Sample &sample);
+    void journalModuleDefinitions(const Sample &sample);
     void flushOrDrop(std::uint64_t tick_id, bool keep);
     void resetSession();
     static std::int32_t currentWindow();
@@ -198,6 +199,7 @@ private:
 
     // sampler-thread state
     ModuleTable modules_{kModuleCapacity};
+    std::vector<RecoveryModuleDefinition> pending_recovery_module_definitions_;
 
     // main-thread state (written by onTick, read at export after join)
     std::map<std::int32_t, WindowTickStats> window_ticks_;

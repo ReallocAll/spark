@@ -15,6 +15,11 @@ inline constexpr ModuleId kInvalidModule = 0xffffffffu;
 // Must be journaled as ModuleDef(0, ...) so recovery can remap overflow frames.
 inline constexpr std::string_view kOtherModulesSentinel = "<other modules>";
 
+struct RecoveryModuleDefinition {
+    ModuleId module_id = kInvalidModule;
+    std::string path;
+};
+
 // A stack frame identified by its module and module-relative address (RVA). This
 // is stable across the run and is all we need to aggregate; symbol resolution is
 // deferred to export time.
@@ -75,6 +80,10 @@ private:
 // One captured stack, ordered leaf (index 0) -> root.
 struct Sample {
     std::vector<FrameKey> frames;
+    // Module definitions first observed by the sampler thread. They travel
+    // with the next successfully queued sample so the aggregator can journal
+    // definitions before any sample that references them.
+    std::vector<RecoveryModuleDefinition> recovery_module_definitions;
     std::uint64_t thread_id = 0;
     std::uint64_t os_thread_id = 0;
     std::string thread_name;
