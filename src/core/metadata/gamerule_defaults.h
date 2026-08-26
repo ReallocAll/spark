@@ -122,7 +122,7 @@ inline constexpr std::pair<std::string_view, std::string_view> kCurrentDefaults[
     {"freezedamage", "true"},
     {"functioncommandlimit", "10000"},
     {"keepinventory", "false"},
-    {"maxcommandchainlength", "65535"},
+    {"maxcommandchainlength", "65536"},
     {"mobgriefing", "true"},
     {"naturalregeneration", "true"},
     {"playerssleepingpercentage", "100"},
