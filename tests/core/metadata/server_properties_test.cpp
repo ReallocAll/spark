@@ -4,6 +4,7 @@
 #include <fstream>
 #include <string>
 
+#include "core/metadata/gamerule_defaults.h"
 #include "core/metadata/server_properties.h"
 
 using namespace spark;  // NOLINT(google-build-using-namespace)
@@ -195,6 +196,58 @@ int main()
         std::filesystem::remove(path);
     }
 
-    std::printf("All server.properties parser tests passed.\n");
+    // Runtime/API default is authoritative over both historical and current fallback metadata.
+    {
+        const auto result = resolveGameRuleDefault("minecraft:spawnRadius", "1.20.30", std::string_view{"77"});
+        assert(result.has_value());
+        assert(*result == "77");
+    }
+
+    // Current fallback table is case-insensitive, namespace-insensitive, and matches fresh BDS 1.26.44.3.
+    {
+        const auto spawn_radius = resolveGameRuleDefault("Minecraft:SpawnRadius", "26.44");
+        const auto random_tick_speed = resolveGameRuleDefault("randomTickSpeed", "1.26.44.3");
+        const auto recipes_unlock = resolveGameRuleDefault("recipesUnlock", "26.44");
+        const auto max_chain = resolveGameRuleDefault("maxCommandChainLength", "26.44");
+        assert(spawn_radius.has_value() && *spawn_radius == "10");
+        assert(random_tick_speed.has_value() && *random_tick_speed == "1");
+        assert(recipes_unlock.has_value() && *recipes_unlock == "true");
+        assert(max_chain.has_value() && *max_chain == "65535");
+    }
+
+    // Historical default changes are sparse overrides, not full version snapshots.
+    {
+        const auto old_spawn_radius = resolveGameRuleDefault("spawnRadius", "1.20.30");
+        const auto changed_spawn_radius = resolveGameRuleDefault("spawnRadius", "1.20.40");
+        const auto old_recipes_unlock = resolveGameRuleDefault("recipesUnlock", "1.20.30.21");
+        assert(old_spawn_radius.has_value() && *old_spawn_radius == "5");
+        assert(changed_spawn_radius.has_value() && *changed_spawn_radius == "10");
+        assert(old_recipes_unlock.has_value() && *old_recipes_unlock == "false");
+    }
+
+    // Unknown/future rules never inherit a guessed default.
+    {
+        assert(!resolveGameRuleDefault("sparkFutureUnknownRule", "26.44").has_value());
+        assert(!currentGameRuleFallback("minecraft:sparkFutureUnknownRule").has_value());
+    }
+
+    // Rename/type migration metadata is deliberately separate from default resolution.
+    {
+        const auto migration = gameRuleMigration("locatorBar");
+        if (!migration.has_value()) {
+            std::fprintf(stderr, "locatorBar migration metadata missing.\n");
+            return 1;
+        }
+        const auto &migration_value = *migration;
+        assert(migration_value.old_name == "locatorbar");
+        assert(migration_value.new_name == "playerwaypoints");
+        assert(migration_value.changed_in == "26.30");
+        assert(migration_value.old_kind == GameRuleValueKind::Boolean);
+        assert(migration_value.new_kind == GameRuleValueKind::Enum);
+        assert(!resolveGameRuleDefault("locatorBar", "26.44").has_value());
+        assert(!resolveGameRuleDefault("playerWaypoints", "26.44").has_value());
+    }
+
+    std::printf("All server.properties and gamerule fallback tests passed.\n");
     return 0;
 }
