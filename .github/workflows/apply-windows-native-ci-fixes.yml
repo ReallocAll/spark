@@ -1,0 +1,156 @@
+name: Apply Windows native CI fixes
+
+on:
+  push:
+    branches:
+      - fix/windows-allocation-safe-hooks
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 0
+
+      - name: Apply native tidy fixes
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          shim = Path('src/native/alloc/windows_allocation_shim.cpp')
+          text = shim.read_text()
+          text = text.replace('gGate', 'GGate').replace('gOriginals', 'GOriginals').replace('gHandlers', 'GHandlers')
+          text = text.replace(
+              '    const auto address = reinterpret_cast<LPCWSTR>(reinterpret_cast<std::uintptr_t>(&sparkAllocationShimPin));\n',
+              '    LPCWSTR address = reinterpret_cast<LPCWSTR>(&sparkAllocationShimPin);\n',
+          )
+          text = re.sub(r'\bconst (spark::Windows[A-Za-z0-9_]+Fn) (original|target)\b', r'\1 \2', text)
+          shim.write_text(text)
+
+          compat = Path('src/native/alloc/windows_iat_funchook_compat.cpp')
+          text = compat.read_text()
+          text = re.sub(
+              r'        \{(ucrt|kernel32), "([^"]+)", "([^"]+)", (true|false)\},',
+              r'        {.module = \1, .name = "\2", .shim_export = "\3", .required_coverage = \4},',
+              text,
+          )
+          text = text.replace(
+              '    const auto address = reinterpret_cast<LPCWSTR>(reinterpret_cast<std::uintptr_t>(&moduleDirectory));\n',
+              '    LPCWSTR address = reinterpret_cast<LPCWSTR>(&moduleDirectory);\n',
+          )
+          text = text.replace('funchook_t *context', 'funchook_t *funchook')
+          text = text.replace('context->', 'funchook->')
+          text = text.replace('context == nullptr', 'funchook == nullptr')
+          text = text.replace('delete context;', 'delete funchook;')
+          compat.write_text(text)
+
+          hooks = Path('src/native/alloc/windows_iat_hooks.cpp')
+          text = hooks.read_text()
+          text = text.replace(
+              '    catch (...) {\n        // The owning AllocationSampler must prove detach before module unload.\n'
+              '        // The destructor is only a best-effort fallback and must not throw.\n    }\n',
+              '    catch (...) {\n        // The owning AllocationSampler must prove detach before module unload.\n'
+              '        // The destructor is only a best-effort fallback and must not throw.\n        return;\n    }\n',
+          )
+          old = '''    const std::string reason = !exchange_error.empty()\n                                 ? exchange_error\n                                 : (!read_error.empty() ? read_error : "Windows IAT slot still points at the hook");\n'''
+          new = '''    std::string reason = "Windows IAT slot still points at the hook";\n    if (!read_error.empty()) {\n        reason = read_error;\n    }\n    if (!exchange_error.empty()) {\n        reason = exchange_error;\n    }\n'''
+          if old not in text:
+              raise SystemExit('restoreSlot reason expression not found')
+          text = text.replace(old, new, 1)
+          hooks.write_text(text)
+
+          native = Path('src/native/alloc/windows_iat_hooks_windows.cpp')
+          text = native.read_text()
+          text = text.replace('PinnedModule pinAddress(std::uintptr_t address) noexcept', 'PinnedModule pinAddress(const void *address) noexcept')
+          text = text.replace('    if (address == 0 || ::GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,\n',
+                              '    if (address == nullptr || ::GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,\n')
+          text = text.replace('                                             reinterpret_cast<LPCWSTR>(address),  // NOLINT(performance-no-int-to-ptr)\n',
+                              '                                             reinterpret_cast<LPCWSTR>(address),\n')
+          text = text.replace(
+              '''    const auto base = reinterpret_cast<std::uintptr_t>(info.lpBaseOfDll);\n    const auto *dos = reinterpret_cast<const IMAGE_DOS_HEADER *>(base);\n''',
+              '''    const auto *base = static_cast<const std::byte *>(info.lpBaseOfDll);\n    const auto *dos = reinterpret_cast<const IMAGE_DOS_HEADER *>(base);\n''',
+          )
+          text = text.replace(
+              '    identity = {.base = base,\n',
+              '    identity = {.base = reinterpret_cast<std::uintptr_t>(base),\n',
+          )
+          text = text.replace('            PinnedModule pinned = pinAddress(reinterpret_cast<std::uintptr_t>(observed));\n',
+                              '            PinnedModule pinned = pinAddress(observed);\n')
+          text = text.replace('        std::uintptr_t expected_value = reinterpret_cast<std::uintptr_t>(expected);\n',
+                              '        auto expected_value = reinterpret_cast<std::uintptr_t>(expected);\n')
+          text = text.replace('        const std::uintptr_t desired_value = reinterpret_cast<std::uintptr_t>(desired);\n',
+                              '        const auto desired_value = reinterpret_cast<std::uintptr_t>(desired);\n')
+          text = text.replace('        const std::uintptr_t base = identity.base;\n',
+                              '        const auto *base = reinterpret_cast<const std::byte *>(module);\n')
+          text = text.replace('        (void)module;\n        return true;\n', '        return true;\n', 1)
+          text = text.replace(
+              '        pinned = pinAddress(slot.module.base);\n',
+              '        // Stable module identity stores the image base as an integer across scans.\n'
+              '        // NOLINTNEXTLINE(performance-no-int-to-ptr)\n'
+              '        pinned = pinAddress(reinterpret_cast<void *>(slot.module.base));\n',
+          )
+          old = '''        const std::uintptr_t raw = current.base + slot.slot_rva;\n        if (raw % alignof(std::uintptr_t) != 0) {\n'''
+          new = '''        auto *raw = reinterpret_cast<std::byte *>(pinned.get()) + slot.slot_rva;\n        if (reinterpret_cast<std::uintptr_t>(raw) % alignof(std::uintptr_t) != 0) {\n'''
+          if old not in text:
+              raise SystemExit('resolveSlot raw pointer block not found')
+          text = text.replace(old, new, 1)
+          text = text.replace('        address = reinterpret_cast<std::uintptr_t *>(raw);  // NOLINT(performance-no-int-to-ptr)\n',
+                              '        address = reinterpret_cast<std::uintptr_t *>(raw);\n')
+          native.write_text(text)
+          PY
+
+      - name: Install clang-format 20
+        shell: bash
+        run: |
+          wget -qO /tmp/llvm.sh https://apt.llvm.org/llvm.sh
+          chmod +x /tmp/llvm.sh
+          sudo /tmp/llvm.sh 20
+          sudo apt-get install -y clang-format-20
+
+      - name: Format and validate
+        shell: bash
+        run: |
+          clang-format-20 -i \
+            src/native/alloc/windows_allocation_shim.cpp \
+            src/native/alloc/windows_iat_funchook_compat.cpp \
+            src/native/alloc/windows_iat_hooks.cpp \
+            src/native/alloc/windows_iat_hooks_windows.cpp
+          python - <<'PY'
+          from pathlib import Path
+          files = [
+              Path('src/native/alloc/windows_allocation_shim.cpp'),
+              Path('src/native/alloc/windows_iat_funchook_compat.cpp'),
+              Path('src/native/alloc/windows_iat_hooks.cpp'),
+              Path('src/native/alloc/windows_iat_hooks_windows.cpp'),
+          ]
+          joined = '\n'.join(path.read_text() for path in files)
+          assert 'gGate' not in joined
+          assert 'gOriginals' not in joined
+          assert 'gHandlers' not in joined
+          assert 'funchook_t *context' not in joined
+          assert 'const spark::WindowsMallocFn original' not in joined
+          assert 'const std::string reason = !exchange_error.empty()' not in joined
+          PY
+          git diff --check
+
+      - name: Commit fixes
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            src/native/alloc/windows_allocation_shim.cpp \
+            src/native/alloc/windows_iat_funchook_compat.cpp \
+            src/native/alloc/windows_iat_hooks.cpp \
+            src/native/alloc/windows_iat_hooks_windows.cpp
+          git diff --cached --quiet && exit 0
+          git commit -m "style: satisfy Windows allocation native checks"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
