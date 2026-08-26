@@ -1,0 +1,74 @@
+name: Apply Gamerule Fallback Integration
+
+on:
+  push:
+    branches: [feat/gamerule-default-fallback]
+    paths:
+      - ".github/workflows/apply-gamerule-fallback.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: feat/gamerule-default-fallback
+      - name: Apply narrow integration patch
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace(path, old, new):
+              p = Path(path)
+              text = p.read_text(encoding="utf-8")
+              if old not in text:
+                  raise SystemExit(f"expected text not found in {path}: {old!r}")
+              p.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          replace(
+              "CMakeLists.txt",
+              "        src/core/metadata/server_properties.cpp\n",
+              "        src/core/metadata/server_properties.cpp\n        src/core/metadata/gamerule_defaults.cpp\n",
+          )
+
+          tests = Path("tests/CMakeLists.txt")
+          text = tests.read_text(encoding="utf-8")
+          anchor = "add_test(NAME spark_arguments_test COMMAND spark_arguments_test)\n"
+          block = '''add_test(NAME spark_arguments_test COMMAND spark_arguments_test)\n\nadd_executable(spark_gamerule_defaults_test core/metadata/gamerule_defaults_test.cpp)\ntarget_link_libraries(spark_gamerule_defaults_test PRIVATE spark_core)\nset_target_properties(spark_gamerule_defaults_test PROPERTIES\n        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")\nadd_test(NAME spark_gamerule_defaults_test COMMAND spark_gamerule_defaults_test)\n'''
+          if anchor not in text:
+              raise SystemExit("tests CMake anchor not found")
+          tests.write_text(text.replace(anchor, block, 1), encoding="utf-8")
+
+          replace(
+              "src/platform/endstone/adapters.cpp",
+              '#include "core/metadata/server_properties.h"\n',
+              '#include "core/metadata/gamerule_defaults.h"\n#include "core/metadata/server_properties.h"\n',
+          )
+          replace(
+              "src/platform/endstone/adapters.cpp",
+              "void appendGameRules(WorldInfo &world, endstone::Level &level, const std::string &world_name,\n                     const std::array<endstone::GameRuleId<T>, N> &rules)\n",
+              "void appendGameRules(WorldInfo &world, endstone::Level &level, const std::string &world_name,\n                     std::string_view minecraft_version, const std::array<endstone::GameRuleId<T>, N> &rules)\n",
+          )
+          replace(
+              "src/platform/endstone/adapters.cpp",
+              "        info.name = std::string(id.getKey());\n        info.world_values[world_name] = formatGameRuleValue(endstone::GameRuleValue{level.getGameRule(id)});\n",
+              "        info.name = std::string(id.getKey());\n        info.default_value = resolveGameRuleDefault(info.name, minecraft_version);\n        info.world_values[world_name] = formatGameRuleValue(endstone::GameRuleValue{level.getGameRule(id)});\n",
+          )
+          replace(
+              "src/platform/endstone/adapters.cpp",
+              "    const std::string world_name = level.getName();\n    appendGameRules(ctx.world, level, world_name, KBooleanGameRules);\n    appendGameRules(ctx.world, level, world_name, KIntegerGameRules);\n",
+              "    const std::string world_name = level.getName();\n    const std::string minecraft_version = server_.getMinecraftVersion();\n    appendGameRules(ctx.world, level, world_name, minecraft_version, KBooleanGameRules);\n    appendGameRules(ctx.world, level, world_name, minecraft_version, KIntegerGameRules);\n",
+          )
+          PY
+      - name: Commit production integration
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add CMakeLists.txt tests/CMakeLists.txt src/platform/endstone/adapters.cpp
+          git commit -m "feat: wire gamerule default fallback"
+          git push origin HEAD:feat/gamerule-default-fallback
