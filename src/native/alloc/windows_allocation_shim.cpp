@@ -31,7 +31,7 @@ Function chooseHandler(Function handler, Function original) noexcept
 extern "C" __declspec(dllexport) int __cdecl sparkAllocationShimPin() noexcept
 {
     HMODULE module = nullptr;
-    const auto *address = reinterpret_cast<LPCWSTR>(&sparkAllocationShimPin);
+    const auto address = reinterpret_cast<LPCWSTR>(&sparkAllocationShimPin);
     const DWORD flags = GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN;
     return ::GetModuleHandleExW(flags, address, &module) != FALSE ? 1 : 0;
 }
