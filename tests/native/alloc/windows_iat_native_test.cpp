@@ -78,8 +78,7 @@ bool oversizedImportDirectoryRefresh(spark::WindowsIatHooks &hooks, HMODULE cons
 {
     auto *base = reinterpret_cast<std::byte *>(consumer);
     auto *dos = reinterpret_cast<IMAGE_DOS_HEADER *>(base);
-    if (!require(dos->e_magic == IMAGE_DOS_SIGNATURE && dos->e_lfanew >= 0,
-                 "consumer DOS header is invalid")) {
+    if (!require(dos->e_magic == IMAGE_DOS_SIGNATURE && dos->e_lfanew >= 0, "consumer DOS header is invalid")) {
         return false;
     }
 
