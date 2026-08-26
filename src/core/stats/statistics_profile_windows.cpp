@@ -128,6 +128,8 @@ std::map<std::int32_t, WindowStats> StatisticsService::profileWindows(std::int64
                     stats.entities = gauge.entities;
                     stats.chunks_present = true;
                     stats.chunks = gauge.chunks;
+                    stats.tile_entities_present = gauge.tile_entities_present;
+                    stats.tile_entities = gauge.tile_entities;
                 }
             }
         }
