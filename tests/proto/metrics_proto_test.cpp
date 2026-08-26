@@ -63,8 +63,7 @@ void testTileEntityMetricPresence()
     }));
 
     spark::MetricsSnapshot present_nonzero;
-    present_nonzero.world_info = {
-        {.timestamp_ms = 1'000, .tile_entities = 6, .tile_entities_present = true}};
+    present_nonzero.world_info = {{.timestamp_ms = 1'000, .tile_entities = 6, .tile_entities_present = true}};
     const std::string nonzero_bytes = spark::proto_detail::buildMetrics(present_nonzero);
     assert(spark::proto_test::findMessageBytes(nonzero_bytes, 8, [](std::string_view series) {
         return spark::proto_test::findMessageBytes(
@@ -72,8 +71,7 @@ void testTileEntityMetricPresence()
     }));
 
     spark::MetricsSnapshot unavailable;
-    unavailable.world_info = {
-        {.timestamp_ms = 1'000, .tile_entities = 9, .tile_entities_present = false}};
+    unavailable.world_info = {{.timestamp_ms = 1'000, .tile_entities = 9, .tile_entities_present = false}};
     const std::string unavailable_bytes = spark::proto_detail::buildMetrics(unavailable);
     assert(spark::proto_test::findMessageBytes(unavailable_bytes, 8, [](std::string_view series) {
         return spark::proto_test::findMessageBytes(
