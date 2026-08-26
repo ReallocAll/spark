@@ -143,26 +143,15 @@ inline constexpr std::pair<std::string_view, std::string_view> kCurrentDefaults[
     {"tntexplosiondropdecay", "false"},
 };
 
-struct ExactHistoricalDefaultOverride {
-    std::string_view name;
-    std::string_view version;
-    std::string_view value;
-};
-
 struct HistoricalDefaultChangePoint {
     std::string_view name;
     std::string_view changed_in;
     std::string_view previous_value;
 };
 
-// These tables are intentionally sparse. Exact preview exceptions and known
-// default-change boundaries are recorded instead of maintaining snapshots for
-// every Bedrock version.
-inline constexpr ExactHistoricalDefaultOverride kExactHistoricalOverrides[] = {
-    {"recipesunlock", "1.20.30.21", "false"},
-};
-
+// Sparse change boundaries only: no per-version snapshots.
 inline constexpr HistoricalDefaultChangePoint kHistoricalChangePoints[] = {
+    {"recipesunlock", "1.20.30.22", "false"},
     {"spawnradius", "1.20.40", "5"},
 };
 
@@ -196,15 +185,6 @@ inline std::optional<std::string> resolveGameRuleDefault(std::string_view name, 
     const std::string normalized_version = detail::normalizeMinecraftVersion(minecraft_version);
 
     if (!normalized_version.empty()) {
-        const auto exact =
-            std::find_if(std::begin(detail::kExactHistoricalOverrides), std::end(detail::kExactHistoricalOverrides),
-                         [&normalized_name, &normalized_version](const auto &entry) {
-                             return entry.name == normalized_name && entry.version == normalized_version;
-                         });
-        if (exact != std::end(detail::kExactHistoricalOverrides)) {
-            return std::string(exact->value);
-        }
-
         const auto change_point =
             std::find_if(std::begin(detail::kHistoricalChangePoints), std::end(detail::kHistoricalChangePoints),
                          [&normalized_name, &normalized_version](const auto &entry) {
