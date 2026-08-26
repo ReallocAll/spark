@@ -1,0 +1,439 @@
+#include <funchook.h>
+
+#ifndef _WIN32
+#error "windows_iat_funchook_compat.cpp must only be compiled on Windows"
+#endif
+
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <new>
+#include <string>
+#include <utility>
+#include <vector>
+
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+
+#include "native/alloc/windows_allocation_shim_api.h"
+#include "native/alloc/windows_iat_hooks.h"
+
+namespace {
+
+constexpr const wchar_t *KShimFileName = L"spark_allocation_shim.dll";
+constexpr std::uint64_t KShimDrainTimeoutMs = 5000;
+
+struct HookRecord {
+    const char *name = nullptr;
+    const char *shim_export = nullptr;
+    void *original = nullptr;
+    void *handler = nullptr;
+    bool required_coverage = false;
+};
+
+struct TargetDescription {
+    const char *name = nullptr;
+    const char *shim_export = nullptr;
+    bool required_coverage = false;
+};
+
+struct ShimApi {
+    HMODULE module = nullptr;
+    spark::WindowsAllocationShimPinFn pin = nullptr;
+    spark::WindowsAllocationShimConfigureFn configure = nullptr;
+    spark::WindowsAllocationShimActivateFn activate = nullptr;
+    spark::WindowsAllocationShimBeginDeactivateFn begin_deactivate = nullptr;
+    spark::WindowsAllocationShimDrainedFn drained = nullptr;
+    spark::WindowsAllocationShimFinishDeactivateFn finish_deactivate = nullptr;
+};
+
+template <typename Function>
+Function proc(HMODULE module, const char *name) noexcept
+{
+    return reinterpret_cast<Function>(::GetProcAddress(module, name));
+}
+
+bool sameExport(HMODULE module, const char *name, void *address) noexcept
+{
+    return module != nullptr && ::GetProcAddress(module, name) == address;
+}
+
+bool describeTarget(void *address, TargetDescription &description) noexcept
+{
+    HMODULE ucrt = ::GetModuleHandleW(L"ucrtbase.dll");
+    HMODULE kernel32 = ::GetModuleHandleW(L"kernel32.dll");
+    const struct Candidate {
+        HMODULE module;
+        const char *name;
+        const char *shim_export;
+        bool required_coverage;
+    } candidates[] = {
+        {ucrt, "malloc", "sparkAllocationShimMalloc", true},
+        {ucrt, "calloc", "sparkAllocationShimCalloc", false},
+        {ucrt, "realloc", "sparkAllocationShimRealloc", false},
+        {ucrt, "_recalloc", "sparkAllocationShimRecalloc", false},
+        {ucrt, "free", "sparkAllocationShimFree", true},
+        {ucrt, "_aligned_malloc", "sparkAllocationShimAlignedMalloc", false},
+        {ucrt, "_aligned_realloc", "sparkAllocationShimAlignedRealloc", false},
+        {ucrt, "_aligned_recalloc", "sparkAllocationShimAlignedRecalloc", false},
+        {ucrt, "_aligned_offset_malloc", "sparkAllocationShimAlignedOffsetMalloc", false},
+        {ucrt, "_aligned_offset_realloc", "sparkAllocationShimAlignedOffsetRealloc", false},
+        {ucrt, "_aligned_offset_recalloc", "sparkAllocationShimAlignedOffsetRecalloc", false},
+        {ucrt, "_aligned_free", "sparkAllocationShimAlignedFree", false},
+        {ucrt, "_malloc_base", "sparkAllocationShimMallocBase", false},
+        {ucrt, "_calloc_base", "sparkAllocationShimCallocBase", false},
+        {ucrt, "_realloc_base", "sparkAllocationShimReallocBase", false},
+        {ucrt, "_free_base", "sparkAllocationShimFreeBase", false},
+        {kernel32, "HeapAlloc", "sparkAllocationShimHeapAlloc", false},
+        {kernel32, "HeapReAlloc", "sparkAllocationShimHeapReAlloc", false},
+        {kernel32, "HeapFree", "sparkAllocationShimHeapFree", false},
+    };
+    for (const Candidate &candidate : candidates) {
+        if (sameExport(candidate.module, candidate.name, address)) {
+            description = {.name = candidate.name,
+                           .shim_export = candidate.shim_export,
+                           .required_coverage = candidate.required_coverage};
+            return true;
+        }
+    }
+    return false;
+}
+
+bool moduleDirectory(std::wstring &directory, std::string &error)
+{
+    HMODULE owner = nullptr;
+    const auto address = reinterpret_cast<LPCWSTR>(reinterpret_cast<std::uintptr_t>(&moduleDirectory));
+    if (::GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                             address, &owner) == FALSE) {
+        error = "GetModuleHandleExW for Spark allocation hook module failed: " + std::to_string(::GetLastError());
+        return false;
+    }
+
+    std::wstring path(32768, L'\0');
+    const DWORD length = ::GetModuleFileNameW(owner, path.data(), static_cast<DWORD>(path.size()));
+    if (length == 0 || length >= path.size()) {
+        error = "GetModuleFileNameW for Spark allocation hook module failed: " + std::to_string(::GetLastError());
+        return false;
+    }
+    path.resize(length);
+    const std::size_t separator = path.find_last_of(L"/\\");
+    if (separator == std::wstring::npos) {
+        error = "Spark allocation hook module has no containing directory";
+        return false;
+    }
+    directory.assign(path.data(), separator + 1);
+    return true;
+}
+
+bool loadShim(ShimApi &api, std::string &error)
+{
+    if (api.module != nullptr) {
+        return true;
+    }
+    std::wstring directory;
+    if (!moduleDirectory(directory, error)) {
+        return false;
+    }
+    const std::wstring path = directory + KShimFileName;
+    api.module = ::LoadLibraryW(path.c_str());
+    if (api.module == nullptr) {
+        error = "LoadLibraryW(spark_allocation_shim.dll) failed: " + std::to_string(::GetLastError());
+        return false;
+    }
+
+    api.pin = proc<spark::WindowsAllocationShimPinFn>(api.module, "sparkAllocationShimPin");
+    api.configure =
+        proc<spark::WindowsAllocationShimConfigureFn>(api.module, "sparkAllocationShimConfigure");
+    api.activate = proc<spark::WindowsAllocationShimActivateFn>(api.module, "sparkAllocationShimActivate");
+    api.begin_deactivate =
+        proc<spark::WindowsAllocationShimBeginDeactivateFn>(api.module, "sparkAllocationShimBeginDeactivate");
+    api.drained = proc<spark::WindowsAllocationShimDrainedFn>(api.module, "sparkAllocationShimDrained");
+    api.finish_deactivate =
+        proc<spark::WindowsAllocationShimFinishDeactivateFn>(api.module, "sparkAllocationShimFinishDeactivate");
+    if (api.pin == nullptr || api.configure == nullptr || api.activate == nullptr || api.begin_deactivate == nullptr ||
+        api.drained == nullptr || api.finish_deactivate == nullptr) {
+        error = "spark_allocation_shim.dll is missing required lifecycle exports";
+        ::FreeLibrary(api.module);
+        api = {};
+        return false;
+    }
+    if (api.pin() == 0) {
+        error = "spark_allocation_shim.dll could not pin itself for process lifetime";
+        ::FreeLibrary(api.module);
+        api = {};
+        return false;
+    }
+    return true;
+}
+
+void setTableEntry(spark::WindowsAllocationShimTable &table, const char *name, void *address) noexcept
+{
+    if (std::strcmp(name, "malloc") == 0) {
+        table.malloc_fn = reinterpret_cast<spark::WindowsMallocFn>(address);
+    }
+    else if (std::strcmp(name, "calloc") == 0) {
+        table.calloc_fn = reinterpret_cast<spark::WindowsCallocFn>(address);
+    }
+    else if (std::strcmp(name, "realloc") == 0) {
+        table.realloc_fn = reinterpret_cast<spark::WindowsReallocFn>(address);
+    }
+    else if (std::strcmp(name, "_recalloc") == 0) {
+        table.recalloc_fn = reinterpret_cast<spark::WindowsRecallocFn>(address);
+    }
+    else if (std::strcmp(name, "free") == 0) {
+        table.free_fn = reinterpret_cast<spark::WindowsFreeFn>(address);
+    }
+    else if (std::strcmp(name, "_aligned_malloc") == 0) {
+        table.aligned_malloc_fn = reinterpret_cast<spark::WindowsAlignedMallocFn>(address);
+    }
+    else if (std::strcmp(name, "_aligned_realloc") == 0) {
+        table.aligned_realloc_fn = reinterpret_cast<spark::WindowsAlignedReallocFn>(address);
+    }
+    else if (std::strcmp(name, "_aligned_recalloc") == 0) {
+        table.aligned_recalloc_fn = reinterpret_cast<spark::WindowsAlignedRecallocFn>(address);
+    }
+    else if (std::strcmp(name, "_aligned_offset_malloc") == 0) {
+        table.aligned_offset_malloc_fn = reinterpret_cast<spark::WindowsAlignedOffsetMallocFn>(address);
+    }
+    else if (std::strcmp(name, "_aligned_offset_realloc") == 0) {
+        table.aligned_offset_realloc_fn = reinterpret_cast<spark::WindowsAlignedOffsetReallocFn>(address);
+    }
+    else if (std::strcmp(name, "_aligned_offset_recalloc") == 0) {
+        table.aligned_offset_recalloc_fn = reinterpret_cast<spark::WindowsAlignedOffsetRecallocFn>(address);
+    }
+    else if (std::strcmp(name, "_aligned_free") == 0) {
+        table.aligned_free_fn = reinterpret_cast<spark::WindowsFreeFn>(address);
+    }
+    else if (std::strcmp(name, "_malloc_base") == 0) {
+        table.malloc_base_fn = reinterpret_cast<spark::WindowsMallocFn>(address);
+    }
+    else if (std::strcmp(name, "_calloc_base") == 0) {
+        table.calloc_base_fn = reinterpret_cast<spark::WindowsCallocFn>(address);
+    }
+    else if (std::strcmp(name, "_realloc_base") == 0) {
+        table.realloc_base_fn = reinterpret_cast<spark::WindowsReallocFn>(address);
+    }
+    else if (std::strcmp(name, "_free_base") == 0) {
+        table.free_base_fn = reinterpret_cast<spark::WindowsFreeFn>(address);
+    }
+    else if (std::strcmp(name, "HeapAlloc") == 0) {
+        table.heap_alloc_fn = reinterpret_cast<spark::WindowsHeapAllocFn>(address);
+    }
+    else if (std::strcmp(name, "HeapReAlloc") == 0) {
+        table.heap_realloc_fn = reinterpret_cast<spark::WindowsHeapReAllocFn>(address);
+    }
+    else if (std::strcmp(name, "HeapFree") == 0) {
+        table.heap_free_fn = reinterpret_cast<spark::WindowsHeapFreeFn>(address);
+    }
+}
+
+bool deactivateShim(ShimApi &api, std::string &error) noexcept
+{
+    if (api.module == nullptr) {
+        return true;
+    }
+    if (api.begin_deactivate() == 0) {
+        try {
+            error = "Windows allocation shim callback gate could not close";
+        }
+        catch (...) {
+            error.clear();
+        }
+        return false;
+    }
+    const std::uint64_t deadline = ::GetTickCount64() + KShimDrainTimeoutMs;
+    while (api.drained() == 0) {
+        if (::GetTickCount64() >= deadline) {
+            try {
+                error = "timed out waiting for Windows allocation shim callbacks to drain";
+            }
+            catch (...) {
+                error.clear();
+            }
+            return false;
+        }
+        ::Sleep(1);
+    }
+    if (api.finish_deactivate() == 0) {
+        try {
+            error = "Windows allocation shim could not clear plugin handlers after drain";
+        }
+        catch (...) {
+            error.clear();
+        }
+        return false;
+    }
+    return true;
+}
+
+}  // namespace
+
+struct funchook {
+    std::vector<HookRecord> records;
+    std::unique_ptr<spark::WindowsIatHooks> hooks;
+    ShimApi shim;
+    bool installed = false;
+    std::string error;
+};
+
+extern "C" funchook_t *funchook_create(void)
+{
+    try {
+        return new funchook_t{};
+    }
+    catch (...) {
+        return nullptr;
+    }
+}
+
+extern "C" int funchook_prepare(funchook_t *context, void **target_func, void *hook_func)
+{
+    if (context == nullptr || target_func == nullptr || *target_func == nullptr || hook_func == nullptr) {
+        return FUNCHOOK_ERROR_INTERNAL;
+    }
+    try {
+        TargetDescription description;
+        if (!describeTarget(*target_func, description)) {
+            context->error = "unsupported Windows allocation hook target";
+            return FUNCHOOK_ERROR_INTERNAL;
+        }
+        context->records.push_back({.name = description.name,
+                                    .shim_export = description.shim_export,
+                                    .original = *target_func,
+                                    .handler = hook_func,
+                                    .required_coverage = description.required_coverage});
+        return FUNCHOOK_ERROR_SUCCESS;
+    }
+    catch (...) {
+        context->error = "could not prepare Windows IAT allocation hook target";
+        return FUNCHOOK_ERROR_INTERNAL;
+    }
+}
+
+extern "C" int funchook_install(funchook_t *context, int flags)
+{
+    (void)flags;
+    if (context == nullptr) {
+        return FUNCHOOK_ERROR_INTERNAL;
+    }
+    if (context->installed) {
+        return FUNCHOOK_ERROR_SUCCESS;
+    }
+    try {
+        context->error.clear();
+        if (context->records.empty()) {
+            context->error = "Windows IAT allocation hook target list is empty";
+            return FUNCHOOK_ERROR_INTERNAL;
+        }
+        if (!loadShim(context->shim, context->error)) {
+            return FUNCHOOK_ERROR_INTERNAL;
+        }
+
+        spark::WindowsAllocationShimTable originals{};
+        spark::WindowsAllocationShimTable handlers{};
+        std::vector<spark::WindowsIatHookTarget> targets;
+        targets.reserve(context->records.size());
+        for (const HookRecord &record : context->records) {
+            setTableEntry(originals, record.name, record.original);
+            setTableEntry(handlers, record.name, record.handler);
+            void *replacement = reinterpret_cast<void *>(::GetProcAddress(context->shim.module, record.shim_export));
+            if (replacement == nullptr) {
+                context->error = std::string("spark_allocation_shim.dll is missing hook export: ") + record.shim_export;
+                return FUNCHOOK_ERROR_INTERNAL;
+            }
+            targets.push_back({.import_name = record.name,
+                               .import_modules = {},
+                               .original = record.original,
+                               .replacement = replacement,
+                               .required = record.required_coverage});
+        }
+        if (context->shim.configure(&originals) == 0) {
+            context->error = "Windows allocation shim rejected the original allocator table";
+            return FUNCHOOK_ERROR_INTERNAL;
+        }
+
+        context->hooks = spark::makeNativeWindowsIatHookBackend(reinterpret_cast<void *>(&funchook_install));
+        if (context->hooks == nullptr || !context->hooks->configure(std::move(targets), context->error) ||
+            !context->hooks->install(context->error)) {
+            context->hooks.reset();
+            return FUNCHOOK_ERROR_INTERNAL;
+        }
+        if (context->shim.activate(&handlers) == 0) {
+            std::string uninstall_error;
+            (void)context->hooks->uninstall(uninstall_error);
+            context->hooks.reset();
+            context->error = "Windows allocation shim could not publish Spark handlers";
+            if (!uninstall_error.empty()) {
+                context->error += "; IAT rollback: " + uninstall_error;
+            }
+            return FUNCHOOK_ERROR_INTERNAL;
+        }
+        context->installed = true;
+        return FUNCHOOK_ERROR_SUCCESS;
+    }
+    catch (const std::exception &exception) {
+        context->error = std::string("Windows IAT allocation hook install failed: ") + exception.what();
+        return FUNCHOOK_ERROR_INTERNAL;
+    }
+    catch (...) {
+        context->error = "Windows IAT allocation hook install failed";
+        return FUNCHOOK_ERROR_INTERNAL;
+    }
+}
+
+extern "C" int funchook_uninstall(funchook_t *context, int flags)
+{
+    (void)flags;
+    if (context == nullptr) {
+        return FUNCHOOK_ERROR_INTERNAL;
+    }
+    if (!context->installed) {
+        return FUNCHOOK_ERROR_NOT_INSTALLED;
+    }
+
+    context->error.clear();
+    if (!deactivateShim(context->shim, context->error)) {
+        return FUNCHOOK_ERROR_INTERNAL;
+    }
+
+    // Once the process-lifetime shim is closed, drained, and has forgotten all
+    // plugin handlers, stale or ownership-uncertain IAT entries are still safe:
+    // they can only execute the pinned fallback path. Restoration is therefore
+    // best-effort for cleanliness, not a prerequisite for unload safety.
+    if (context->hooks != nullptr) {
+        std::string detach_error;
+        if (!context->hooks->uninstall(detach_error) && context->error.empty()) {
+            context->error = "Windows allocation IAT detach left safe shim entries active: " + detach_error;
+        }
+    }
+    context->installed = false;
+    return FUNCHOOK_ERROR_SUCCESS;
+}
+
+extern "C" int funchook_destroy(funchook_t *context)
+{
+    if (context == nullptr) {
+        return FUNCHOOK_ERROR_SUCCESS;
+    }
+    if (context->installed) {
+        context->error = "Windows allocation hook context is still installed";
+        return FUNCHOOK_ERROR_INTERNAL;
+    }
+    if (context->shim.module != nullptr) {
+        ::FreeLibrary(context->shim.module);
+        context->shim.module = nullptr;
+    }
+    delete context;
+    return FUNCHOOK_ERROR_SUCCESS;
+}
+
+extern "C" const char *funchook_error_message(funchook_t *context)
+{
+    return context == nullptr ? "Windows IAT allocation hook context is null" : context->error.c_str();
+}
