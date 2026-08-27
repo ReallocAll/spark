@@ -23,7 +23,8 @@ void showHealthReport(CommandSender &sender, StatisticsService &statistics, Prof
 HealthData captureHealthData(StatisticsService &statistics, ProfileMetadataProvider &metadata_provider,
                              const std::string &sender_name, bool sender_is_player, std::int64_t now_ms,
                              const std::vector<int> &ping_samples,
-                             const std::map<std::string, NetworkInterfaceSnapshot> &network_snapshots);
+                             const std::map<std::string, NetworkInterfaceSnapshot> &network_snapshots,
+                             std::string sender_unique_id = {});
 
 }  // namespace spark
 

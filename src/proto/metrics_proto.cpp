@@ -64,6 +64,17 @@ void writeAverages(ProtoWriter &writer, const MetricsAverages &values)
     }
 }
 
+void writeMemoryUsage(ProtoWriter &writer, const MetricsMemoryUsage &values)
+{
+    writer.int64(1, values.used);
+    if (values.committed_present) {
+        writer.int64(2, values.committed);
+    }
+    if (values.max_present) {
+        writer.int64(4, values.max);
+    }
+}
+
 std::string buildDoubleSeries(const std::vector<MetricsDoubleSample> &samples)
 {
     std::string out;
@@ -87,6 +98,20 @@ std::string buildAveragesSeries(const std::vector<MetricsAveragesSample> &sample
         std::string values;
         ProtoWriter values_writer(values);
         writeAverages(values_writer, sample.values);
+        writer.message(3, values);
+    }
+    return out;
+}
+
+std::string buildMemorySeries(const std::vector<MetricsMemoryUsageSample> &samples)
+{
+    std::string out;
+    ProtoWriter writer(out);
+    writeSeriesHeader(writer, samples);
+    for (const MetricsMemoryUsageSample &sample : samples) {
+        std::string values;
+        ProtoWriter values_writer(values);
+        writeMemoryUsage(values_writer, sample.values);
         writer.message(3, values);
     }
     return out;
@@ -134,6 +159,9 @@ std::string buildMetrics(const MetricsSnapshot &metrics)
     }
     if (!metrics.cpu_usage_system.empty()) {
         writer.message(4, buildDoubleSeries(metrics.cpu_usage_system));
+    }
+    if (!metrics.memory_usage_heap.empty()) {
+        writer.message(5, buildMemorySeries(metrics.memory_usage_heap));
     }
     if (!metrics.world_info.empty()) {
         writer.message(8, buildWorldSeries(metrics.world_info));

@@ -85,7 +85,8 @@ public:
                               bool regex_threads, bool ignore_sleeping, std::uint8_t thread_grouper,
                               std::uint8_t profile_type, bool live_only, std::string_view creator_name,
                               bool creator_is_player, std::string_view comment,
-                              const std::vector<std::string> &thread_patterns, std::int32_t window_adjustment_ms);
+                              const std::vector<std::string> &thread_patterns, std::int32_t window_adjustment_ms,
+                              std::string_view creator_unique_id = {});
 
     // Requests an immediate durable flush.
     void requestFlush();

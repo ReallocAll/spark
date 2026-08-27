@@ -17,6 +17,7 @@ namespace spark {
 struct HealthData {
     std::string creator_name = "Console";
     bool creator_is_player = false;
+    std::string creator_unique_id;
     std::string endstone_version;
     std::string minecraft_version;
     PlatformStats platform_stats;

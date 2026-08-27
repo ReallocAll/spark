@@ -15,6 +15,16 @@ bool check(bool value, const char *message)
     return value;
 }
 
+bool hasNativeMemorySemantics(spark::ProtoReader memory)
+{
+    return spark::proto_test::findMessage(memory, 1, [](spark::ProtoReader heap) {
+        const bool has_used = spark::proto_test::hasVarint(heap, 1, 1024);
+        const bool has_virtual_committed = spark::proto_test::hasVarint(heap, 2, 42'424'242);
+        const bool has_max = spark::proto_test::hasField(heap, 3);
+        return has_used && !has_virtual_committed && !has_max;
+    });
+}
+
 }  // namespace
 
 int main()
@@ -22,6 +32,10 @@ int main()
     spark::PlatformStats platform;
     platform.process_mem_present = true;
     platform.process_mem_bytes = 1024;
+    // Virtual address-space reservation must never be reused as native
+    // MemoryUsage.committed.
+    platform.process_virtual_present = true;
+    platform.process_virtual_bytes = 42'424'242;
     platform.uptime_ms = 2000;
     platform.player_count = 4;
     platform.online_mode = 2;
@@ -39,6 +53,8 @@ int main()
     if (!check(spark::proto_test::hasVarint(platform_bytes, 3, 2000), "uptime was not encoded") ||
         !check(spark::proto_test::hasVarint(platform_bytes, 7, 4), "player count was not encoded") ||
         !check(spark::proto_test::hasVarint(platform_bytes, 9, 2), "online mode was not encoded") ||
+        !check(spark::proto_test::findMessage(platform_bytes, 1, hasNativeMemorySemantics),
+               "native process memory semantics were not encoded") ||
         !check(spark::proto_test::findMessage(
                    platform_bytes, 8,
                    [](spark::ProtoReader message) { return spark::proto_test::hasVarint(message, 1, 8); }),

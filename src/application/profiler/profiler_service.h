@@ -111,7 +111,8 @@ private:
     bool background_started_ = false;
     bool background_suppressed_ = false;
     void sendAllocationHookCoverage(CommandSender &sender);
-    void finishProfiler(const std::string &sender_name, bool sender_is_player, bool save, const std::string &comment);
+    void finishProfiler(const std::string &sender_name, bool sender_is_player, std::string sender_unique_id, bool save,
+                        const std::string &comment);
     void runExport() noexcept;
     void announceResult() noexcept;
     bool startBackgroundSession() noexcept;
@@ -160,6 +161,7 @@ private:
     std::string background_thread_dumper_ = "default";
     std::string start_sender_name_ = "CONSOLE";
     bool start_sender_is_player_ = false;
+    std::string start_sender_unique_id_;
     std::vector<NativePluginSource> session_native_plugin_sources_;
     std::thread export_thread_;
 
@@ -168,6 +170,7 @@ private:
     bool pending_save_ = false;
     std::string pending_sender_ = "CONSOLE";
     bool pending_sender_is_player_ = false;
+    std::string pending_sender_unique_id_;
     std::string pending_result_;
     ExportOutcome pending_outcome_ = ExportOutcome::Failed;
     std::function<std::vector<int>()> ping_samples_provider_;

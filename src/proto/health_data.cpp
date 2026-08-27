@@ -23,6 +23,9 @@ std::string buildHealthData(const HealthData &data)
             ProtoWriter creator_writer(creator);
             creator_writer.varint(1, data.creator_is_player ? 1 : 0);
             creator_writer.string(2, data.creator_name);
+            if (data.creator_is_player && !data.creator_unique_id.empty()) {
+                creator_writer.string(3, data.creator_unique_id);
+            }
             metadata_writer.message(1, creator);
         }
 

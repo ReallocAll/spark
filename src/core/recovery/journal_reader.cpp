@@ -178,6 +178,7 @@ bool JournalRecord::asSessionConfig(SessionConfig &config) const
     config.present = false;
     config.has_window_adjustment = false;
     config.window_adjustment_ms = 0;
+    config.creator_unique_id.clear();
     ByteCursor c(payload.data(), payload.size());
     if (!c.u32(config.interval_us)) {
         return false;
@@ -244,13 +245,19 @@ bool JournalRecord::asSessionConfig(SessionConfig &config) const
         }
         config.thread_patterns.emplace_back(sv.data(), sv.size());
     }
-    if (c.remaining() == sizeof(std::int32_t)) {
+    if (!c.eof()) {
         if (!c.i32(config.window_adjustment_ms)) {
             return false;
         }
         config.has_window_adjustment = true;
+        if (!c.eof()) {
+            if (!c.u16(len) || !c.stringView(sv, len)) {
+                return false;
+            }
+            config.creator_unique_id.assign(sv.data(), sv.size());
+        }
     }
-    else if (c.remaining() != 0) {
+    if (!c.eof()) {
         return false;
     }
     config.present = true;
@@ -363,7 +370,8 @@ SegmentReadStatus readSegmentImpl(const std::filesystem::path &path, JournalRead
         markFatal(result, false, true);
         return SegmentReadStatus::Fatal;
     }
-    if (version != kLegacyJournalVersion && version != kJournalVersion || reserved != 0) {
+    if ((version != kLegacyJournalVersion && version != kPreviousJournalVersion && version != kJournalVersion) ||
+        reserved != 0) {
         markFatal(result, false, true);
         return SegmentReadStatus::Fatal;
     }

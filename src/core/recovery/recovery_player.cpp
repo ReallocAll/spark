@@ -414,6 +414,7 @@ RecoveredProfile RecoveryPlayer::replay(const std::filesystem::path &directory)
     meta.engine_version = std::string("endstone-spark ") + kVersion + " (crash recovery)";
     meta.creator_name = sc.present ? sc.creator_name : "crash recovery";
     meta.creator_is_player = sc.present && sc.creator_is_player;
+    meta.creator_unique_id = sc.present && sc.creator_is_player ? sc.creator_unique_id : std::string{};
     meta.comment = sc.present && !sc.comment.empty() ? sc.comment + " [recovered from crash journal]"
                                                      : "Recovered from crash journal";
     meta.all_threads = sc.present && sc.all_threads;

@@ -20,7 +20,9 @@ bool check(bool value, const char *message)
 int main()
 {
     spark::HealthData data;
-    data.creator_name = "Console";
+    data.creator_name = "PlayerOne";
+    data.creator_is_player = true;
+    data.creator_unique_id = "123e4567-e89b-12d3-a456-426614174000";
     data.endstone_version = "0.1.0";
     data.minecraft_version = "1.21";
     data.generated_time_ms = 1234;
@@ -43,7 +45,15 @@ int main()
     if (!check(spark::proto_test::findMessage(
                    bytes, 1,
                    [&](spark::ProtoReader metadata_reader) {
-                       return spark::proto_test::hasVarint(metadata_reader, 5, 1234) &&
+                       return spark::proto_test::findMessage(
+                                  metadata_reader, 1,
+                                  [](spark::ProtoReader creator_reader) {
+                                      return spark::proto_test::hasVarint(creator_reader, 1, 1) &&
+                                             spark::proto_test::hasString(creator_reader, 2, "PlayerOne") &&
+                                             spark::proto_test::hasString(creator_reader, 3,
+                                                                          "123e4567-e89b-12d3-a456-426614174000");
+                                  }) &&
+                              spark::proto_test::hasVarint(metadata_reader, 5, 1234) &&
                               spark::proto_test::findMessage(metadata_reader, 2,
                                                              [](spark::ProtoReader platform_metadata_reader) {
                                                                  return spark::proto_test::hasVarint(
@@ -93,6 +103,20 @@ int main()
         return 1;
     }
 
+    data.creator_is_player = false;
+    const std::string non_player_bytes = spark::buildHealthData(data);
+    if (!check(spark::proto_test::findMessage(non_player_bytes, 1,
+                                              [](spark::ProtoReader metadata_reader) {
+                                                  return spark::proto_test::findMessage(
+                                                      metadata_reader, 1, [](spark::ProtoReader creator_reader) {
+                                                          return !spark::proto_test::hasField(creator_reader, 3);
+                                                      });
+                                              }),
+               "non-player creator unexpectedly encoded a UUID")) {
+        return 1;
+    }
+
+    data.creator_is_player = true;
     data.world.present = false;
     const std::string absent_world_bytes = spark::buildHealthData(data);
     if (!check(spark::proto_test::findMessage(absent_world_bytes, 1,

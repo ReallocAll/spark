@@ -48,6 +48,7 @@ struct ProfilerOptions {
     bool save_to_file = false;
     std::string creator_name = "Console";
     bool creator_is_player = false;
+    std::string creator_unique_id;
     ThreadGrouperMode thread_grouper = ThreadGrouperMode::ByPool;
     bool is_background = false;
     // Deterministic service-failure injection used only by the offline selftest.

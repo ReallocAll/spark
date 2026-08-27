@@ -25,6 +25,7 @@ struct SessionConfig {
     bool live_only = false;           // allocation live-only mode
     std::string creator_name = "Console";
     bool creator_is_player = false;
+    std::string creator_unique_id;
     std::string comment;
     std::vector<std::string> thread_patterns;
     bool has_window_adjustment = false;

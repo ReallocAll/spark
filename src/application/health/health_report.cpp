@@ -124,7 +124,8 @@ void showHealthReport(CommandSender &sender, StatisticsService &statistics, Prof
 HealthData captureHealthData(StatisticsService &statistics, ProfileMetadataProvider &metadata_provider,
                              const std::string &sender_name, bool sender_is_player, std::int64_t now_ms,
                              const std::vector<int> &ping_samples,
-                             const std::map<std::string, NetworkInterfaceSnapshot> &network_snapshots)
+                             const std::map<std::string, NetworkInterfaceSnapshot> &network_snapshots,
+                             std::string sender_unique_id)
 {
     ExportContext context;
     metadata_provider.gatherServerMetadata(context, now_ms);
@@ -142,6 +143,7 @@ HealthData captureHealthData(StatisticsService &statistics, ProfileMetadataProvi
     HealthData data;
     data.creator_name = sender_name;
     data.creator_is_player = sender_is_player;
+    data.creator_unique_id = sender_is_player ? std::move(sender_unique_id) : std::string{};
     data.endstone_version = context.endstone_version;
     data.minecraft_version = context.minecraft_version;
     data.generated_time_ms = now_ms;

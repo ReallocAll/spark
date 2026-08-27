@@ -285,11 +285,11 @@ void RecoveryWriter::journalSessionConfig(std::uint32_t interval_us, std::int32_
                                           std::uint8_t profile_type, bool live_only, std::string_view creator_name,
                                           bool creator_is_player, std::string_view comment,
                                           const std::vector<std::string> &thread_patterns,
-                                          std::int32_t window_adjustment_ms)
+                                          std::int32_t window_adjustment_ms, std::string_view creator_unique_id)
 {
     JournalBuffer payload = buildSessionConfigPayload(
         interval_us, only_ticks_over_ms, all_threads, regex_threads, ignore_sleeping, thread_grouper, profile_type,
-        live_only, creator_name, creator_is_player, comment, thread_patterns, window_adjustment_ms);
+        live_only, creator_name, creator_is_player, comment, thread_patterns, window_adjustment_ms, creator_unique_id);
     {
         std::scoped_lock lock(metadata_mutex_);
         cached_session_config_.assign(payload.data(), payload.data() + payload.size());

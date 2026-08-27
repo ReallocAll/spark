@@ -25,6 +25,19 @@ struct MetricsAveragesSample {
     MetricsAverages values;
 };
 
+struct MetricsMemoryUsage {
+    std::int64_t used = 0;
+    bool committed_present = false;
+    std::int64_t committed = 0;
+    bool max_present = false;
+    std::int64_t max = 0;
+};
+
+struct MetricsMemoryUsageSample {
+    std::int64_t timestamp_ms = 0;
+    MetricsMemoryUsage values;
+};
+
 struct MetricsWorldInfoSample {
     std::int64_t timestamp_ms = 0;
     std::int32_t players = 0;
@@ -40,13 +53,14 @@ struct MetricsSnapshot {
     std::vector<MetricsAveragesSample> tick_duration;
     std::vector<MetricsDoubleSample> cpu_usage_process;
     std::vector<MetricsDoubleSample> cpu_usage_system;
+    std::vector<MetricsMemoryUsageSample> memory_usage_heap;
     std::vector<MetricsWorldInfoSample> world_info;
     std::vector<MetricsAveragesSample> player_ping;
 
     [[nodiscard]] bool empty() const
     {
         return tps.empty() && tick_duration.empty() && cpu_usage_process.empty() && cpu_usage_system.empty() &&
-               world_info.empty() && player_ping.empty();
+               memory_usage_heap.empty() && world_info.empty() && player_ping.empty();
     }
 };
 
@@ -68,6 +82,7 @@ public:
     bool recordTickDuration(std::int64_t timestamp_ms, const MetricsAverages &value);
     bool recordCpuUsageProcess(std::int64_t timestamp_ms, double value);
     bool recordCpuUsageSystem(std::int64_t timestamp_ms, double value);
+    bool recordMemoryUsage(std::int64_t timestamp_ms, const MetricsMemoryUsage &value);
     bool recordWorldInfo(std::int64_t timestamp_ms, std::int32_t players, std::int32_t entities, std::int32_t chunks,
                          std::int32_t tile_entities = 0, bool tile_entities_present = false);
     bool recordPlayerPing(std::int64_t timestamp_ms, const MetricsAverages &value);
@@ -83,6 +98,10 @@ private:
         std::int64_t timestamp_ms = 0;
         MetricsAverages values;
     };
+    struct MemoryEntry {
+        std::int64_t timestamp_ms = 0;
+        MetricsMemoryUsage values;
+    };
     struct WorldEntry {
         std::int64_t timestamp_ms = 0;
         std::int32_t players = 0;
@@ -97,6 +116,8 @@ private:
                              std::int64_t timestamp_ms, double value);
     static bool appendAverages(std::vector<AveragesEntry> &series, std::size_t &head, std::size_t &size,
                                std::int64_t timestamp_ms, const MetricsAverages &value);
+    static bool appendMemory(std::vector<MemoryEntry> &series, std::size_t &head, std::size_t &size,
+                             std::int64_t timestamp_ms, const MetricsMemoryUsage &value);
     bool appendWorld(std::int64_t timestamp_ms, std::int32_t players, std::int32_t entities, std::int32_t chunks,
                      std::int32_t tile_entities, bool tile_entities_present);
 
@@ -104,6 +125,7 @@ private:
     std::vector<AveragesEntry> tick_duration_;
     std::vector<DoubleEntry> cpu_usage_process_;
     std::vector<DoubleEntry> cpu_usage_system_;
+    std::vector<MemoryEntry> memory_usage_heap_;
     std::vector<WorldEntry> world_info_;
     std::vector<AveragesEntry> player_ping_;
     std::size_t tps_head_ = 0;
@@ -114,6 +136,8 @@ private:
     std::size_t cpu_usage_process_size_ = 0;
     std::size_t cpu_usage_system_head_ = 0;
     std::size_t cpu_usage_system_size_ = 0;
+    std::size_t memory_usage_heap_head_ = 0;
+    std::size_t memory_usage_heap_size_ = 0;
     std::size_t world_info_head_ = 0;
     std::size_t world_info_size_ = 0;
     std::size_t player_ping_head_ = 0;

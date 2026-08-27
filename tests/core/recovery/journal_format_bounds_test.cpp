@@ -63,8 +63,8 @@ void testSessionPatternCount()
     constexpr std::size_t k_pattern_count_offset = 4 + 4 + 6 + 2 + 1 + 2;
     constexpr std::size_t k_pattern_size = sizeof(std::uint16_t) + 1;
     assert(readAt<std::uint16_t>(payload.data(), k_pattern_count_offset) == std::numeric_limits<std::uint16_t>::max());
-    assert(payload.size() ==
-           k_pattern_count_offset + sizeof(std::uint16_t) + KMaxU16 * k_pattern_size + sizeof(std::int32_t));
+    assert(payload.size() == k_pattern_count_offset + sizeof(std::uint16_t) + KMaxU16 * k_pattern_size +
+                                 sizeof(std::int32_t) + sizeof(std::uint16_t));
 
     const auto record = serializeRecord(RecordType::SessionConfig, 1, payload);
     assert(record.size() == kRecordHeaderSize + payload.size());

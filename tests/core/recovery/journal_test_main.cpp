@@ -5,6 +5,7 @@
 int main()
 {
     testFileHeaderMagic();
+    testSupportedJournalVersions();
     testRecordSerialization();
     testModuleDefRoundTrip();
     testSampleRoundTrip();

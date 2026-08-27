@@ -19,7 +19,8 @@ std::int64_t nowMs()
 
 void testSerializeDeserialize()
 {
-    Activity a = Activity::url("Steve", true, 1234567890, "Profiler", "https://spark.lucko.me/abc123");
+    Activity a = Activity::url("Steve", true, 1234567890, "Profiler", "https://spark.lucko.me/abc123",
+                               "123e4567-e89b-12d3-a456-426614174000");
     std::string json = a.serialize();
     std::cout << "Serialized: " << json << "\n";
 
@@ -27,6 +28,7 @@ void testSerializeDeserialize()
     assert(Activity::deserialize(json, b));
     assert(b.user_name == "Steve");
     assert(b.user_is_player == true);
+    assert(b.user_unique_id == "123e4567-e89b-12d3-a456-426614174000");
     assert(b.time_ms == 1234567890);
     assert(b.type == "Profiler");
     assert(b.data_type == Activity::DataType::Url);
@@ -38,8 +40,20 @@ void testSerializeDeserialize()
     assert(Activity::deserialize(json, b));
     assert(b.user_name == "Console");
     assert(b.user_is_player == false);
+    assert(b.user_unique_id.empty());
     assert(b.data_type == Activity::DataType::File);
     assert(b.data_value == "/plugins/spark/profiles/test.sparkprofile");
+
+    const std::string legacy =
+        R"({"user":{"name":"Legacy","isPlayer":true},"time":1,"type":"Profiler","data":{"type":"url","value":"https://example.com"}})";
+    assert(Activity::deserialize(legacy, b));
+    assert(b.user_is_player);
+    assert(b.user_unique_id.empty());
+
+    Activity console_with_uuid =
+        Activity::url("Console", false, 2, "Health", "https://example.com", "123e4567-e89b-12d3-a456-426614174000");
+    assert(console_with_uuid.user_unique_id.empty());
+    assert(console_with_uuid.serialize().find("uniqueId") == std::string::npos);
 
     std::cout << "testSerializeDeserialize: PASS\n";
 }

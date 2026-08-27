@@ -276,6 +276,7 @@ std::string Profiler::exportData(const ExportContext &ctx, const AllocationSnaps
     meta.comment = !ctx.comment.empty() ? ctx.comment : options_.comment;
     meta.creator_name = options_.creator_name;
     meta.creator_is_player = options_.creator_is_player;
+    meta.creator_unique_id = options_.creator_unique_id;
     meta.all_threads = (mode_ == ProfileMode::Allocation && options_.threads.empty()) ||
                        (options_.threads.size() == 1 && options_.threads.front() == "*");
     meta.regex_threads = options_.regex;

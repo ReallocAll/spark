@@ -36,6 +36,7 @@ struct ProfileMetadata {
     std::string comment;
     std::string creator_name = "Console";
     bool creator_is_player = false;
+    std::string creator_unique_id;
     std::string thread_name = "Server thread";
     bool all_threads = false;
     bool regex_threads = false;
