@@ -7,7 +7,7 @@ on:
 permissions:
   contents: read
 
-# Temporary Linux-only validation for the TLS thread-identity fast path.
+# Temporary Linux-only validation for the combined TLS + sampled-pointer lifecycle fast paths.
 jobs:
   linux:
     name: Linux allocation microbenchmark
