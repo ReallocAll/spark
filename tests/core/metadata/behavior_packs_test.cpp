@@ -161,7 +161,7 @@ void testCorruptReferenceFileAndHintFallback()
 
     const auto hint_world = root / "worlds" / "HintWorld";
     writeText(hint_world / "world_behavior_packs.json",
-              "[{\"pack_id\": \"22222222-2222-2222-2222-222222222222\", \"version\": [2,0,0]}]");
+              R"([{"pack_id": "22222222-2222-2222-2222-222222222222", "version": [2,0,0]}])");
     writeText(hint_world / "behavior_packs" / "hint-pack" / "manifest.json",
               manifest(KWorldUuid, "[2,0,0]", "Hint Pack", "hint", "data"));
     const auto packs = spark::discoverActiveBehaviorPacks(root, "HintWorld");
