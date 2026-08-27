@@ -52,6 +52,7 @@ constexpr std::size_t KEventCapacity = 16384;
 constexpr std::size_t KLiveIndexCapacity = KEventCapacity * 2;
 constexpr std::size_t KLiveIndexShards = 64;
 constexpr std::size_t KLiveIndexShardCapacity = KLiveIndexCapacity / KLiveIndexShards;
+constexpr std::size_t KLivePresenceBuckets = KLiveIndexCapacity;
 constexpr std::size_t KMaxSampledThreads = 256;
 constexpr std::size_t KMaxAllocationModules = 512;
 constexpr std::size_t KMaxProfileNodes = 131072;
@@ -421,6 +422,7 @@ struct AllocationSampler::Impl {
     std::uint64_t last_module_rescan_ms = 0;
 
     std::array<pthread_rwlock_t, KLiveIndexShards> live_index_locks{};
+    std::array<std::atomic<std::uint32_t>, KLivePresenceBuckets> live_presence{};
     pthread_mutex_t live_pool_mutex = PTHREAD_MUTEX_INITIALIZER;
     pthread_key_t thread_state_key{};
     bool thread_state_key_created = false;
@@ -622,6 +624,11 @@ struct AllocationSampler::Impl {
         return static_cast<std::size_t>(hash & (KLiveIndexShards - 1));
     }
 
+    static std::size_t livePresenceSlot(std::uint64_t hash) noexcept
+    {
+        return static_cast<std::size_t>((hash >> 6) & (KLivePresenceBuckets - 1));
+    }
+
     static std::size_t liveIndexSlot(std::uint64_t hash, std::size_t shard, std::size_t offset = 0) noexcept
     {
         const std::size_t within = (static_cast<std::size_t>(hash >> 6) + offset) & (KLiveIndexShardCapacity - 1);
@@ -682,6 +689,11 @@ struct AllocationSampler::Impl {
             return nullptr;
         }
         const std::uint64_t hash = liveIndexHash(pointer);
+        const std::size_t presence_slot = livePresenceSlot(hash);
+        if (!config.force_live_lock_contention_for_testing &&
+            live_presence[presence_slot].load(std::memory_order_acquire) == 0) {
+            return nullptr;
+        }
         const std::size_t shard = liveIndexShard(hash);
         if (config.force_live_lock_contention_for_testing ||
             ::pthread_rwlock_trywrlock(&live_index_locks[shard]) != 0) {
@@ -706,6 +718,7 @@ struct AllocationSampler::Impl {
                 }
                 detached = entry_allocation;
                 clearEntry(entry);
+                live_presence[presence_slot].fetch_sub(1, std::memory_order_release);
                 break;
             }
         }
@@ -913,6 +926,7 @@ struct AllocationSampler::Impl {
         const std::uint64_t allocation_id = allocation->allocation_id;
         const std::uint64_t weight = allocation->weight_bytes;
         const std::uint64_t hash = liveIndexHash(pointer);
+        const std::size_t presence_slot = livePresenceSlot(hash);
         const std::size_t shard = liveIndexShard(hash);
         if (config.force_live_lock_contention_for_testing ||
             ::pthread_rwlock_trywrlock(&live_index_locks[shard]) != 0) {
@@ -923,6 +937,7 @@ struct AllocationSampler::Impl {
         lifecycle_version.fetch_add(1, std::memory_order_release);
         LiveAllocation *replaced = nullptr;
         bool inserted = false;
+        bool added_presence = false;
         std::size_t tombstone = KLiveIndexCapacity;
         for (std::size_t offset = 0; offset < KLiveIndexShardCapacity; ++offset) {
             const std::size_t slot = liveIndexSlot(hash, shard, offset);
@@ -951,6 +966,7 @@ struct AllocationSampler::Impl {
                 }
                 publishEntry(destination, pointer, allocation_id, allocation);
                 inserted = true;
+                added_presence = true;
                 break;
             }
         }
@@ -960,6 +976,10 @@ struct AllocationSampler::Impl {
             }
             publishEntry(live_index[tombstone], pointer, allocation_id, allocation);
             inserted = true;
+            added_presence = true;
+        }
+        if (added_presence) {
+            live_presence[presence_slot].fetch_add(1, std::memory_order_release);
         }
         lifecycle_version.fetch_add(1, std::memory_order_release);
         lifecycle_writers.fetch_sub(1, std::memory_order_release);
@@ -1541,6 +1561,9 @@ struct AllocationSampler::Impl {
         lifecycle_version.store(0, std::memory_order_relaxed);
         lifecycle_readers.store(0, std::memory_order_relaxed);
         lifecycle_writers.store(0, std::memory_order_relaxed);
+        for (auto &presence : live_presence) {
+            presence.store(0, std::memory_order_relaxed);
+        }
         deferred_live.store(nullptr, std::memory_order_relaxed);
         retained_age_ms_total.store(0, std::memory_order_relaxed);
         retained_age_ms_max.store(0, std::memory_order_relaxed);
