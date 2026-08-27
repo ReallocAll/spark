@@ -17,8 +17,8 @@ void setAdditionalSafeServerPropertyKeys(std::vector<std::string> keys);
 // keys they have reviewed. Known-sensitive keys are never returned. The
 // optional argument is primarily useful for isolated callers/tests and is
 // combined with the startup-configured extension.
-std::map<std::string, std::string> parseServerProperties(
-    const std::filesystem::path &file, const std::vector<std::string> &additional_safe_keys = {});
+std::map<std::string, std::string> parseServerProperties(const std::filesystem::path &file,
+                                                         const std::vector<std::string> &additional_safe_keys = {});
 
 // Serializes properties as a JSON object string matching upstream spark's server_configurations.
 std::string serverPropertiesToJsonString(const std::map<std::string, std::string> &properties);
