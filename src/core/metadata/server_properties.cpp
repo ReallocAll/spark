@@ -1,9 +1,9 @@
 #include "core/metadata/server_properties.h"
 
+#include <algorithm>
 #include <array>
 #include <cstdio>
 #include <fstream>
-#include <sstream>
 #include <string>
 #include <string_view>
 
@@ -11,37 +11,116 @@ namespace spark {
 
 namespace {
 
-// Strict allowlist of server.properties keys that are safe to include
-// in profile metadata. Any key not in this list is silently dropped.
-constexpr std::array<std::string_view, 18> KAllowlist = {
-    // Core performance diagnostics
+// Known-safe diagnostics from the current Bedrock Dedicated Server
+// server.properties reference. Identity-bearing values (server/world names),
+// seeds, debugger endpoints and credentials are intentionally absent.
+constexpr std::array<std::string_view, 47> KKnownSafeProperties = {
+    // World/session configuration
+    "gamemode",
+    "force-gamemode",
+    "difficulty",
+    "allow-cheats",
     "max-players",
+    "online-mode",
+    "allow-list",
     "view-distance",
     "tick-distance",
+    "player-idle-timeout",
     "max-threads",
+    "default-player-permission-level",
+    "texturepack-required",
+    // Network diagnostics
+    "server-port",
+    "server-portv6",
+    "enable-lan-visibility",
     "compression-threshold",
     "compression-algorithm",
-    // Logging diagnostics
-    "content-log-file-enabled",
-    "content-log-console-output-enabled",
-    "content-log-level",
-    // Generation/performance
-    "client-side-chunk-generation-enabled",
-    "server-build-radius-ratio",
-    // Authoritative movement
+    // Server-authoritative simulation and movement
     "server-authoritative-movement-strict",
     "server-authoritative-dismount-strict",
     "server-authoritative-entity-interactions-strict",
+    "player-position-acceptance-threshold",
+    "player-movement-action-direction-threshold",
+    "server-authoritative-block-breaking",
+    "server-authoritative-block-breaking-range-scalar",
+    // Client/world simulation behavior
+    "chat-restriction",
+    "disable-player-interaction",
+    "client-side-chunk-generation-enabled",
+    "block-network-ids-are-hashes",
+    "disable-custom-skins",
+    "server-build-radius-ratio",
+    "disable-client-vibrant-visuals",
+    // Logging and diagnostics capture
+    "content-log-file-enabled",
+    "content-log-console-output-enabled",
+    "content-log-level",
+    "diagnostics-capture-auto-start",
+    "diagnostics-capture-max-files",
+    "diagnostics-capture-max-file-size",
     // Script watchdog
     "script-watchdog-enable",
+    "script-watchdog-enable-exception-handling",
+    "script-watchdog-enable-shutdown",
+    "script-watchdog-hang-exception",
     "script-watchdog-hang-threshold",
     "script-watchdog-spike-threshold",
     "script-watchdog-slow-threshold",
+    "script-watchdog-memory-warning",
+    "script-watchdog-memory-limit",
 };
 
-bool isAllowlisted(std::string_view key)
+constexpr std::array<std::string_view, 5> KKnownSensitiveProperties = {
+    "server-name",
+    "level-name",
+    "level-seed",
+    "script-debugger-auto-attach-connect-address",
+    "script-debugger-passcode",
+};
+
+constexpr std::array<std::string_view, 6> KSensitiveKeyFragments = {
+    "password",
+    "passcode",
+    "token",
+    "secret",
+    "credential",
+    "private-key",
+};
+
+std::string lowerAscii(std::string_view value)
 {
-    return std::ranges::any_of(KAllowlist, [key](std::string_view candidate) { return key == candidate; });
+    std::string result(value);
+    for (char &ch : result) {
+        if (ch >= 'A' && ch <= 'Z') {
+            ch = static_cast<char>(ch - 'A' + 'a');
+        }
+    }
+    return result;
+}
+
+bool isSensitiveKey(std::string_view key)
+{
+    const std::string normalized = lowerAscii(key);
+    if (std::ranges::any_of(KKnownSensitiveProperties,
+                            [&normalized](std::string_view candidate) { return normalized == candidate; })) {
+        return true;
+    }
+    return std::ranges::any_of(KSensitiveKeyFragments, [&normalized](std::string_view fragment) {
+        return normalized.find(fragment) != std::string::npos;
+    });
+}
+
+bool isAllowlisted(std::string_view key, const std::vector<std::string> &additional_safe_keys)
+{
+    if (isSensitiveKey(key)) {
+        return false;
+    }
+    if (std::ranges::any_of(KKnownSafeProperties,
+                            [key](std::string_view candidate) { return key == candidate; })) {
+        return true;
+    }
+    return std::ranges::any_of(additional_safe_keys,
+                               [key](const std::string &candidate) { return key == candidate; });
 }
 
 std::string trim(std::string_view s)
@@ -113,7 +192,8 @@ void appendJsonString(std::string &out, std::string_view value)
 
 }  // namespace
 
-std::map<std::string, std::string> parseServerProperties(const std::filesystem::path &file)
+std::map<std::string, std::string> parseServerProperties(const std::filesystem::path &file,
+                                                         const std::vector<std::string> &additional_safe_keys)
 {
     std::map<std::string, std::string> result;
     if (!std::filesystem::exists(file)) {
@@ -127,27 +207,17 @@ std::map<std::string, std::string> parseServerProperties(const std::filesystem::
 
     std::string line;
     while (std::getline(in, line)) {
-        // Trim trailing CR/LF (handled by trim, but clear the line for safety)
         std::string trimmed = trim(line);
-        if (trimmed.empty()) {
+        if (trimmed.empty() || trimmed[0] == '#') {
             continue;
         }
-        // Skip comment lines
-        if (trimmed[0] == '#') {
-            continue;
-        }
-        // Split on first '='
-        std::size_t eq = trimmed.find('=');
+        const std::size_t eq = trimmed.find('=');
         if (eq == std::string::npos) {
             continue;
         }
         std::string key = trim(trimmed.substr(0, eq));
         std::string value = trim(trimmed.substr(eq + 1));
-        if (key.empty()) {
-            continue;
-        }
-        // Only allowlisted keys are returned
-        if (!isAllowlisted(key)) {
+        if (key.empty() || !isAllowlisted(key, additional_safe_keys)) {
             continue;
         }
         result[key] = value;
