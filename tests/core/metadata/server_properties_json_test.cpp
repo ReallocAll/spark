@@ -107,8 +107,8 @@ int main()
     // An administrator can append reviewed non-sensitive keys. Sensitive-name
     // guards remain authoritative even if a key is accidentally configured.
     {
-        const std::vector<std::string> additional = {
-            "server-port", "gamemode", "custom-safe-key", "script-debugger-passcode", "third-party-token"};
+        const std::vector<std::string> additional = {"server-port", "gamemode", "custom-safe-key",
+                                                     "script-debugger-passcode", "third-party-token"};
         const auto properties = parseServerProperties(path, additional);
         assert(properties.at("server-port") == "19132");
         assert(properties.at("gamemode") == "survival");
