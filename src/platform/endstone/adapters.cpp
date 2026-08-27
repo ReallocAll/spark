@@ -328,6 +328,13 @@ std::map<std::string, int> EndstonePlayerPingProvider::poll()
 {
     std::map<std::string, int> result;
     for (const auto &player : server_.getOnlinePlayers()) {
+        // Offline/headless clients can be present before Endstone has safe device metadata.
+        // Endstone's ping path may dereference that metadata, so only sample players with
+        // an authenticated XUID. The cached XUID accessor is safe for partially-initialised
+        // players and normal authenticated players keep the existing ping semantics.
+        if (player->getXuid().empty()) {
+            continue;
+        }
         result.emplace(player->getName(), static_cast<int>(player->getPing().count()));
     }
     return result;
