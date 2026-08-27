@@ -414,7 +414,7 @@ void SparkConfig::writeTemplate(std::ostream &out) const
     out << "backgroundProfilerThreadDumper = \"" << escapeString(background_profiler_thread_dumper) << "\"\n";
     out << "\n";
     out << "# Track native process allocation throughput using the existing allocator hooks\n";
-    out << "# Disabled by default until count-only overhead is validated for this server\n";
+    out << "# Enabled by default after Linux/Windows real-BDS overhead validation\n";
     out << "allocationRateMetrics = " << (allocation_rate_metrics_enabled ? "true" : "false") << "\n";
     out << "\n";
     out << "# Comma-separated server.properties keys explicitly reviewed as safe to upload\n";
