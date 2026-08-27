@@ -4,7 +4,6 @@
 #include <iterator>
 #include <string>
 #include <string_view>
-#include <utility>
 
 #include "core/metadata/gamerule_defaults.h"
 
@@ -25,46 +24,50 @@ inline std::string normalizeSemanticMinecraftVersion(std::string_view version)
 // Canonical Bedrock Edition gamerule spellings used by Minecraft Wiki. These
 // names are presentation metadata only; default/effective values continue to
 // come from runtime/BDS measurements and the measured fallback table.
-inline constexpr std::pair<std::string_view, std::string_view> kCanonicalBedrockGameRuleNames[] = {
-    {"commandblockoutput", "commandBlockOutput"},
-    {"commandblocksenabled", "commandBlocksEnabled"},
-    {"dodaylightcycle", "doDaylightCycle"},
-    {"doentitydrops", "doEntityDrops"},
-    {"dofiretick", "doFireTick"},
-    {"doimmediaterespawn", "doImmediateRespawn"},
-    {"doinsomnia", "doInsomnia"},
-    {"dolimitedcrafting", "doLimitedCrafting"},
-    {"domobloot", "doMobLoot"},
-    {"domobspawning", "doMobSpawning"},
-    {"dotiledrops", "doTileDrops"},
-    {"doweathercycle", "doWeatherCycle"},
-    {"drowningdamage", "drowningDamage"},
-    {"falldamage", "fallDamage"},
-    {"firedamage", "fireDamage"},
-    {"freezedamage", "freezeDamage"},
-    {"functioncommandlimit", "functionCommandLimit"},
-    {"keepinventory", "keepInventory"},
-    {"locatorbar", "locatorBar"},
-    {"maxcommandchainlength", "maxCommandChainLength"},
-    {"mobgriefing", "mobGriefing"},
-    {"naturalregeneration", "naturalRegeneration"},
-    {"playersleepingpercentage", "playersSleepingPercentage"},
-    {"playerwaypoints", "playerWaypoints"},
-    {"projectilescanbreakblocks", "projectilesCanBreakBlocks"},
-    {"pvp", "pvp"},
-    {"randomtickspeed", "randomTickSpeed"},
-    {"recipesunlock", "recipesUnlock"},
-    {"respawnblocksexplode", "respawnBlocksExplode"},
-    {"sendcommandfeedback", "sendCommandFeedback"},
-    {"showbordereffect", "showBorderEffect"},
-    {"showcoordinates", "showCoordinates"},
-    {"showdaysplayed", "showDaysPlayed"},
-    {"showdeathmessages", "showDeathMessages"},
-    {"showrecipemessages", "showRecipeMessages"},
-    {"showtags", "showTags"},
-    {"spawnradius", "spawnRadius"},
-    {"tntexplodes", "tntExplodes"},
-    {"tntexplosiondropdecay", "tntExplosionDropDecay"},
+//
+// Keep only the canonical spelling here and derive the case-insensitive lookup
+// key from it. This avoids maintaining a second hand-written lowercase key
+// which can silently drift for names such as playersSleepingPercentage.
+inline constexpr std::string_view kCanonicalBedrockGameRuleNames[] = {
+    "commandBlockOutput",
+    "commandBlocksEnabled",
+    "doDaylightCycle",
+    "doEntityDrops",
+    "doFireTick",
+    "doImmediateRespawn",
+    "doInsomnia",
+    "doLimitedCrafting",
+    "doMobLoot",
+    "doMobSpawning",
+    "doTileDrops",
+    "doWeatherCycle",
+    "drowningDamage",
+    "fallDamage",
+    "fireDamage",
+    "freezeDamage",
+    "functionCommandLimit",
+    "keepInventory",
+    "locatorBar",
+    "maxCommandChainLength",
+    "mobGriefing",
+    "naturalRegeneration",
+    "playersSleepingPercentage",
+    "playerWaypoints",
+    "projectilesCanBreakBlocks",
+    "pvp",
+    "randomTickSpeed",
+    "recipesUnlock",
+    "respawnBlocksExplode",
+    "sendCommandFeedback",
+    "showBorderEffect",
+    "showCoordinates",
+    "showDaysPlayed",
+    "showDeathMessages",
+    "showRecipeMessages",
+    "showTags",
+    "spawnRadius",
+    "tntExplodes",
+    "tntExplosionDropDecay",
 };
 
 }  // namespace detail
@@ -74,11 +77,13 @@ inline std::string canonicalGameRuleName(std::string_view name)
     const std::string normalized = detail::normalizeGameRuleName(name);
     const auto it = std::find_if(std::begin(detail::kCanonicalBedrockGameRuleNames),
                                  std::end(detail::kCanonicalBedrockGameRuleNames),
-                                 [&normalized](const auto &entry) { return entry.first == normalized; });
+                                 [&normalized](const std::string_view canonical_name) {
+                                     return detail::normalizeGameRuleName(canonical_name) == normalized;
+                                 });
     if (it == std::end(detail::kCanonicalBedrockGameRuleNames)) {
         return std::string(name);
     }
-    return std::string(it->second);
+    return std::string(*it);
 }
 
 inline bool shouldExportGameRule(std::string_view name, std::string_view minecraft_version)
