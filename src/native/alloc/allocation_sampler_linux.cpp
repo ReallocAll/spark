@@ -272,11 +272,10 @@ struct AllocationSampler::Impl {
     };
 
     inline static thread_local bool mCountOnlyInsideHook = false;
-    inline static thread_local std::uint8_t mHookShardAnchor = 0;
 
     static std::size_t currentHookShard() noexcept
     {
-        std::uintptr_t value = reinterpret_cast<std::uintptr_t>(&mHookShardAnchor);
+        std::uintptr_t value = reinterpret_cast<std::uintptr_t>(__builtin_thread_pointer());
         value ^= value >> 17;
         value *= 0x9e3779b97f4a7c15ULL;
         value ^= value >> 29;
