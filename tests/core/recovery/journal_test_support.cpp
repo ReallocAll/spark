@@ -30,9 +30,9 @@ JournalBuffer buildLegacySessionConfigPayload()
 {
     auto extended = buildSessionConfigPayload(4000, 0, false, false, false, 1, 0, false, "Console", false, {}, {}, 0);
     JournalBuffer legacy;
-    constexpr std::size_t kV4SuffixSize = sizeof(std::int32_t) + sizeof(std::uint16_t);
-    assert(extended.size() >= kV4SuffixSize);
-    legacy.bytes(extended.data(), extended.size() - kV4SuffixSize);
+    constexpr std::size_t k_v4_suffix_size = sizeof(std::int32_t) + sizeof(std::uint16_t);
+    assert(extended.size() >= k_v4_suffix_size);
+    legacy.bytes(extended.data(), extended.size() - k_v4_suffix_size);
     return legacy;
 }
 
