@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdint>
 #include <fstream>
 #include <optional>
 #include <set>
@@ -36,16 +37,15 @@ std::string trim(std::string value)
     const auto is_space = [](unsigned char ch) {
         return std::isspace(ch) != 0;
     };
-    value.erase(value.begin(), std::find_if_not(value.begin(), value.end(), is_space));
-    value.erase(std::find_if_not(value.rbegin(), value.rend(), is_space).base(), value.end());
+    value.erase(value.begin(), std::ranges::find_if_not(value, is_space));
+    value.erase(std::ranges::find_if_not(value.rbegin(), value.rend(), is_space).base(), value.end());
     return value;
 }
 
 std::string normalizeUuid(std::string value)
 {
     value = trim(std::move(value));
-    std::transform(value.begin(), value.end(), value.begin(),
-                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    std::ranges::transform(value, value.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
     return value;
 }
 
@@ -99,7 +99,7 @@ std::optional<std::string> canonicalVersion(const Json &value)
         if (!part.is_number_integer()) {
             return std::nullopt;
         }
-        const auto number = part.get<long long>();
+        const auto number = part.get<std::int64_t>();
         if (number < 0) {
             return std::nullopt;
         }
@@ -149,8 +149,7 @@ std::vector<ActivePackReference> readActivePackReferences(const std::filesystem:
 
 bool isBehaviorModuleType(std::string type)
 {
-    std::transform(type.begin(), type.end(), type.begin(),
-                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    std::ranges::transform(type, type.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
     return type == "data" || type == "script";
 }
 
@@ -285,8 +284,7 @@ std::optional<std::filesystem::path> resolveWorldRoot(const std::filesystem::pat
     if (const auto configured = levelNameFromServerProperties(server_root); configured.has_value()) {
         names.push_back(*configured);
     }
-    if (isSafeWorldDirectoryName(level_name_hint) &&
-        std::find(names.begin(), names.end(), level_name_hint) == names.end()) {
+    if (isSafeWorldDirectoryName(level_name_hint) && std::ranges::find(names, level_name_hint) == names.end()) {
         names.emplace_back(level_name_hint);
     }
     if (names.empty()) {
@@ -294,7 +292,7 @@ std::optional<std::filesystem::path> resolveWorldRoot(const std::filesystem::pat
     }
 
     for (const std::string &name : names) {
-        const auto world_root = server_root / "worlds" / name;
+        auto world_root = server_root / "worlds" / name;
         std::error_code error;
         if (std::filesystem::is_regular_file(world_root / "world_behavior_packs.json", error) && !error) {
             return world_root;
@@ -325,10 +323,9 @@ std::vector<DataPackInfo> discoverActiveBehaviorPacks(const std::filesystem::pat
     std::vector<DataPackInfo> result;
     std::set<std::pair<std::string, std::string>> emitted;
     for (const ActivePackReference &reference : references) {
-        const auto candidate =
-            std::find_if(candidates.begin(), candidates.end(), [&](const BehaviorPackCandidate &entry) {
-                return entry.id == reference.id && (reference.version.empty() || entry.version == reference.version);
-            });
+        const auto candidate = std::ranges::find_if(candidates, [&](const BehaviorPackCandidate &entry) {
+            return entry.id == reference.id && (reference.version.empty() || entry.version == reference.version);
+        });
         if (candidate == candidates.end()) {
             continue;
         }
