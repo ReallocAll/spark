@@ -97,7 +97,7 @@ void assertDefaults(const SparkConfig &config)
     assert(config.background_profiler_interval == 10);
     assert(config.background_profiler_thread_grouper == "by-pool");
     assert(config.background_profiler_thread_dumper == "default");
-    assert(!config.allocation_rate_metrics_enabled);
+    assert(config.allocation_rate_metrics_enabled);
     assert(!config.disable_response_broadcast);
 }
 
