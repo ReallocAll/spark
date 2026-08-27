@@ -23,6 +23,7 @@ void testDefaults()
     assert(config.background_profiler_interval == 10);
     assert(config.background_profiler_thread_grouper == "by-pool");
     assert(config.background_profiler_thread_dumper == "default");
+    assert(config.server_properties_additional_keys.empty());
     assert(!config.disable_response_broadcast);
     std::printf("  [PASS] defaults\n");
 }
@@ -39,6 +40,7 @@ backgroundProfiler = false
 backgroundProfilerInterval = 20
 backgroundProfilerThreadGrouper = "by-name"
 backgroundProfilerThreadDumper = "all"
+serverPropertiesAdditionalKeys = "server-port, custom-safe-key,server-port"
 disableResponseBroadcast = true
 )");
     SparkConfig config(path);
@@ -50,6 +52,9 @@ disableResponseBroadcast = true
     assert(config.background_profiler_interval == 20);
     assert(config.background_profiler_thread_grouper == "by-name");
     assert(config.background_profiler_thread_dumper == "all");
+    assert(config.server_properties_additional_keys.size() == 2);
+    assert(config.server_properties_additional_keys[0] == "server-port");
+    assert(config.server_properties_additional_keys[1] == "custom-safe-key");
     assert(config.disable_response_broadcast);
     std::printf("  [PASS] TOML valid override\n");
 }
@@ -73,11 +78,13 @@ void testTomlWrongType()
     cleanup(path);
     writeFile(path, R"(viewerUrl = 123
 backgroundProfiler = "not-a-bool"
+serverPropertiesAdditionalKeys = ["server-port"]
 )");
     SparkConfig config(path);
     assert(!config.load());
     assert(config.viewer_url == "https://spark.lucko.me/");
     assert(config.background_profiler_enabled);
+    assert(config.server_properties_additional_keys.empty());
     std::printf("  [PASS] wrong type\n");
 }
 
@@ -106,12 +113,15 @@ void testValidation()
     const std::vector<std::string> invalid = {"backgroundProfilerInterval = -1\n",
                                               "backgroundProfilerInterval = 9223372036854775807\n",
                                               "backgroundProfilerThreadGrouper = \"invalid\"\n",
-                                              "backgroundProfilerThreadDumper = \"invalid\"\n", "bytebinUrl = \"\"\n"};
+                                              "backgroundProfilerThreadDumper = \"invalid\"\n",
+                                              "serverPropertiesAdditionalKeys = \"valid-key,bad key\"\n",
+                                              "bytebinUrl = \"\"\n"};
     for (const auto &text : invalid) {
         writeFile(path, text);
         SparkConfig config(path);
         assert(!config.load());
         assert(config.background_profiler_interval == 10);
+        assert(config.server_properties_additional_keys.empty());
     }
     std::printf("  [PASS] validation\n");
 }
@@ -174,6 +184,7 @@ void testTomlPartial()
     assert(config.viewer_url == "https://custom.example.com/");
     assert(config.bytebin_url == "https://spark-usercontent.lucko.me/");
     assert(config.background_profiler_enabled);
+    assert(config.server_properties_additional_keys.empty());
     std::printf("  [PASS] partial config\n");
 }
 
