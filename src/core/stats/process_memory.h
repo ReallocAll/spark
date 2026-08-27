@@ -34,11 +34,20 @@ struct ProcessMemoryUsage {
     bool max_present = false;
     std::int64_t max_bytes = 0;
     ProcessMemoryLimitSource max_source = ProcessMemoryLimitSource::None;
+
+    // Capacity suitable for the legacy spark-viewer process-memory gauge. This
+    // is deliberately separate from committed: native Linux has no reliable
+    // Java MemoryUsage-style per-process committed value. The capacity is the
+    // tighter of host physical memory and an OS/container process limit when
+    // available, clamped to at least the current resident working set.
+    bool display_total_present = false;
+    std::int64_t display_total_bytes = 0;
 };
 
 inline ProcessMemoryUsage gatherProcessMemoryUsage()
 {
     ProcessMemoryUsage result;
+    std::uint64_t physical_total = 0;
 #ifdef _WIN32
     PROCESS_MEMORY_COUNTERS_EX counters{};
     if (GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS *>(&counters),
@@ -78,6 +87,12 @@ inline ProcessMemoryUsage gatherProcessMemoryUsage()
             }
         }
     }
+
+    MEMORYSTATUSEX memory_status{};
+    memory_status.dwLength = sizeof(memory_status);
+    if (GlobalMemoryStatusEx(&memory_status)) {
+        physical_total = static_cast<std::uint64_t>(memory_status.ullTotalPhys);
+    }
 #else
     std::ifstream statm("/proc/self/statm");
     std::int64_t pages_total = 0;
@@ -87,6 +102,15 @@ inline ProcessMemoryUsage gatherProcessMemoryUsage()
         pages_resident <= std::numeric_limits<std::int64_t>::max() / page_size) {
         result.used_bytes = pages_resident * page_size;
         result.used_present = true;
+    }
+
+    const long physical_pages = sysconf(_SC_PHYS_PAGES);
+    if (physical_pages > 0 && page_size > 0) {
+        const auto pages = static_cast<std::uint64_t>(physical_pages);
+        const auto bytes_per_page = static_cast<std::uint64_t>(page_size);
+        if (pages <= std::numeric_limits<std::uint64_t>::max() / bytes_per_page) {
+            physical_total = pages * bytes_per_page;
+        }
     }
 
     std::ifstream cgroup("/proc/self/cgroup");
@@ -118,6 +142,26 @@ inline ProcessMemoryUsage gatherProcessMemoryUsage()
         }
     }
 #endif
+
+    std::uint64_t display_total = physical_total;
+    if (result.max_present && result.max_bytes > 0) {
+        const auto memory_limit = static_cast<std::uint64_t>(result.max_bytes);
+        if (display_total == 0 || memory_limit < display_total) {
+            display_total = memory_limit;
+        }
+    }
+    if (result.used_present && result.used_bytes >= 0) {
+        const auto used = static_cast<std::uint64_t>(result.used_bytes);
+        if (display_total < used) {
+            display_total = used;
+        }
+    }
+    if (display_total > 0 &&
+        display_total <= static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
+        result.display_total_bytes = static_cast<std::int64_t>(display_total);
+        result.display_total_present = true;
+    }
+
     return result;
 }
 
