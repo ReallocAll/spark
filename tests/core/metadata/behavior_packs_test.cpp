@@ -60,8 +60,7 @@ std::string manifest(const std::string &uuid, const std::string &version, const 
 
 const spark::DataPackInfo *findPack(const std::vector<spark::DataPackInfo> &packs, const std::string &name)
 {
-    const auto it =
-        std::find_if(packs.begin(), packs.end(), [&](const spark::DataPackInfo &pack) { return pack.name == name; });
+    const auto it = std::ranges::find_if(packs, [&](const spark::DataPackInfo &pack) { return pack.name == name; });
     return it == packs.end() ? nullptr : &*it;
 }
 
@@ -123,7 +122,7 @@ void testVersionSelectionAndCorruptManifestTolerance()
     writeText(root / "behavior_packs" / "v1" / "manifest.json",
               manifest(KServerUuid, "[1,0,0]", "Old Version", "old", "data"));
     writeText(root / "behavior_packs" / "v2" / "manifest.json",
-              manifest(KServerUuid, "\"2.0.0\"", "Selected Version", "selected", "data"));
+              manifest(KServerUuid, R"("2.0.0")", "Selected Version", "selected", "data"));
     writeText(root / "behavior_packs" / "broken" / "manifest.json", "{ this is not valid json");
 
     const auto packs = spark::discoverActiveBehaviorPacks(root, "VersionWorld");
