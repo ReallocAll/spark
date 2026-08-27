@@ -115,8 +115,8 @@ bool ProfilerService::armProfilerTimeout(std::int64_t timeout_seconds) noexcept
     });
 }
 
-void ProfilerService::finishProfiler(const std::string &sender_name, bool sender_is_player, bool save,
-                                     const std::string &comment)
+void ProfilerService::finishProfiler(const std::string &sender_name, bool sender_is_player,
+                                     std::string sender_unique_id, bool save, const std::string &comment)
 {
     const auto notify_best_effort = [this](const std::string &name, const std::string &message) noexcept {
         try {
@@ -192,6 +192,7 @@ void ProfilerService::finishProfiler(const std::string &sender_name, bool sender
     pending_save_ = save;
     pending_sender_ = sender_name;
     pending_sender_is_player_ = sender_is_player;
+    pending_sender_unique_id_ = sender_is_player ? std::move(sender_unique_id) : std::string{};
 
     // Join any completed export thread before starting a new one.
     if (export_thread_.joinable()) {
@@ -243,6 +244,7 @@ void ProfilerService::announceResult() noexcept
     const ExportOutcome outcome = pending_outcome_;
     const std::string sender = std::move(pending_sender_);
     const bool sender_is_player = pending_sender_is_player_;
+    const std::string sender_unique_id = std::move(pending_sender_unique_id_);
     const std::string result = std::move(pending_result_);
     const char *headline = "Profiler stopped.";
     if (outcome == ExportOutcome::Uploaded) {
@@ -287,10 +289,10 @@ void ProfilerService::announceResult() noexcept
             if (log) {
                 const std::int64_t now_ms = nowMs();
                 if (outcome == ExportOutcome::Uploaded) {
-                    log->add(Activity::url(sender, sender_is_player, now_ms, "Profiler", result));
+                    log->add(Activity::url(sender, sender_is_player, now_ms, "Profiler", result, sender_unique_id));
                 }
                 else if (outcome == ExportOutcome::Saved) {
-                    log->add(Activity::file(sender, sender_is_player, now_ms, "Profiler", result));
+                    log->add(Activity::file(sender, sender_is_player, now_ms, "Profiler", result, sender_unique_id));
                 }
             }
         }
@@ -309,7 +311,7 @@ void ProfilerService::onTick(double mspt)
         if (profiler_.running()) {
             const bool save = profiler_.options().save_to_file;
             closeViewerSocket();
-            finishProfiler(start_sender_name_, start_sender_is_player_, save, std::string());
+            finishProfiler(start_sender_name_, start_sender_is_player_, start_sender_unique_id_, save, std::string());
         }
     }
     if (viewer_open_) {
@@ -349,7 +351,7 @@ void ProfilerService::onTick(double mspt)
     if (auto_end > 0 && nowMs() >= auto_end) {
         bool save = profiler_.options().save_to_file;
         closeViewerSocket();
-        finishProfiler(start_sender_name_, start_sender_is_player_, save, std::string());
+        finishProfiler(start_sender_name_, start_sender_is_player_, start_sender_unique_id_, save, std::string());
     }
 }
 

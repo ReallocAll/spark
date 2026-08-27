@@ -45,11 +45,13 @@ void HealthCommand::openHealthDashboard(CommandSender &sender)
 
     dashboard_sender_ = sender.getName();
     dashboard_sender_is_player_ = sender.isPlayer();
+    dashboard_sender_unique_id_ = dashboard_sender_is_player_ ? sender.getUniqueId() : std::string{};
     dashboard_open_time_ms_ = now_ms;
     accepted_dashboard_generation_ = dashboard_->generation() + 1;
     const HealthDashboard::OpenResult result = dashboard_->open(std::move(initial), dashboard_sender_);
     if (!result.accepted) {
         dashboard_sender_.clear();
+        dashboard_sender_unique_id_.clear();
         accepted_dashboard_generation_ = 0;
         sender.sendMessage("Health dashboard could not be opened: {}", result.error);
         return;
@@ -172,14 +174,16 @@ void HealthCommand::uploadHealthReport(CommandSender &sender)
 
 HealthData HealthCommand::captureHealthData(const CommandSender &sender, std::int64_t now_ms)
 {
-    return captureHealthDataForSender(sender.getName(), sender.isPlayer(), now_ms);
+    const bool sender_is_player = sender.isPlayer();
+    return captureHealthDataForSender(sender.getName(), sender_is_player, now_ms,
+                                      sender_is_player ? sender.getUniqueId() : std::string{});
 }
 
 HealthData HealthCommand::captureHealthDataForSender(const std::string &sender_name, bool sender_is_player,
-                                                     std::int64_t now_ms)
+                                                     std::int64_t now_ms, std::string sender_unique_id)
 {
     return spark::captureHealthData(statistics_, metadata_provider_, sender_name, sender_is_player, now_ms,
-                                    pingSamples(), networkSnapshots());
+                                    pingSamples(), networkSnapshots(), std::move(sender_unique_id));
 }
 
 UploadResult HealthCommand::uploadHealthData(const HealthData &data, CancellationToken cancellation)
@@ -217,6 +221,7 @@ void HealthCommand::runHealthUpload(const HealthData &data, std::string sender_n
         upload_result_ = std::move(result);
         upload_sender_ = std::move(sender_name);
         upload_sender_is_player_ = sender_is_player;
+        upload_sender_unique_id_ = data.creator_unique_id;
         upload_time_ms_ = now_ms;
     }
     const std::weak_ptr<int> lifetime = std::atomic_load_explicit(&lifetime_, std::memory_order_acquire);
@@ -250,6 +255,7 @@ void HealthCommand::completeHealthDashboard(HealthDashboard::OpenResult result)
             }
             if (!result.ok) {
                 dashboard_sender_.clear();
+                dashboard_sender_unique_id_.clear();
                 accepted_dashboard_generation_ = 0;
                 try {
                     notifier_.notify(result.sender_name, "Failed to open the health dashboard.");
@@ -268,7 +274,7 @@ void HealthCommand::completeHealthDashboard(HealthDashboard::OpenResult result)
                     ActivityLog *log = activity_log_provider_();
                     if (log) {
                         log->add(Activity::url(result.sender_name, dashboard_sender_is_player_, dashboard_open_time_ms_,
-                                               "Health report", result.url));
+                                               "Health report", result.url, dashboard_sender_unique_id_));
                     }
                 }
             }
@@ -286,6 +292,7 @@ void HealthCommand::announceHealthUpload() noexcept
     UploadResult result;
     std::string sender_name;
     bool sender_is_player = false;
+    std::string sender_unique_id;
     std::int64_t now_ms = 0;
     try {
         {
@@ -293,6 +300,7 @@ void HealthCommand::announceHealthUpload() noexcept
             result = std::move(upload_result_);
             sender_name = std::move(upload_sender_);
             sender_is_player = upload_sender_is_player_;
+            sender_unique_id = std::move(upload_sender_unique_id_);
             now_ms = upload_time_ms_;
         }
         const auto notify_best_effort = [this, &sender_name](const std::string &message) noexcept {
@@ -309,7 +317,8 @@ void HealthCommand::announceHealthUpload() noexcept
                 if (activity_log_provider_) {
                     ActivityLog *log = activity_log_provider_();
                     if (log) {
-                        log->add(Activity::url(sender_name, sender_is_player, now_ms, "Health report", url));
+                        log->add(Activity::url(sender_name, sender_is_player, now_ms, "Health report", url,
+                                               sender_unique_id));
                     }
                 }
             }

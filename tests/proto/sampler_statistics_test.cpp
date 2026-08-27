@@ -27,6 +27,9 @@ int main()
 
     spark::ProfileMetadata metadata;
     metadata.start_time_ms = 1'000;
+    metadata.creator_name = "PlayerOne";
+    metadata.creator_is_player = true;
+    metadata.creator_unique_id = "123e4567-e89b-12d3-a456-426614174000";
     metadata.end_time_ms = 1'800;
     metadata.platform_stats.present = true;
     metadata.system_stats.present = true;
@@ -127,6 +130,30 @@ int main()
                });
     });
     if (!check(rolling_values, "rolling TPS/MSPT/CPU values did not round-trip")) {
+        return 1;
+    }
+
+    const bool creator_uuid = spark::proto_test::findMessageBytes(profile, 1, [](std::string_view metadata_bytes) {
+        return spark::proto_test::findMessageBytes(metadata_bytes, 1, [](std::string_view creator_bytes) {
+            return spark::proto_test::hasVarint(creator_bytes, 1, 1) &&
+                   spark::proto_test::hasString(creator_bytes, 2, "PlayerOne") &&
+                   spark::proto_test::hasString(creator_bytes, 3, "123e4567-e89b-12d3-a456-426614174000");
+        });
+    });
+    if (!check(creator_uuid, "player creator UUID was not encoded")) {
+        return 1;
+    }
+
+    spark::ProfileMetadata console_metadata = metadata;
+    console_metadata.creator_is_player = false;
+    const std::string console_profile = spark::buildSamplerData(console_metadata, tree, resolved);
+    const bool console_uuid_omitted =
+        spark::proto_test::findMessageBytes(console_profile, 1, [](std::string_view metadata_bytes) {
+            return spark::proto_test::findMessageBytes(metadata_bytes, 1, [](std::string_view creator_bytes) {
+                return !spark::proto_test::hasField(creator_bytes, 3);
+            });
+        });
+    if (!check(console_uuid_omitted, "non-player creator unexpectedly encoded a UUID")) {
         return 1;
     }
 
