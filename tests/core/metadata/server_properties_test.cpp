@@ -3,6 +3,8 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <string_view>
+#include <utility>
 
 #include "core/metadata/gamerule_defaults.h"
 #include "core/metadata/gamerule_semantics.h"
@@ -210,13 +212,65 @@ int main()
         const auto random_tick_speed = resolveGameRuleDefault("randomTickSpeed", "1.26.44.3");
         const auto recipes_unlock = resolveGameRuleDefault("recipesUnlock", "26.44");
         const auto max_chain = resolveGameRuleDefault("maxCommandChainLength", "26.44");
+        const auto players_sleeping = resolveGameRuleDefault("playersSleepingPercentage", "26.44");
         const auto player_waypoints = resolveGameRuleDefault("Minecraft:PlayerWaypoints", "1.26.44.3");
         assert(spawn_radius.has_value() && *spawn_radius == "10");
         assert(random_tick_speed.has_value() && *random_tick_speed == "1");
         assert(recipes_unlock.has_value() && *recipes_unlock == "true");
         assert(max_chain.has_value() && *max_chain == "65535");
+        assert(players_sleeping.has_value() && *players_sleeping == "100");
         assert(player_waypoints.has_value() && *player_waypoints == "1");
         assert(normalizeGameRuleSemanticValue("playerWaypoints", *player_waypoints) == "everyone");
+    }
+
+    // Report names use canonical Bedrock Edition spellings while accepting Endstone/BDS casing as input.
+    {
+        constexpr std::pair<std::string_view, std::string_view> expected_names[] = {
+            {"commandblockoutput", "commandBlockOutput"},
+            {"commandblocksenabled", "commandBlocksEnabled"},
+            {"doDayLightCycle", "doDaylightCycle"},
+            {"doentitydrops", "doEntityDrops"},
+            {"dofiretick", "doFireTick"},
+            {"doimmediaterespawn", "doImmediateRespawn"},
+            {"doinsomnia", "doInsomnia"},
+            {"dolimitedcrafting", "doLimitedCrafting"},
+            {"domobloot", "doMobLoot"},
+            {"domobspawning", "doMobSpawning"},
+            {"dotiledrops", "doTileDrops"},
+            {"doweathercycle", "doWeatherCycle"},
+            {"drowningdamage", "drowningDamage"},
+            {"falldamage", "fallDamage"},
+            {"firedamage", "fireDamage"},
+            {"freezedamage", "freezeDamage"},
+            {"functioncommandlimit", "functionCommandLimit"},
+            {"keepinventory", "keepInventory"},
+            {"locatorbar", "locatorBar"},
+            {"maxcommandchainlength", "maxCommandChainLength"},
+            {"mobgriefing", "mobGriefing"},
+            {"naturalregeneration", "naturalRegeneration"},
+            {"playerssleepingpercentage", "playersSleepingPercentage"},
+            {"playerwaypoints", "playerWaypoints"},
+            {"projectilescanbreakblocks", "projectilesCanBreakBlocks"},
+            {"pvp", "pvp"},
+            {"randomtickspeed", "randomTickSpeed"},
+            {"recipesunlock", "recipesUnlock"},
+            {"respawnblocksexplode", "respawnBlocksExplode"},
+            {"sendcommandfeedback", "sendCommandFeedback"},
+            {"showbordereffect", "showBorderEffect"},
+            {"showcoordinates", "showCoordinates"},
+            {"showdaysplayed", "showDaysPlayed"},
+            {"showdeathmessages", "showDeathMessages"},
+            {"showrecipemessages", "showRecipeMessages"},
+            {"showtags", "showTags"},
+            {"spawnradius", "spawnRadius"},
+            {"tntexplodes", "tntExplodes"},
+            {"tntexplosiondropdecay", "tntExplosionDropDecay"},
+        };
+        for (const auto &[input, expected] : expected_names) {
+            assert(canonicalGameRuleName(input) == expected);
+        }
+        assert(canonicalGameRuleName("minecraft:PLAYERSLEEPINGPERCENTAGE") == "playersSleepingPercentage");
+        assert(canonicalGameRuleName("sparkFutureUnknownRule") == "sparkFutureUnknownRule");
     }
 
     // Historical default changes are sparse overrides, not full version snapshots.
