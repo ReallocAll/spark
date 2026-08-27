@@ -9,6 +9,7 @@ on:
       - ".github/scripts/apply_allocation_counter_shards.py"
       - ".github/scripts/apply_allocation_thread_pointer_shard.py"
       - ".github/scripts/apply_allocation_lifecycle_retry.py"
+      - ".github/scripts/apply_allocation_windows_counter_shards.py"
 
 permissions:
   contents: write
@@ -21,9 +22,9 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - name: Apply Linux allocation fast paths
+      - name: Apply allocation fast paths
         run: |
-          git checkout origin/develop -- src/native/alloc/allocation_sampler_linux.cpp
+          git checkout origin/develop -- src/native/alloc/allocation_sampler_linux.cpp src/native/alloc/allocation_sampler_windows.cpp
           python .github/scripts/apply_allocation_tls_fast_path.py
           python - <<'PY'
           from pathlib import Path
@@ -50,12 +51,13 @@ jobs:
           python .github/scripts/apply_allocation_counter_shards.py
           python .github/scripts/apply_allocation_thread_pointer_shard.py
           python .github/scripts/apply_allocation_lifecycle_retry.py
+          python .github/scripts/apply_allocation_windows_counter_shards.py
           git diff --check
-          git diff -- src/native/alloc/allocation_sampler_linux.cpp
+          git diff -- src/native/alloc/allocation_sampler_linux.cpp src/native/alloc/allocation_sampler_windows.cpp
       - name: Commit fast paths
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add src/native/alloc/allocation_sampler_linux.cpp
-          git commit -m "perf: bound Linux allocation lifecycle retries"
+          git add src/native/alloc/allocation_sampler_linux.cpp src/native/alloc/allocation_sampler_windows.cpp
+          git commit -m "perf: shard allocation profiler hot counters"
           git push origin HEAD:perf/allocation-profiler-lifecycle
