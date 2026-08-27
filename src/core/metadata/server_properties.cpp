@@ -13,10 +13,11 @@ namespace {
 
 // Known-safe diagnostics from the current Bedrock Dedicated Server
 // server.properties reference. Identity-bearing values (server/world names),
-// seeds, debugger endpoints and credentials are intentionally absent.
-constexpr std::array<std::string_view, 47> KKnownSafeProperties = {
+// seeds, debugger endpoints and credentials are intentionally absent. Existing
+// conservative exclusions such as the default game mode and listen ports are
+// also preserved; administrators can opt those non-sensitive keys in explicitly.
+constexpr std::array<std::string_view, 44> KKnownSafeProperties = {
     // World/session configuration
-    "gamemode",
     "force-gamemode",
     "difficulty",
     "allow-cheats",
@@ -30,8 +31,6 @@ constexpr std::array<std::string_view, 47> KKnownSafeProperties = {
     "default-player-permission-level",
     "texturepack-required",
     // Network diagnostics
-    "server-port",
-    "server-portv6",
     "enable-lan-visibility",
     "compression-threshold",
     "compression-algorithm",
