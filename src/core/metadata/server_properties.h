@@ -8,9 +8,15 @@
 
 namespace spark {
 
+// Replaces the administrator-reviewed extension to Spark's built-in strict
+// allowlist. Intended to be configured once during plugin startup.
+void setAdditionalSafeServerPropertyKeys(std::vector<std::string> keys);
+
 // Parses server.properties with a strict allowlist. The built-in table contains
 // known-safe BDS diagnostics; administrators may explicitly append additional
-// keys they have reviewed. Known-sensitive keys are never returned.
+// keys they have reviewed. Known-sensitive keys are never returned. The
+// optional argument is primarily useful for isolated callers/tests and is
+// combined with the startup-configured extension.
 std::map<std::string, std::string> parseServerProperties(
     const std::filesystem::path &file, const std::vector<std::string> &additional_safe_keys = {});
 
