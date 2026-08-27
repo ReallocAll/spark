@@ -48,6 +48,8 @@ int main()
     world.present = true;
     world.total_entities = 8;
     world.game_rules.push_back({.name = "dodaylightcycle", .world_values = {{"level", "false"}}});
+    world.data_packs.push_back(
+        {.name = "behavior-pack", .description = "behavior description", .source = "world", .builtin = true});
 
     const std::string platform_bytes = spark::proto_detail::buildPlatformStatistics(platform, statistics, &world);
     if (!check(spark::proto_test::hasVarint(platform_bytes, 3, 2000), "uptime was not encoded") ||
@@ -75,6 +77,18 @@ int main()
                               });
                    }),
                "game rule statistics were not encoded")) {
+        return 1;
+    }
+
+    if (!check(spark::proto_test::findMessage(world_bytes, 5,
+                                              [](spark::ProtoReader message) {
+                                                  return spark::proto_test::hasString(message, 1, "behavior-pack") &&
+                                                         spark::proto_test::hasString(message, 2,
+                                                                                      "behavior description") &&
+                                                         spark::proto_test::hasString(message, 3, "world") &&
+                                                         spark::proto_test::hasVarint(message, 4, 1);
+                                              }),
+               "behavior pack statistics were not encoded")) {
         return 1;
     }
 
