@@ -409,11 +409,15 @@ struct AllocationSampler::Impl {
     std::atomic<std::uint64_t> generation{0};
     std::atomic<std::uint64_t> interval_bytes{kDefaultAllocationIntervalBytes};
     std::atomic<std::uint64_t> sampling_seed{0};
-    std::atomic<std::uint64_t> hook_calls{0};
-    std::atomic<std::uint64_t> successful_allocation_calls{0};
+    struct alignas(64) HotCounters {
+        std::atomic<std::uint64_t> hook_calls{0};
+        std::atomic<std::uint64_t> successful_allocation_calls{0};
+        std::atomic<std::uint64_t> observed_bytes{0};
+    };
+    static_assert(sizeof(HotCounters) <= 64);
+    std::array<HotCounters, KHookCallShards> hot_counters{};
     std::atomic<std::uint64_t> sampling_points{0};
     std::atomic<std::uint64_t> filtered_samples{0};
-    std::atomic<std::uint64_t> observed_bytes{0};
     std::atomic<std::uint64_t> dropped_samples{0};
     std::atomic<std::uint64_t> dropped_events{0};
     std::atomic<std::uint64_t> dropped_tick_events{0};
@@ -479,7 +483,7 @@ struct AllocationSampler::Impl {
             std::abort();
         }
         if (impl->tracking.load(std::memory_order_relaxed)) {
-            impl->hook_calls.fetch_add(1, std::memory_order_relaxed);
+            impl->hot_counters[currentHookShard()].hook_calls.fetch_add(1, std::memory_order_relaxed);
         }
         return impl;
     }
@@ -1032,11 +1036,12 @@ struct AllocationSampler::Impl {
 
     void recordAllocation(void *pointer, std::uint64_t requested_bytes) noexcept
     {
-        successful_allocation_calls.fetch_add(1, std::memory_order_relaxed);
+        HotCounters &counters = hot_counters[currentHookShard()];
+        counters.successful_allocation_calls.fetch_add(1, std::memory_order_relaxed);
         if (requested_bytes == 0) {
             return;
         }
-        observed_bytes.fetch_add(requested_bytes, std::memory_order_relaxed);
+        counters.observed_bytes.fetch_add(requested_bytes, std::memory_order_relaxed);
         if (config.count_only) {
             return;
         }
@@ -1561,11 +1566,13 @@ struct AllocationSampler::Impl {
         while (ticks.dequeue(tick)) {
         }
         current_tick.store(0, std::memory_order_relaxed);
-        hook_calls.store(0, std::memory_order_relaxed);
-        successful_allocation_calls.store(0, std::memory_order_relaxed);
+        for (auto &counters : hot_counters) {
+            counters.hook_calls.store(0, std::memory_order_relaxed);
+            counters.successful_allocation_calls.store(0, std::memory_order_relaxed);
+            counters.observed_bytes.store(0, std::memory_order_relaxed);
+        }
         sampling_points.store(0, std::memory_order_relaxed);
         filtered_samples.store(0, std::memory_order_relaxed);
-        observed_bytes.store(0, std::memory_order_relaxed);
         dropped_samples.store(0, std::memory_order_relaxed);
         dropped_events.store(0, std::memory_order_relaxed);
         dropped_tick_events.store(0, std::memory_order_relaxed);
@@ -1864,11 +1871,19 @@ std::uint64_t AllocationSampler::numberOfTicks() const
 }
 std::uint64_t AllocationSampler::hookCalls() const
 {
-    return impl_->hook_calls.load(std::memory_order_relaxed);
+    std::uint64_t total = 0;
+    for (const auto &counters : impl_->hot_counters) {
+        total += counters.hook_calls.load(std::memory_order_relaxed);
+    }
+    return total;
 }
 std::uint64_t AllocationSampler::successfulAllocationCalls() const
 {
-    return impl_->successful_allocation_calls.load(std::memory_order_relaxed);
+    std::uint64_t total = 0;
+    for (const auto &counters : impl_->hot_counters) {
+        total += counters.successful_allocation_calls.load(std::memory_order_relaxed);
+    }
+    return total;
 }
 std::uint64_t AllocationSampler::sampleCount() const
 {
@@ -1896,7 +1911,11 @@ std::uint64_t AllocationSampler::threadIdentityCacheDrops() const
 }
 std::uint64_t AllocationSampler::observedBytes() const
 {
-    return impl_->observed_bytes.load(std::memory_order_relaxed);
+    std::uint64_t total = 0;
+    for (const auto &counters : impl_->hot_counters) {
+        total += counters.observed_bytes.load(std::memory_order_relaxed);
+    }
+    return total;
 }
 std::uint64_t AllocationSampler::droppedSamples() const
 {
