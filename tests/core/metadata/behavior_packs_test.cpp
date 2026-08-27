@@ -38,26 +38,30 @@ std::string manifest(const std::string &uuid, const std::string &version, const 
            "  \"format_version\": 2,\n"
            "  \"header\": {\n"
            "    \"name\": \"" +
-           name + "\",\n"
-                  "    \"description\": \"" +
-           description + "\",\n"
-                         "    \"uuid\": \"" +
-           uuid + "\",\n"
-                  "    \"version\": " +
-           version + "\n"
-                     "  },\n"
-                     "  \"modules\": [\n"
-                     "    {\"type\": \"" +
-           module_type + "\", \"uuid\": \"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa\", \"version\": [1,0,0]}\n"
-                         "  ]\n"
-                         "}\n";
+           name +
+           "\",\n"
+           "    \"description\": \"" +
+           description +
+           "\",\n"
+           "    \"uuid\": \"" +
+           uuid +
+           "\",\n"
+           "    \"version\": " +
+           version +
+           "\n"
+           "  },\n"
+           "  \"modules\": [\n"
+           "    {\"type\": \"" +
+           module_type +
+           "\", \"uuid\": \"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa\", \"version\": [1,0,0]}\n"
+           "  ]\n"
+           "}\n";
 }
 
 const spark::DataPackInfo *findPack(const std::vector<spark::DataPackInfo> &packs, const std::string &name)
 {
-    const auto it = std::find_if(packs.begin(), packs.end(), [&](const spark::DataPackInfo &pack) {
-        return pack.name == name;
-    });
+    const auto it =
+        std::find_if(packs.begin(), packs.end(), [&](const spark::DataPackInfo &pack) { return pack.name == name; });
     return it == packs.end() ? nullptr : &*it;
 }
 

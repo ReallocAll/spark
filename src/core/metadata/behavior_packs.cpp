@@ -33,7 +33,9 @@ struct BehaviorPackCandidate {
 
 std::string trim(std::string value)
 {
-    const auto is_space = [](unsigned char ch) { return std::isspace(ch) != 0; };
+    const auto is_space = [](unsigned char ch) {
+        return std::isspace(ch) != 0;
+    };
     value.erase(value.begin(), std::find_if_not(value.begin(), value.end(), is_space));
     value.erase(std::find_if_not(value.rbegin(), value.rend(), is_space).base(), value.end());
     return value;
@@ -42,9 +44,8 @@ std::string trim(std::string value)
 std::string normalizeUuid(std::string value)
 {
     value = trim(std::move(value));
-    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
-        return static_cast<char>(std::tolower(ch));
-    });
+    std::transform(value.begin(), value.end(), value.begin(),
+                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
     return value;
 }
 
@@ -148,9 +149,8 @@ std::vector<ActivePackReference> readActivePackReferences(const std::filesystem:
 
 bool isBehaviorModuleType(std::string type)
 {
-    std::transform(type.begin(), type.end(), type.begin(), [](unsigned char ch) {
-        return static_cast<char>(std::tolower(ch));
-    });
+    std::transform(type.begin(), type.end(), type.begin(),
+                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
     return type == "data" || type == "script";
 }
 
@@ -164,8 +164,7 @@ std::optional<BehaviorPackCandidate> parseBehaviorManifest(const std::filesystem
 
     const auto header_it = json->find("header");
     const auto modules_it = json->find("modules");
-    if (header_it == json->end() || !header_it->is_object() || modules_it == json->end() ||
-        !modules_it->is_array()) {
+    if (header_it == json->end() || !header_it->is_object() || modules_it == json->end() || !modules_it->is_array()) {
         return std::nullopt;
     }
 
@@ -196,8 +195,8 @@ std::optional<BehaviorPackCandidate> parseBehaviorManifest(const std::filesystem
     }
 
     std::string name = pack_root.filename().string();
-    if (const auto name_it = header_it->find("name"); name_it != header_it->end() && name_it->is_string() &&
-                                                     !name_it->get_ref<const std::string &>().empty()) {
+    if (const auto name_it = header_it->find("name");
+        name_it != header_it->end() && name_it->is_string() && !name_it->get_ref<const std::string &>().empty()) {
         name = name_it->get<std::string>();
     }
 
@@ -326,9 +325,10 @@ std::vector<DataPackInfo> discoverActiveBehaviorPacks(const std::filesystem::pat
     std::vector<DataPackInfo> result;
     std::set<std::pair<std::string, std::string>> emitted;
     for (const ActivePackReference &reference : references) {
-        const auto candidate = std::find_if(candidates.begin(), candidates.end(), [&](const BehaviorPackCandidate &entry) {
-            return entry.id == reference.id && (reference.version.empty() || entry.version == reference.version);
-        });
+        const auto candidate =
+            std::find_if(candidates.begin(), candidates.end(), [&](const BehaviorPackCandidate &entry) {
+                return entry.id == reference.id && (reference.version.empty() || entry.version == reference.version);
+            });
         if (candidate == candidates.end()) {
             continue;
         }
