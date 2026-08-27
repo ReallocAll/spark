@@ -125,7 +125,7 @@ inline constexpr std::pair<std::string_view, std::string_view> kCurrentDefaults[
     {"maxcommandchainlength", "65535"},
     {"mobgriefing", "true"},
     {"naturalregeneration", "true"},
-    {"playersleepingpercentage", "100"},
+    {"playerssleepingpercentage", "100"},
     {"playerwaypoints", "1"},
     {"projectilescanbreakblocks", "true"},
     {"pvp", "true"},
