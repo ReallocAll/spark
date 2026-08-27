@@ -174,7 +174,7 @@ void StatisticsService::recordAllocationBytesAt(std::uint64_t total_bytes, std::
         last_allocation_sample_steady_ms_ = steady_ms;
         return;
     }
-    if (!elapsedAtLeast(steady_ms, last_allocation_sample_steady_ms_, 1000)) {
+    if (!elapsedAtLeast(steady_ms, last_allocation_sample_steady_ms_, MetricsHistory::kIntervalMs)) {
         return;
     }
     const std::int64_t elapsed_ms = steady_ms - last_allocation_sample_steady_ms_;
