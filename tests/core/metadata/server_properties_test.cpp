@@ -3,8 +3,11 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <string_view>
+#include <utility>
 
 #include "core/metadata/gamerule_defaults.h"
+#include "core/metadata/gamerule_semantics.h"
 #include "core/metadata/server_properties.h"
 
 using namespace spark;  // NOLINT(google-build-using-namespace)
@@ -209,10 +212,65 @@ int main()
         const auto random_tick_speed = resolveGameRuleDefault("randomTickSpeed", "1.26.44.3");
         const auto recipes_unlock = resolveGameRuleDefault("recipesUnlock", "26.44");
         const auto max_chain = resolveGameRuleDefault("maxCommandChainLength", "26.44");
+        const auto players_sleeping = resolveGameRuleDefault("playersSleepingPercentage", "26.44");
+        const auto player_waypoints = resolveGameRuleDefault("Minecraft:PlayerWaypoints", "1.26.44.3");
         assert(spawn_radius.has_value() && *spawn_radius == "10");
         assert(random_tick_speed.has_value() && *random_tick_speed == "1");
         assert(recipes_unlock.has_value() && *recipes_unlock == "true");
-        assert(max_chain.has_value() && *max_chain == "65536");
+        assert(max_chain.has_value() && *max_chain == "65535");
+        assert(players_sleeping.has_value() && *players_sleeping == "100");
+        assert(player_waypoints.has_value() && *player_waypoints == "1");
+        assert(normalizeGameRuleSemanticValue("playerWaypoints", *player_waypoints) == "everyone");
+    }
+
+    // Report names use canonical Bedrock Edition spellings while accepting Endstone/BDS casing as input.
+    {
+        constexpr std::pair<std::string_view, std::string_view> expected_names[] = {
+            {"commandblockoutput", "commandBlockOutput"},
+            {"commandblocksenabled", "commandBlocksEnabled"},
+            {"doDayLightCycle", "doDaylightCycle"},
+            {"doentitydrops", "doEntityDrops"},
+            {"dofiretick", "doFireTick"},
+            {"doimmediaterespawn", "doImmediateRespawn"},
+            {"doinsomnia", "doInsomnia"},
+            {"dolimitedcrafting", "doLimitedCrafting"},
+            {"domobloot", "doMobLoot"},
+            {"domobspawning", "doMobSpawning"},
+            {"dotiledrops", "doTileDrops"},
+            {"doweathercycle", "doWeatherCycle"},
+            {"drowningdamage", "drowningDamage"},
+            {"falldamage", "fallDamage"},
+            {"firedamage", "fireDamage"},
+            {"freezedamage", "freezeDamage"},
+            {"functioncommandlimit", "functionCommandLimit"},
+            {"keepinventory", "keepInventory"},
+            {"locatorbar", "locatorBar"},
+            {"maxcommandchainlength", "maxCommandChainLength"},
+            {"mobgriefing", "mobGriefing"},
+            {"naturalregeneration", "naturalRegeneration"},
+            {"playerssleepingpercentage", "playersSleepingPercentage"},
+            {"playerwaypoints", "playerWaypoints"},
+            {"projectilescanbreakblocks", "projectilesCanBreakBlocks"},
+            {"pvp", "pvp"},
+            {"randomtickspeed", "randomTickSpeed"},
+            {"recipesunlock", "recipesUnlock"},
+            {"respawnblocksexplode", "respawnBlocksExplode"},
+            {"sendcommandfeedback", "sendCommandFeedback"},
+            {"showbordereffect", "showBorderEffect"},
+            {"showcoordinates", "showCoordinates"},
+            {"showdaysplayed", "showDaysPlayed"},
+            {"showdeathmessages", "showDeathMessages"},
+            {"showrecipemessages", "showRecipeMessages"},
+            {"showtags", "showTags"},
+            {"spawnradius", "spawnRadius"},
+            {"tntexplodes", "tntExplodes"},
+            {"tntexplosiondropdecay", "tntExplosionDropDecay"},
+        };
+        for (const auto &[input, expected] : expected_names) {
+            assert(canonicalGameRuleName(input) == expected);
+        }
+        assert(canonicalGameRuleName("minecraft:PLAYERSSLEEPINGPERCENTAGE") == "playersSleepingPercentage");
+        assert(canonicalGameRuleName("sparkFutureUnknownRule") == "sparkFutureUnknownRule");
     }
 
     // Historical default changes are sparse overrides, not full version snapshots.
@@ -231,7 +289,7 @@ int main()
         assert(!currentGameRuleFallback("minecraft:sparkFutureUnknownRule").has_value());
     }
 
-    // Rename/type migration metadata is deliberately separate from default resolution.
+    // Rename/type migration metadata is separate from explicit current defaults.
     {
         const auto migration = gameRuleMigration("locatorBar");
         if (!migration.has_value()) {
@@ -245,9 +303,33 @@ int main()
         assert(migration_value.old_kind == GameRuleValueKind::Boolean);
         assert(migration_value.new_kind == GameRuleValueKind::Enum);
         assert(!resolveGameRuleDefault("locatorBar", "26.44").has_value());
-        assert(!resolveGameRuleDefault("playerWaypoints", "26.44").has_value());
+        const auto player_waypoints = resolveGameRuleDefault("playerWaypoints", "26.44");
+        assert(player_waypoints.has_value() && *player_waypoints == "1");
     }
 
-    std::printf("All server.properties and gamerule fallback tests passed.\n");
+    // locatorBar remains historical metadata before 1.26.30 but is hidden at and after the migration boundary.
+    {
+        assert(shouldExportGameRule("locatorBar", "1.26.29"));
+        assert(shouldExportGameRule("minecraft:LOCATORBAR", "26.29"));
+        assert(!shouldExportGameRule("locatorBar", "1.26.30"));
+        assert(!shouldExportGameRule("locatorBar", "26.30"));
+        assert(!shouldExportGameRule("locatorBar", "1.26.44.3"));
+        assert(!shouldExportGameRule("locatorBar", "26.44"));
+        assert(shouldExportGameRule("locatorBar", ""));
+        assert(shouldExportGameRule("keepInventory", "26.44"));
+    }
+
+    // playerWaypoints is an enum-semantic Gamerule externally, despite Endstone exposing an integer.
+    // The 0/1 mapping was measured from real BDS 1.26.44.3 via Endstone runtime reads.
+    {
+        assert(normalizeGameRuleSemanticValue("playerWaypoints", "0") == "off");
+        assert(normalizeGameRuleSemanticValue("minecraft:PLAYERWAYPOINTS", "1") == "everyone");
+        assert(normalizeGameRuleSemanticValue("playerWaypoints", "2") == "Unknown (2)");
+        assert(normalizeGameRuleSemanticValue("playerWaypoints", "-1") == "Unknown (-1)");
+        assert(normalizeGameRuleSemanticValue("playerWaypoints", "") == "Unknown");
+        assert(normalizeGameRuleSemanticValue("randomTickSpeed", "3") == "3");
+    }
+
+    std::printf("All server.properties and gamerule fallback/semantic tests passed.\n");
     return 0;
 }
