@@ -44,11 +44,12 @@ inline std::string normalizeGameRuleSemanticValue(std::string_view name, std::st
 
     // Verified against BDS 1.26.44.3 through Endstone's runtime API:
     // command value `off` reads back as 0 and `everyone` reads back as 1.
+    // Export the canonical command spellings users see and can enter.
     if (raw_value == "0") {
-        return "Off";
+        return "off";
     }
     if (raw_value == "1") {
-        return "Everyone";
+        return "everyone";
     }
 
     std::string unknown = "Unknown";
