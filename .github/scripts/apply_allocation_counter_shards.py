@@ -129,6 +129,50 @@ replace_once(
     "    std::array<std::atomic<std::uint64_t>, KHookCallShards> tracking_calls{};",
 )
 
+# Diagnostic accounting is also on every successful allocation while tracking.
+# Keep exact totals without bouncing three global cache lines between allocator
+# threads. Each hashed TLS shard owns one cache-line-sized group of counters;
+# readers aggregate the shards outside the allocator hot path.
+replace_once(
+    "    std::atomic<std::uint64_t> hook_calls{0};",
+    """    struct alignas(64) HotCounters {
+        std::atomic<std::uint64_t> hook_calls{0};
+        std::atomic<std::uint64_t> successful_allocation_calls{0};
+        std::atomic<std::uint64_t> observed_bytes{0};
+    };
+    static_assert(sizeof(HotCounters) <= 64);
+    std::array<HotCounters, KHookCallShards> hot_counters{};""",
+)
+replace_once("    std::atomic<std::uint64_t> successful_allocation_calls{0};\n", "")
+replace_once("    std::atomic<std::uint64_t> observed_bytes{0};\n", "")
+
+replace_once(
+    """        if (impl->tracking.load(std::memory_order_relaxed)) {
+            impl->hook_calls.fetch_add(1, std::memory_order_relaxed);
+        }""",
+    """        if (impl->tracking.load(std::memory_order_relaxed)) {
+            impl->hot_counters[currentHookShard()].hook_calls.fetch_add(1, std::memory_order_relaxed);
+        }""",
+)
+
+replace_once(
+    """    void recordAllocation(void *pointer, std::uint64_t requested_bytes) noexcept
+    {
+        successful_allocation_calls.fetch_add(1, std::memory_order_relaxed);
+        if (requested_bytes == 0) {
+            return;
+        }
+        observed_bytes.fetch_add(requested_bytes, std::memory_order_relaxed);""",
+    """    void recordAllocation(void *pointer, std::uint64_t requested_bytes) noexcept
+    {
+        HotCounters &counters = hot_counters[currentHookShard()];
+        counters.successful_allocation_calls.fetch_add(1, std::memory_order_relaxed);
+        if (requested_bytes == 0) {
+            return;
+        }
+        counters.observed_bytes.fetch_add(requested_bytes, std::memory_order_relaxed);""",
+)
+
 replace_once(
     """    static bool waitFor(std::atomic<std::uint64_t> &counter, const char *description, std::string &error) noexcept
     {
@@ -178,6 +222,16 @@ replace_once(
 )
 
 replace_once(
+    """        hook_calls.store(0, std::memory_order_relaxed);
+        successful_allocation_calls.store(0, std::memory_order_relaxed);""",
+    """        for (auto &counters : hot_counters) {
+            counters.hook_calls.store(0, std::memory_order_relaxed);
+            counters.successful_allocation_calls.store(0, std::memory_order_relaxed);
+            counters.observed_bytes.store(0, std::memory_order_relaxed);
+        }""",
+)
+replace_once("        observed_bytes.store(0, std::memory_order_relaxed);\n", "")
+replace_once(
     "        tracking_calls.store(0, std::memory_order_relaxed);",
     """        for (auto &counter : tracking_calls) {
             counter.store(0, std::memory_order_relaxed);
@@ -187,6 +241,49 @@ replace_once(
 replace_once(
     "std::atomic<std::uint64_t> AllocationSampler::Impl::mActiveHookCalls{0};",
     "std::array<std::atomic<std::uint64_t>, KHookCallShards> AllocationSampler::Impl::mActiveHookCalls{};",
+)
+
+replace_once(
+    """std::uint64_t AllocationSampler::hookCalls() const
+{
+    return impl_->hook_calls.load(std::memory_order_relaxed);
+}""",
+    """std::uint64_t AllocationSampler::hookCalls() const
+{
+    std::uint64_t total = 0;
+    for (const auto &counters : impl_->hot_counters) {
+        total += counters.hook_calls.load(std::memory_order_relaxed);
+    }
+    return total;
+}""",
+)
+replace_once(
+    """std::uint64_t AllocationSampler::successfulAllocationCalls() const
+{
+    return impl_->successful_allocation_calls.load(std::memory_order_relaxed);
+}""",
+    """std::uint64_t AllocationSampler::successfulAllocationCalls() const
+{
+    std::uint64_t total = 0;
+    for (const auto &counters : impl_->hot_counters) {
+        total += counters.successful_allocation_calls.load(std::memory_order_relaxed);
+    }
+    return total;
+}""",
+)
+replace_once(
+    """std::uint64_t AllocationSampler::observedBytes() const
+{
+    return impl_->observed_bytes.load(std::memory_order_relaxed);
+}""",
+    """std::uint64_t AllocationSampler::observedBytes() const
+{
+    std::uint64_t total = 0;
+    for (const auto &counters : impl_->hot_counters) {
+        total += counters.observed_bytes.load(std::memory_order_relaxed);
+    }
+    return total;
+}""",
 )
 
 path.write_text(text)
