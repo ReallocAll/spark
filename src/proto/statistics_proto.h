@@ -3,15 +3,19 @@
 
 #include <string>
 
+#include "core/stats/process_memory.h"
 #include "core/stats/statistics_service.h"
 #include "core/stats/system_stats.h"
 
 namespace spark::proto_detail {
 
 // Encode the spark PlatformStatistics message. `world` is optional because
-// health reports do not carry world statistics.
+// health reports do not carry world statistics. `process_memory_override` is
+// used by deterministic protocol tests; production callers gather a fresh
+// native process-memory snapshot while serializing.
 std::string buildPlatformStatistics(const PlatformStats &platform, const StatisticsSnapshot &statistics,
-                                    const WorldInfo *world = nullptr);
+                                    const WorldInfo *world = nullptr,
+                                    const ProcessMemoryUsage *process_memory_override = nullptr);
 
 // Encode the spark SystemStatistics message.
 std::string buildSystemStatistics(const SystemStats &system, const StatisticsSnapshot &statistics);

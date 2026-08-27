@@ -19,9 +19,27 @@ bool hasNativeMemorySemantics(spark::ProtoReader memory)
 {
     return spark::proto_test::findMessage(memory, 1, [](spark::ProtoReader heap) {
         const bool has_used = spark::proto_test::hasVarint(heap, 1, 1024);
+        const bool has_viewer_total = spark::proto_test::hasVarint(heap, 2, 8192);
         const bool has_virtual_committed = spark::proto_test::hasVarint(heap, 2, 42'424'242);
-        const bool has_max = spark::proto_test::hasField(heap, 3);
-        return has_used && !has_virtual_committed && !has_max;
+        const bool has_init = spark::proto_test::hasField(heap, 3);
+        const bool has_max = spark::proto_test::hasVarint(heap, 4, 8192);
+        return has_used && has_viewer_total && !has_virtual_committed && !has_init && has_max;
+    });
+}
+
+bool hasCommittedPreference(spark::ProtoReader memory)
+{
+    return spark::proto_test::findMessage(memory, 1, [](spark::ProtoReader heap) {
+        return spark::proto_test::hasVarint(heap, 1, 1024) && spark::proto_test::hasVarint(heap, 2, 4096) &&
+               spark::proto_test::hasVarint(heap, 4, 16384);
+    });
+}
+
+bool hasUsedFallback(spark::ProtoReader memory)
+{
+    return spark::proto_test::findMessage(memory, 1, [](spark::ProtoReader heap) {
+        return spark::proto_test::hasVarint(heap, 1, 1024) && spark::proto_test::hasVarint(heap, 2, 1024) &&
+               !spark::proto_test::hasField(heap, 4);
     });
 }
 
@@ -51,16 +69,51 @@ int main()
     world.data_packs.push_back(
         {.name = "behavior-pack", .description = "behavior description", .source = "world", .builtin = true});
 
-    const std::string platform_bytes = spark::proto_detail::buildPlatformStatistics(platform, statistics, &world);
+    spark::ProcessMemoryUsage native_memory;
+    native_memory.used_present = true;
+    native_memory.used_bytes = 1024;
+    native_memory.max_present = true;
+    native_memory.max_bytes = 8192;
+    native_memory.display_total_present = true;
+    native_memory.display_total_bytes = 8192;
+
+    const std::string platform_bytes =
+        spark::proto_detail::buildPlatformStatistics(platform, statistics, &world, &native_memory);
     if (!check(spark::proto_test::hasVarint(platform_bytes, 3, 2000), "uptime was not encoded") ||
         !check(spark::proto_test::hasVarint(platform_bytes, 7, 4), "player count was not encoded") ||
         !check(spark::proto_test::hasVarint(platform_bytes, 9, 2), "online mode was not encoded") ||
         !check(spark::proto_test::findMessage(platform_bytes, 1, hasNativeMemorySemantics),
-               "native process memory semantics were not encoded") ||
+               "native process memory viewer compatibility was not encoded") ||
         !check(spark::proto_test::findMessage(
                    platform_bytes, 8,
                    [](spark::ProtoReader message) { return spark::proto_test::hasVarint(message, 1, 8); }),
                "world statistics were not encoded")) {
+        return 1;
+    }
+
+    spark::ProcessMemoryUsage committed_memory;
+    committed_memory.used_present = true;
+    committed_memory.used_bytes = 1024;
+    committed_memory.committed_present = true;
+    committed_memory.committed_bytes = 4096;
+    committed_memory.max_present = true;
+    committed_memory.max_bytes = 16384;
+    committed_memory.display_total_present = true;
+    committed_memory.display_total_bytes = 8192;
+    const std::string committed_bytes =
+        spark::proto_detail::buildPlatformStatistics(platform, statistics, nullptr, &committed_memory);
+    if (!check(spark::proto_test::findMessage(committed_bytes, 1, hasCommittedPreference),
+               "reliable private committed memory was not preferred for the viewer denominator")) {
+        return 1;
+    }
+
+    spark::ProcessMemoryUsage no_capacity_memory;
+    no_capacity_memory.used_present = true;
+    no_capacity_memory.used_bytes = 1024;
+    const std::string fallback_bytes =
+        spark::proto_detail::buildPlatformStatistics(platform, statistics, nullptr, &no_capacity_memory);
+    if (!check(spark::proto_test::findMessage(fallback_bytes, 1, hasUsedFallback),
+               "process RSS fallback did not prevent a zero viewer denominator")) {
         return 1;
     }
 
