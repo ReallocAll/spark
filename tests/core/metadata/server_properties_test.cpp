@@ -269,7 +269,7 @@ int main()
         for (const auto &[input, expected] : expected_names) {
             assert(canonicalGameRuleName(input) == expected);
         }
-        assert(canonicalGameRuleName("minecraft:PLAYERSLEEPINGPERCENTAGE") == "playersSleepingPercentage");
+        assert(canonicalGameRuleName("minecraft:PLAYERSSLEEPINGPERCENTAGE") == "playersSleepingPercentage");
         assert(canonicalGameRuleName("sparkFutureUnknownRule") == "sparkFutureUnknownRule");
     }
 
