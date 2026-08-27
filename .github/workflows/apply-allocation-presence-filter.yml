@@ -29,7 +29,7 @@ jobs:
               global text
               count = text.count(old)
               if count != 1:
-                  raise SystemExit(f"expected one match, got {count}: {old[:120]!r}")
+                  raise SystemExit(f"expected one match, got {count}: {old[:160]!r}")
               text = text.replace(old, new, 1)
 
           replace_once(
@@ -66,10 +66,20 @@ jobs:
           )
 
           replace_once(
+              "    LiveAllocation *detachAllocation(void *pointer) noexcept\n"
+              "    {\n"
+              "        if (pointer == nullptr || live_index == nullptr) {\n"
+              "            return nullptr;\n"
+              "        }\n"
               "        const std::uint64_t hash = liveIndexHash(pointer);\n"
               "        const std::size_t shard = liveIndexShard(hash);\n"
               "        if (config.force_live_lock_contention_for_testing ||\n"
               "            ::pthread_rwlock_trywrlock(&live_index_locks[shard]) != 0) {",
+              "    LiveAllocation *detachAllocation(void *pointer) noexcept\n"
+              "    {\n"
+              "        if (pointer == nullptr || live_index == nullptr) {\n"
+              "            return nullptr;\n"
+              "        }\n"
               "        const std::uint64_t hash = liveIndexHash(pointer);\n"
               "        const std::size_t presence_slot = livePresenceSlot(hash);\n"
               "        if (!config.force_live_lock_contention_for_testing &&\n"
