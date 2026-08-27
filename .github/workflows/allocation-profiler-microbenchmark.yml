@@ -7,7 +7,7 @@ on:
 permissions:
   contents: read
 
-# Temporary Linux-only validation for TLS, lifecycle presence, sharded hook counters, and sharded hot statistics.
+# Temporary Linux-only validation for native thread-pointer shards plus lifecycle presence and hot-counter sharding.
 jobs:
   linux:
     name: Linux allocation microbenchmark
