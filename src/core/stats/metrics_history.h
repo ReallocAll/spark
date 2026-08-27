@@ -54,13 +54,14 @@ struct MetricsSnapshot {
     std::vector<MetricsDoubleSample> cpu_usage_process;
     std::vector<MetricsDoubleSample> cpu_usage_system;
     std::vector<MetricsMemoryUsageSample> memory_usage_heap;
+    std::vector<MetricsDoubleSample> memory_allocation;
     std::vector<MetricsWorldInfoSample> world_info;
     std::vector<MetricsAveragesSample> player_ping;
 
     [[nodiscard]] bool empty() const
     {
         return tps.empty() && tick_duration.empty() && cpu_usage_process.empty() && cpu_usage_system.empty() &&
-               memory_usage_heap.empty() && world_info.empty() && player_ping.empty();
+               memory_usage_heap.empty() && memory_allocation.empty() && world_info.empty() && player_ping.empty();
     }
 };
 
@@ -83,6 +84,7 @@ public:
     bool recordCpuUsageProcess(std::int64_t timestamp_ms, double value);
     bool recordCpuUsageSystem(std::int64_t timestamp_ms, double value);
     bool recordMemoryUsage(std::int64_t timestamp_ms, const MetricsMemoryUsage &value);
+    bool recordMemoryAllocation(std::int64_t timestamp_ms, double bytes_per_second);
     bool recordWorldInfo(std::int64_t timestamp_ms, std::int32_t players, std::int32_t entities, std::int32_t chunks,
                          std::int32_t tile_entities = 0, bool tile_entities_present = false);
     bool recordPlayerPing(std::int64_t timestamp_ms, const MetricsAverages &value);
@@ -126,6 +128,7 @@ private:
     std::vector<DoubleEntry> cpu_usage_process_;
     std::vector<DoubleEntry> cpu_usage_system_;
     std::vector<MemoryEntry> memory_usage_heap_;
+    std::vector<DoubleEntry> memory_allocation_;
     std::vector<WorldEntry> world_info_;
     std::vector<AveragesEntry> player_ping_;
     std::size_t tps_head_ = 0;
@@ -138,6 +141,8 @@ private:
     std::size_t cpu_usage_system_size_ = 0;
     std::size_t memory_usage_heap_head_ = 0;
     std::size_t memory_usage_heap_size_ = 0;
+    std::size_t memory_allocation_head_ = 0;
+    std::size_t memory_allocation_size_ = 0;
     std::size_t world_info_head_ = 0;
     std::size_t world_info_size_ = 0;
     std::size_t player_ping_head_ = 0;

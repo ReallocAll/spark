@@ -8,8 +8,8 @@ namespace spark {
 MetricsHistory::MetricsHistory(std::size_t capacity)
     : tps_(capacity == 0 ? 1 : capacity), tick_duration_(capacity == 0 ? 1 : capacity),
       cpu_usage_process_(capacity == 0 ? 1 : capacity), cpu_usage_system_(capacity == 0 ? 1 : capacity),
-      memory_usage_heap_(capacity == 0 ? 1 : capacity), world_info_(capacity == 0 ? 1 : capacity),
-      player_ping_(capacity == 0 ? 1 : capacity)
+      memory_usage_heap_(capacity == 0 ? 1 : capacity), memory_allocation_(capacity == 0 ? 1 : capacity),
+      world_info_(capacity == 0 ? 1 : capacity), player_ping_(capacity == 0 ? 1 : capacity)
 {
 }
 
@@ -25,6 +25,8 @@ void MetricsHistory::clear()
     cpu_usage_system_size_ = 0;
     memory_usage_heap_head_ = 0;
     memory_usage_heap_size_ = 0;
+    memory_allocation_head_ = 0;
+    memory_allocation_size_ = 0;
     world_info_head_ = 0;
     world_info_size_ = 0;
     player_ping_head_ = 0;
@@ -165,6 +167,12 @@ bool MetricsHistory::recordMemoryUsage(std::int64_t timestamp_ms, const MetricsM
     return appendMemory(memory_usage_heap_, memory_usage_heap_head_, memory_usage_heap_size_, timestamp_ms, value);
 }
 
+bool MetricsHistory::recordMemoryAllocation(std::int64_t timestamp_ms, double bytes_per_second)
+{
+    return appendDouble(memory_allocation_, memory_allocation_head_, memory_allocation_size_, timestamp_ms,
+                        bytes_per_second);
+}
+
 bool MetricsHistory::recordWorldInfo(std::int64_t timestamp_ms, std::int32_t players, std::int32_t entities,
                                      std::int32_t chunks, std::int32_t tile_entities, bool tile_entities_present)
 {
@@ -208,6 +216,7 @@ MetricsSnapshot MetricsHistory::snapshot() const
     copy_double(cpu_usage_process_, cpu_usage_process_head_, cpu_usage_process_size_, result.cpu_usage_process);
     copy_double(cpu_usage_system_, cpu_usage_system_head_, cpu_usage_system_size_, result.cpu_usage_system);
     copy_memory(memory_usage_heap_, memory_usage_heap_head_, memory_usage_heap_size_, result.memory_usage_heap);
+    copy_double(memory_allocation_, memory_allocation_head_, memory_allocation_size_, result.memory_allocation);
     copy_averages(player_ping_, player_ping_head_, player_ping_size_, result.player_ping);
     result.world_info.reserve(world_info_size_);
     for (std::size_t i = 0; i < world_info_size_; ++i) {

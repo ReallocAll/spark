@@ -116,6 +116,46 @@ DistributionValues StatisticsService::msptForRecentSamples(std::size_t max_sampl
     return result;
 }
 
+DistributionValues StatisticsService::allocationRateFor(std::int64_t now_ms, std::int64_t window_ms) const
+{
+    DistributionValues result;
+    if (window_ms <= 0) {
+        return result;
+    }
+    const std::int64_t start = (std::max)(start_steady_ms_, now_ms - window_ms);
+    result.span_ms = now_ms - start;
+    std::vector<double> values;
+    values.reserve(allocation_rate_size_);
+    double total = 0.0;
+    for (std::size_t i = 0; i < allocation_rate_size_; ++i) {
+        const AllocationRateSample &sample =
+            allocation_rates_[(allocation_rate_begin_ + allocation_rate_size_ - 1 - i) % allocation_rates_.size()];
+        if (sample.steady_ms <= start) {
+            break;
+        }
+        if (sample.steady_ms <= now_ms) {
+            values.push_back(sample.bytes_per_second);
+            total += sample.bytes_per_second;
+        }
+    }
+    if (values.empty()) {
+        return result;
+    }
+    std::ranges::sort(values);
+    result.present = true;
+    result.samples = values.size();
+    result.mean = total / static_cast<double>(values.size());
+    result.min = values.front();
+    result.max = values.back();
+    const std::size_t middle = values.size() / 2;
+    result.median = values.size() % 2 == 0 ? (values[middle - 1] + values[middle]) / 2.0 : values[middle];
+    const std::size_t percentile_index =
+        (std::min)(values.size() - 1,
+                   static_cast<std::size_t>(std::ceil(static_cast<double>(values.size()) * 0.95)) - 1);
+    result.percentile95 = values[percentile_index];
+    return result;
+}
+
 RollingValue StatisticsService::cpuFor(std::int64_t now_ms, std::int64_t window_ms, bool process) const
 {
     RollingValue result;
@@ -207,6 +247,10 @@ StatisticsSnapshot StatisticsService::snapshotAt(std::int64_t steady_ms) const
     result.cpu.system_last_10s = cpuFor(now_ms, 10 * 1000, false);
     result.cpu.system_last_1m = cpuFor(now_ms, 60 * 1000, false);
     result.cpu.system_last_15m = cpuFor(now_ms, 15 * 60 * 1000, false);
+
+    result.allocation.last_1m = allocationRateFor(now_ms, 60 * 1000);
+    result.allocation.last_5m = allocationRateFor(now_ms, 5 * 60 * 1000);
+    result.allocation.last_15m = allocationRateFor(now_ms, 15 * 60 * 1000);
     return result;
 }
 
