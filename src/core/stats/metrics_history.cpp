@@ -8,7 +8,8 @@ namespace spark {
 MetricsHistory::MetricsHistory(std::size_t capacity)
     : tps_(capacity == 0 ? 1 : capacity), tick_duration_(capacity == 0 ? 1 : capacity),
       cpu_usage_process_(capacity == 0 ? 1 : capacity), cpu_usage_system_(capacity == 0 ? 1 : capacity),
-      world_info_(capacity == 0 ? 1 : capacity), player_ping_(capacity == 0 ? 1 : capacity)
+      memory_usage_heap_(capacity == 0 ? 1 : capacity), world_info_(capacity == 0 ? 1 : capacity),
+      player_ping_(capacity == 0 ? 1 : capacity)
 {
 }
 
@@ -22,6 +23,8 @@ void MetricsHistory::clear()
     cpu_usage_process_size_ = 0;
     cpu_usage_system_head_ = 0;
     cpu_usage_system_size_ = 0;
+    memory_usage_heap_head_ = 0;
+    memory_usage_heap_size_ = 0;
     world_info_head_ = 0;
     world_info_size_ = 0;
     player_ping_head_ = 0;
@@ -61,6 +64,29 @@ bool MetricsHistory::appendDouble(std::vector<DoubleEntry> &series, std::size_t 
 
 bool MetricsHistory::appendAverages(std::vector<AveragesEntry> &series, std::size_t &head, std::size_t &size,
                                     std::int64_t timestamp_ms, const MetricsAverages &value)
+{
+    if (!due(timestamp_ms, size, size == 0 ? 0 : series[(head + size - 1) % series.size()].timestamp_ms)) {
+        return false;
+    }
+    const std::int64_t cutoff = timestamp_ms > kRetentionMs ? timestamp_ms - kRetentionMs : 0;
+    while (size > 0 && series[head].timestamp_ms < cutoff) {
+        head = (head + 1) % series.size();
+        --size;
+    }
+    if (size == series.size()) {
+        series[head] = {.timestamp_ms = timestamp_ms, .values = value};
+        head = (head + 1) % series.size();
+    }
+    else {
+        const std::size_t index = (head + size) % series.size();
+        series[index] = {.timestamp_ms = timestamp_ms, .values = value};
+        ++size;
+    }
+    return true;
+}
+
+bool MetricsHistory::appendMemory(std::vector<MemoryEntry> &series, std::size_t &head, std::size_t &size,
+                                  std::int64_t timestamp_ms, const MetricsMemoryUsage &value)
 {
     if (!due(timestamp_ms, size, size == 0 ? 0 : series[(head + size - 1) % series.size()].timestamp_ms)) {
         return false;
@@ -134,6 +160,11 @@ bool MetricsHistory::recordCpuUsageSystem(std::int64_t timestamp_ms, double valu
     return appendDouble(cpu_usage_system_, cpu_usage_system_head_, cpu_usage_system_size_, timestamp_ms, value);
 }
 
+bool MetricsHistory::recordMemoryUsage(std::int64_t timestamp_ms, const MetricsMemoryUsage &value)
+{
+    return appendMemory(memory_usage_heap_, memory_usage_heap_head_, memory_usage_heap_size_, timestamp_ms, value);
+}
+
 bool MetricsHistory::recordWorldInfo(std::int64_t timestamp_ms, std::int32_t players, std::int32_t entities,
                                      std::int32_t chunks, std::int32_t tile_entities, bool tile_entities_present)
 {
@@ -164,10 +195,19 @@ MetricsSnapshot MetricsHistory::snapshot() const
             out.push_back({.timestamp_ms = entry.timestamp_ms, .values = entry.values});
         }
     };
+    auto copy_memory = [](const std::vector<MemoryEntry> &series, std::size_t head, std::size_t size,
+                          std::vector<MetricsMemoryUsageSample> &out) {
+        out.reserve(size);
+        for (std::size_t i = 0; i < size; ++i) {
+            const MemoryEntry &entry = series[(head + i) % series.size()];
+            out.push_back({.timestamp_ms = entry.timestamp_ms, .values = entry.values});
+        }
+    };
     copy_double(tps_, tps_head_, tps_size_, result.tps);
     copy_averages(tick_duration_, tick_duration_head_, tick_duration_size_, result.tick_duration);
     copy_double(cpu_usage_process_, cpu_usage_process_head_, cpu_usage_process_size_, result.cpu_usage_process);
     copy_double(cpu_usage_system_, cpu_usage_system_head_, cpu_usage_system_size_, result.cpu_usage_system);
+    copy_memory(memory_usage_heap_, memory_usage_heap_head_, memory_usage_heap_size_, result.memory_usage_heap);
     copy_averages(player_ping_, player_ping_head_, player_ping_size_, result.player_ping);
     result.world_info.reserve(world_info_size_);
     for (std::size_t i = 0; i < world_info_size_; ++i) {

@@ -40,6 +40,25 @@ void testRingRetentionAndOrder()
     assert(retention.snapshot().tps.front().value == 2.0);
 }
 
+void testMemoryRingRetentionAndPresence()
+{
+    spark::MetricsHistory history(2);
+    assert(history.recordMemoryUsage(
+        1'000, {.used = 100, .committed_present = true, .committed = 200, .max_present = true, .max = 300}));
+    assert(!history.recordMemoryUsage(11'000, {.used = 101}));
+    assert(history.recordMemoryUsage(11'001, {.used = 101}));
+    assert(history.recordMemoryUsage(21'002, {.used = 102, .max_present = true, .max = 400}));
+
+    const spark::MetricsSnapshot snapshot = history.snapshot();
+    assert(snapshot.memory_usage_heap.size() == 2);
+    assert(snapshot.memory_usage_heap[0].timestamp_ms == 11'001);
+    assert(snapshot.memory_usage_heap[0].values.used == 101);
+    assert(!snapshot.memory_usage_heap[0].values.committed_present);
+    assert(snapshot.memory_usage_heap[1].values.used == 102);
+    assert(snapshot.memory_usage_heap[1].values.max_present);
+    assert(snapshot.memory_usage_heap[1].values.max == 400);
+}
+
 void testStatisticsRecordingDelayAndAnchors()
 {
     spark::StatisticsService statistics;
@@ -64,10 +83,20 @@ void testStatisticsRecordingDelayAndAnchors()
     const spark::MetricsSnapshot snapshot = statistics.metricsSnapshot();
     assert(snapshot.tps.size() == 2);
     assert(snapshot.tick_duration.size() == 2);
+    assert(snapshot.memory_usage_heap.size() == 2);
+    assert(snapshot.memory_usage_heap.front().values.used > 0);
+#ifdef _WIN32
+    assert(snapshot.memory_usage_heap.front().values.committed_present);
+    assert(snapshot.memory_usage_heap.front().values.committed > 0);
+#else
+    assert(!snapshot.memory_usage_heap.front().values.committed_present);
+#endif
     assert(snapshot.world_info.size() == 1);
     assert(snapshot.player_ping.size() == 1);
     assert(snapshot.tps.front().timestamp_ms == 5'010'000);
     assert(snapshot.tps.back().timestamp_ms == 5'020'001);
+    assert(snapshot.memory_usage_heap.front().timestamp_ms == 5'010'000);
+    assert(snapshot.memory_usage_heap.back().timestamp_ms == 5'020'001);
     assert(snapshot.world_info.front().players == 4);
     assert(snapshot.world_info.front().entities == 30);
     assert(snapshot.world_info.front().chunks == 40);
@@ -91,6 +120,7 @@ void testStatisticsCadenceOverflow()
 int main()
 {
     testRingRetentionAndOrder();
+    testMemoryRingRetentionAndPresence();
     testStatisticsRecordingDelayAndAnchors();
     testStatisticsCadenceOverflow();
     return 0;

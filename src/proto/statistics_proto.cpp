@@ -102,15 +102,15 @@ std::string buildPlatformStatistics(const PlatformStats &platform, const Statist
 {
     std::string out;
     ProtoWriter writer(out);
-    if (platform.process_mem_present || platform.process_virtual_present) {
+
+    // Point-in-time native process memory only carries the reliably captured
+    // resident value. Virtual address-space reservation (VmSize / reserved VA)
+    // is deliberately not serialized as MemoryUsage.committed. Reliable private
+    // commit and native limits are carried by Metrics.memory_usage_heap.
+    if (platform.process_mem_present) {
         std::string heap;
         ProtoWriter heap_writer(heap);
-        if (platform.process_mem_present) {
-            heap_writer.int64(1, platform.process_mem_bytes);
-        }
-        if (platform.process_virtual_present) {
-            heap_writer.int64(2, platform.process_virtual_bytes);
-        }
+        heap_writer.int64(1, platform.process_mem_bytes);
         std::string memory;
         ProtoWriter memory_writer(memory);
         memory_writer.message(1, heap);

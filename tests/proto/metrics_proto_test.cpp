@@ -17,6 +17,13 @@ spark::MetricsSnapshot sampleMetrics()
                               .values = {.mean = 10.0, .max = 20.0, .min = 1.0, .median = 9.0, .percentile95 = 19.0}}};
     metrics.cpu_usage_process = {{.timestamp_ms = 1'000, .value = 0.25}};
     metrics.cpu_usage_system = {{.timestamp_ms = 1'000, .value = 0.50}};
+    spark::MetricsMemoryUsage memory;
+    memory.used = 123;
+    memory.committed_present = true;
+    memory.committed = 456;
+    memory.max_present = true;
+    memory.max = 789;
+    metrics.memory_usage_heap = {{.timestamp_ms = 1'000, .values = memory}};
     metrics.world_info = {{.timestamp_ms = 1'000, .players = 4, .entities = 30, .chunks = 40}};
     metrics.player_ping = {{.timestamp_ms = 1'000,
                             .values = {.mean = 30.0, .max = 50.0, .min = 10.0, .median = 30.0, .percentile95 = 50.0}}};
@@ -30,7 +37,7 @@ void testMetricsFields()
     assert(spark::proto_test::hasMessage(bytes, 2));
     assert(spark::proto_test::hasMessage(bytes, 3));
     assert(spark::proto_test::hasMessage(bytes, 4));
-    assert(!spark::proto_test::hasField(bytes, 5));
+    assert(spark::proto_test::hasMessage(bytes, 5));
     assert(!spark::proto_test::hasField(bytes, 6));
     assert(!spark::proto_test::hasField(bytes, 7));
     assert(spark::proto_test::hasMessage(bytes, 8));
@@ -39,10 +46,29 @@ void testMetricsFields()
         return spark::proto_test::hasVarint(series, 1, 1'000) && spark::proto_test::hasField(series, 2) &&
                spark::proto_test::hasField(series, 3);
     }));
+    assert(spark::proto_test::findMessageBytes(bytes, 5, [](std::string_view series) {
+        return spark::proto_test::findMessageBytes(series, 3, [](std::string_view values) {
+            return spark::proto_test::hasVarint(values, 1, 123) && spark::proto_test::hasVarint(values, 2, 456) &&
+                   !spark::proto_test::hasField(values, 3) && spark::proto_test::hasVarint(values, 4, 789);
+        });
+    }));
     assert(spark::proto_test::findMessageBytes(bytes, 8, [](std::string_view series) {
         return spark::proto_test::findMessageBytes(series, 3, [](std::string_view values) {
             return spark::proto_test::hasVarint(values, 1, 4) && spark::proto_test::hasVarint(values, 2, 30) &&
                    spark::proto_test::hasVarint(values, 4, 40) && !spark::proto_test::hasField(values, 3);
+        });
+    }));
+}
+
+void testMemoryUsagePresence()
+{
+    spark::MetricsSnapshot metrics;
+    metrics.memory_usage_heap = {{.timestamp_ms = 1'000, .values = {.used = 321}}};
+    const std::string bytes = spark::proto_detail::buildMetrics(metrics);
+    assert(spark::proto_test::findMessageBytes(bytes, 5, [](std::string_view series) {
+        return spark::proto_test::findMessageBytes(series, 3, [](std::string_view values) {
+            return spark::proto_test::hasVarint(values, 1, 321) && !spark::proto_test::hasField(values, 2) &&
+                   !spark::proto_test::hasField(values, 3) && !spark::proto_test::hasField(values, 4);
         });
     }));
 }
@@ -87,7 +113,8 @@ void testMetadataFields()
     const std::string health_bytes = spark::buildHealthData(health);
     assert(spark::proto_test::findMessageBytes(health_bytes, 1, [](std::string_view metadata) {
         return spark::proto_test::findMessageBytes(metadata, 9, [](std::string_view bytes) {
-            return spark::proto_test::hasMessage(bytes, 1) && spark::proto_test::hasMessage(bytes, 9);
+            return spark::proto_test::hasMessage(bytes, 1) && spark::proto_test::hasMessage(bytes, 5) &&
+                   spark::proto_test::hasMessage(bytes, 9);
         });
     }));
 
@@ -101,7 +128,8 @@ void testMetadataFields()
     const std::string profile_bytes = spark::buildSamplerData(profile, tree, {});
     assert(spark::proto_test::findMessageBytes(profile_bytes, 1, [](std::string_view metadata) {
         return spark::proto_test::findMessageBytes(metadata, 18, [](std::string_view bytes) {
-            return spark::proto_test::hasMessage(bytes, 1) && spark::proto_test::hasMessage(bytes, 9);
+            return spark::proto_test::hasMessage(bytes, 1) && spark::proto_test::hasMessage(bytes, 5) &&
+                   spark::proto_test::hasMessage(bytes, 9);
         });
     }));
 }
@@ -111,6 +139,7 @@ void testMetadataFields()
 int main()
 {
     testMetricsFields();
+    testMemoryUsagePresence();
     testTileEntityMetricPresence();
     testMetadataFields();
     return 0;

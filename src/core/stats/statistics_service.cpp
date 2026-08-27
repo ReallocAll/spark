@@ -5,6 +5,7 @@
 #include <cmath>
 #include <limits>
 
+#include "core/stats/process_memory.h"
 #include "core/util/monotonic_time.h"
 
 namespace spark {
@@ -253,6 +254,15 @@ void StatisticsService::recordMetricsAt(std::int64_t steady_ms)
     const RollingValue system = cpuFor(steady_ms, MetricsHistory::kIntervalMs, false);
     if (system.present) {
         metrics_history_.recordCpuUsageSystem(timestamp_ms, system.value);
+    }
+
+    const ProcessMemoryUsage memory = gatherProcessMemoryUsage();
+    if (memory.used_present) {
+        metrics_history_.recordMemoryUsage(timestamp_ms, {.used = memory.used_bytes,
+                                                          .committed_present = memory.committed_present,
+                                                          .committed = memory.committed_bytes,
+                                                          .max_present = memory.max_present,
+                                                          .max = memory.max_bytes});
     }
 }
 
