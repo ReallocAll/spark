@@ -88,6 +88,7 @@ int main()
         assert(result.size() == 1);
         assert(!result.contains("server-port"));
         assert(!result.contains("server-portv6"));
+        assert(result.at("max-players") == "20");
         std::filesystem::remove(path);
     }
 
@@ -210,10 +211,13 @@ int main()
         const auto random_tick_speed = resolveGameRuleDefault("randomTickSpeed", "1.26.44.3");
         const auto recipes_unlock = resolveGameRuleDefault("recipesUnlock", "26.44");
         const auto max_chain = resolveGameRuleDefault("maxCommandChainLength", "26.44");
+        const auto player_waypoints = resolveGameRuleDefault("Minecraft:PlayerWaypoints", "1.26.44.3");
         assert(spawn_radius.has_value() && *spawn_radius == "10");
         assert(random_tick_speed.has_value() && *random_tick_speed == "1");
         assert(recipes_unlock.has_value() && *recipes_unlock == "true");
         assert(max_chain.has_value() && *max_chain == "65535");
+        assert(player_waypoints.has_value() && *player_waypoints == "1");
+        assert(normalizeGameRuleSemanticValue("playerWaypoints", *player_waypoints) == "everyone");
     }
 
     // Historical default changes are sparse overrides, not full version snapshots.
@@ -232,7 +236,7 @@ int main()
         assert(!currentGameRuleFallback("minecraft:sparkFutureUnknownRule").has_value());
     }
 
-    // Rename/type migration metadata is deliberately separate from default resolution.
+    // Rename/type migration metadata is separate from explicit current defaults.
     {
         const auto migration = gameRuleMigration("locatorBar");
         if (!migration.has_value()) {
@@ -246,7 +250,8 @@ int main()
         assert(migration_value.old_kind == GameRuleValueKind::Boolean);
         assert(migration_value.new_kind == GameRuleValueKind::Enum);
         assert(!resolveGameRuleDefault("locatorBar", "26.44").has_value());
-        assert(!resolveGameRuleDefault("playerWaypoints", "26.44").has_value());
+        const auto player_waypoints = resolveGameRuleDefault("playerWaypoints", "26.44");
+        assert(player_waypoints.has_value() && *player_waypoints == "1");
     }
 
     // locatorBar remains historical metadata before 1.26.30 but is hidden at and after the migration boundary.
@@ -264,8 +269,8 @@ int main()
     // playerWaypoints is an enum-semantic Gamerule externally, despite Endstone exposing an integer.
     // The 0/1 mapping was measured from real BDS 1.26.44.3 via Endstone runtime reads.
     {
-        assert(normalizeGameRuleSemanticValue("playerWaypoints", "0") == "Off");
-        assert(normalizeGameRuleSemanticValue("minecraft:PLAYERWAYPOINTS", "1") == "Everyone");
+        assert(normalizeGameRuleSemanticValue("playerWaypoints", "0") == "off");
+        assert(normalizeGameRuleSemanticValue("minecraft:PLAYERWAYPOINTS", "1") == "everyone");
         assert(normalizeGameRuleSemanticValue("playerWaypoints", "2") == "Unknown (2)");
         assert(normalizeGameRuleSemanticValue("playerWaypoints", "-1") == "Unknown (-1)");
         assert(normalizeGameRuleSemanticValue("playerWaypoints", "") == "Unknown");
