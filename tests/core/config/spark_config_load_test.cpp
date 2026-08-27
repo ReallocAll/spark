@@ -23,7 +23,7 @@ void testDefaults()
     assert(config.background_profiler_interval == 10);
     assert(config.background_profiler_thread_grouper == "by-pool");
     assert(config.background_profiler_thread_dumper == "default");
-    assert(!config.allocation_rate_metrics_enabled);
+    assert(config.allocation_rate_metrics_enabled);
     assert(config.server_properties_additional_keys.empty());
     assert(!config.disable_response_broadcast);
     std::printf("  [PASS] defaults\n");
@@ -188,7 +188,7 @@ void testTomlPartial()
     assert(config.viewer_url == "https://custom.example.com/");
     assert(config.bytebin_url == "https://spark-usercontent.lucko.me/");
     assert(config.background_profiler_enabled);
-    assert(!config.allocation_rate_metrics_enabled);
+    assert(config.allocation_rate_metrics_enabled);
     assert(config.server_properties_additional_keys.empty());
     std::printf("  [PASS] partial config\n");
 }
