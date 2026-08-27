@@ -23,6 +23,7 @@ void testDefaults()
     assert(config.background_profiler_interval == 10);
     assert(config.background_profiler_thread_grouper == "by-pool");
     assert(config.background_profiler_thread_dumper == "default");
+    assert(!config.allocation_rate_metrics_enabled);
     assert(config.server_properties_additional_keys.empty());
     assert(!config.disable_response_broadcast);
     std::printf("  [PASS] defaults\n");
@@ -40,6 +41,7 @@ backgroundProfiler = false
 backgroundProfilerInterval = 20
 backgroundProfilerThreadGrouper = "by-name"
 backgroundProfilerThreadDumper = "all"
+allocationRateMetrics = true
 serverPropertiesAdditionalKeys = "server-port, custom-safe-key,server-port"
 disableResponseBroadcast = true
 )");
@@ -52,6 +54,7 @@ disableResponseBroadcast = true
     assert(config.background_profiler_interval == 20);
     assert(config.background_profiler_thread_grouper == "by-name");
     assert(config.background_profiler_thread_dumper == "all");
+    assert(config.allocation_rate_metrics_enabled);
     assert(config.server_properties_additional_keys.size() == 2);
     assert(config.server_properties_additional_keys[0] == "server-port");
     assert(config.server_properties_additional_keys[1] == "custom-safe-key");
@@ -78,6 +81,7 @@ void testTomlWrongType()
     cleanup(path);
     writeFile(path, R"(viewerUrl = 123
 backgroundProfiler = "not-a-bool"
+allocationRateMetrics = "not-a-bool"
 serverPropertiesAdditionalKeys = ["server-port"]
 )");
     SparkConfig config(path);
@@ -184,6 +188,7 @@ void testTomlPartial()
     assert(config.viewer_url == "https://custom.example.com/");
     assert(config.bytebin_url == "https://spark-usercontent.lucko.me/");
     assert(config.background_profiler_enabled);
+    assert(!config.allocation_rate_metrics_enabled);
     assert(config.server_properties_additional_keys.empty());
     std::printf("  [PASS] partial config\n");
 }

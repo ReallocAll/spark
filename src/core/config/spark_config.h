@@ -36,6 +36,9 @@ public:
     std::string background_profiler_thread_grouper = "by-pool";
     std::string background_profiler_thread_dumper = "default";
 
+    // --- Native allocation-rate metrics ---
+    bool allocation_rate_metrics_enabled = false;
+
     // --- Metadata ---
     // Administrator-reviewed server.properties keys appended to Spark's strict
     // built-in allowlist. Known-sensitive key names remain blocked.

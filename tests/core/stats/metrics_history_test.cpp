@@ -106,6 +106,26 @@ void testStatisticsRecordingDelayAndAnchors()
     assert(std::isfinite(snapshot.tps.front().value));
 }
 
+void testAllocationRateRollingAndMetrics()
+{
+    spark::StatisticsService statistics;
+    statistics.startAt(1'000, 5'000'000, initialCpu());
+    statistics.recordAllocationBytesAt(0, 1'000);
+    for (std::int64_t second = 1; second <= 20; ++second) {
+        statistics.recordAllocationBytesAt(static_cast<std::uint64_t>(second) * 1000, 1'000 + second * 1000);
+    }
+    const spark::StatisticsSnapshot rolling = statistics.snapshotAt(21'000);
+    assert(rolling.allocation.last_1m.present);
+    assert(rolling.allocation.last_5m.present);
+    assert(rolling.allocation.last_15m.present);
+    assert(std::abs(rolling.allocation.last_1m.mean - 1000.0) < 0.001);
+    assert(rolling.allocation.last_1m.samples == 20);
+    const spark::MetricsSnapshot metrics = statistics.metricsSnapshot();
+    assert(!metrics.memory_allocation.empty());
+    assert(std::abs(metrics.memory_allocation.front().value - 1000.0) < 0.001);
+    assert(metrics.memory_allocation.front().timestamp_ms == 5'010'000);
+}
+
 void testStatisticsCadenceOverflow()
 {
     spark::StatisticsService statistics;
@@ -122,6 +142,7 @@ int main()
     testRingRetentionAndOrder();
     testMemoryRingRetentionAndPresence();
     testStatisticsRecordingDelayAndAnchors();
+    testAllocationRateRollingAndMetrics();
     testStatisticsCadenceOverflow();
     return 0;
 }

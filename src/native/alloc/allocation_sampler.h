@@ -28,6 +28,10 @@ struct AllocationSamplerConfig {
     bool regex_threads = false;
     std::vector<std::string> thread_patterns;
     bool live_only = false;
+    // Count successful requested allocation bytes only. Existing allocator hooks
+    // and recursion/alias suppression remain active, but stack capture, lifecycle
+    // tracking, event queues and the aggregator are bypassed.
+    bool count_only = false;
     // Deterministic fault injection used only by the offline selftest.
     bool fail_aggregator_for_testing = false;
     std::uint32_t aggregator_delay_ms_for_testing = 0;

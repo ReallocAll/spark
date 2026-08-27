@@ -18,15 +18,16 @@ namespace spark::config_test {
 
 namespace {
 
-constexpr std::array<const char *, 9> KEnvironmentNames = {"SPARK_VIEWERURL",
-                                                           "SPARK_BYTEBINURL",
-                                                           "SPARK_BYTESOCKSHOST",
-                                                           "SPARK_BACKGROUNDPROFILER",
-                                                           "SPARK_BACKGROUNDPROFILERINTERVAL",
-                                                           "SPARK_BACKGROUNDPROFILERTHREADGROUPER",
-                                                           "SPARK_BACKGROUNDPROFILERTHREADDUMPER",
-                                                           "SPARK_DISABLERESPONSEBROADCAST",
-                                                           "SPARK_VIEWER_URL"};
+constexpr std::array<const char *, 10> KEnvironmentNames = {"SPARK_VIEWERURL",
+                                                            "SPARK_BYTEBINURL",
+                                                            "SPARK_BYTESOCKSHOST",
+                                                            "SPARK_BACKGROUNDPROFILER",
+                                                            "SPARK_BACKGROUNDPROFILERINTERVAL",
+                                                            "SPARK_BACKGROUNDPROFILERTHREADGROUPER",
+                                                            "SPARK_BACKGROUNDPROFILERTHREADDUMPER",
+                                                            "SPARK_ALLOCATIONRATEMETRICS",
+                                                            "SPARK_DISABLERESPONSEBROADCAST",
+                                                            "SPARK_VIEWER_URL"};
 
 void setEnvironment(const char *name, std::string_view value)
 {
@@ -48,7 +49,7 @@ void clearEnvironment(const char *name)
 
 class ScopedEnvironment {
 public:
-    explicit ScopedEnvironment(const std::array<const char *, 9> &names)
+    explicit ScopedEnvironment(const std::array<const char *, 10> &names)
     {
         for (const char *name : names) {
             const char *value = std::getenv(name);
@@ -82,6 +83,7 @@ backgroundProfiler = false
 backgroundProfilerInterval = 24
 backgroundProfilerThreadGrouper = "by-name"
 backgroundProfilerThreadDumper = "all"
+allocationRateMetrics = false
 disableResponseBroadcast = false
 )");
 }
@@ -95,6 +97,7 @@ void assertDefaults(const SparkConfig &config)
     assert(config.background_profiler_interval == 10);
     assert(config.background_profiler_thread_grouper == "by-pool");
     assert(config.background_profiler_thread_dumper == "default");
+    assert(!config.allocation_rate_metrics_enabled);
     assert(!config.disable_response_broadcast);
 }
 
@@ -113,6 +116,7 @@ void testEnvironmentOverrides()
     setEnvironment("SPARK_BACKGROUNDPROFILERINTERVAL", "37");
     setEnvironment("SPARK_BACKGROUNDPROFILERTHREADGROUPER", "as-one");
     setEnvironment("SPARK_BACKGROUNDPROFILERTHREADDUMPER", "default");
+    setEnvironment("SPARK_ALLOCATIONRATEMETRICS", "TRUE");
     setEnvironment("SPARK_DISABLERESPONSEBROADCAST", "TRUE");
 
     SparkConfig config(path);
@@ -124,6 +128,7 @@ void testEnvironmentOverrides()
     assert(config.background_profiler_interval == 37);
     assert(config.background_profiler_thread_grouper == "as-one");
     assert(config.background_profiler_thread_dumper == "default");
+    assert(config.allocation_rate_metrics_enabled);
     assert(config.disable_response_broadcast);
     std::printf("  [PASS] environment overrides and precedence\n");
 }
@@ -145,6 +150,7 @@ void testEnvironmentMissingAndExactNames()
     assert(config.background_profiler_interval == 24);
     assert(config.background_profiler_thread_grouper == "by-name");
     assert(config.background_profiler_thread_dumper == "all");
+    assert(!config.allocation_rate_metrics_enabled);
     assert(!config.disable_response_broadcast);
     std::printf("  [PASS] environment missing values and exact names\n");
 }
