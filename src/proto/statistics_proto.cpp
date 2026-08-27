@@ -1,5 +1,7 @@
 #include "proto/statistics_proto.h"
 
+#include <algorithm>
+
 #include "proto/proto_writer.h"
 
 namespace spark::proto_detail {
@@ -133,9 +135,7 @@ std::string buildPlatformStatistics(const PlatformStats &platform, const Statist
         else if (process_memory.display_total_present) {
             viewer_total = process_memory.display_total_bytes;
         }
-        if (viewer_total < platform.process_mem_bytes) {
-            viewer_total = platform.process_mem_bytes;
-        }
+        viewer_total = std::max(viewer_total, platform.process_mem_bytes);
         if (viewer_total <= 0) {
             viewer_total = 1;
         }
