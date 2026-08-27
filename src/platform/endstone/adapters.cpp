@@ -157,13 +157,13 @@ void appendGameRules(WorldInfo &world, endstone::Level &level, const std::string
         }
 
         GameRuleInfo info;
-        info.name = rule_name;
-        if (const auto default_value = resolveGameRuleDefault(info.name, minecraft_version);
+        info.name = canonicalGameRuleName(rule_name);
+        if (const auto default_value = resolveGameRuleDefault(rule_name, minecraft_version);
             default_value.has_value()) {
-            info.default_value = normalizeGameRuleSemanticValue(info.name, *default_value);
+            info.default_value = normalizeGameRuleSemanticValue(rule_name, *default_value);
         }
         const std::string raw_value = formatGameRuleValue(endstone::GameRuleValue{level.getGameRule(id)});
-        info.world_values[world_name] = normalizeGameRuleSemanticValue(info.name, raw_value);
+        info.world_values[world_name] = normalizeGameRuleSemanticValue(rule_name, raw_value);
         world.game_rules.push_back(std::move(info));
     }
 }
