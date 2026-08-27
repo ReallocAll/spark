@@ -107,19 +107,46 @@ std::string buildWorldStatistics(const WorldInfo &world)
 }
 
 std::string buildPlatformStatistics(const PlatformStats &platform, const StatisticsSnapshot &statistics,
-                                    const WorldInfo *world)
+                                    const WorldInfo *world, const ProcessMemoryUsage *process_memory_override)
 {
     std::string out;
     ProtoWriter writer(out);
 
-    // Point-in-time native process memory only carries the reliably captured
-    // resident value. Virtual address-space reservation (VmSize / reserved VA)
-    // is deliberately not serialized as MemoryUsage.committed. Reliable private
-    // commit and native limits are carried by Metrics.memory_usage_heap.
     if (platform.process_mem_present) {
+        const ProcessMemoryUsage process_memory =
+            process_memory_override != nullptr ? *process_memory_override : gatherProcessMemoryUsage();
+
+        // spark-viewer's top-level Memory(process) widget unconditionally uses
+        // MemoryUsage.committed as its denominator. Proto3 decodes an omitted
+        // scalar as zero, which previously produced RSS / 0 bytes and Infinity.
+        //
+        // Keep native semantics honest internally: Linux VmSize / reserved VA is
+        // never used here. Prefer a real private committed value when it is at
+        // least the current RSS; otherwise use the effective resident capacity
+        // (OS/container limit or physical RAM), finally falling back to RSS.
+        // Metrics.memory_usage_heap continues to serialize strict committed/max
+        // presence independently.
+        std::int64_t viewer_total = 0;
+        if (process_memory.committed_present && process_memory.committed_bytes >= platform.process_mem_bytes) {
+            viewer_total = process_memory.committed_bytes;
+        }
+        else if (process_memory.display_total_present) {
+            viewer_total = process_memory.display_total_bytes;
+        }
+        if (viewer_total < platform.process_mem_bytes) {
+            viewer_total = platform.process_mem_bytes;
+        }
+        if (viewer_total <= 0) {
+            viewer_total = 1;
+        }
+
         std::string heap;
         ProtoWriter heap_writer(heap);
         heap_writer.int64(1, platform.process_mem_bytes);
+        heap_writer.int64(2, viewer_total);
+        if (process_memory.max_present && process_memory.max_bytes > 0) {
+            heap_writer.int64(4, process_memory.max_bytes);
+        }
         std::string memory;
         ProtoWriter memory_writer(memory);
         memory_writer.message(1, heap);
