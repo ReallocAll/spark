@@ -1,0 +1,39 @@
+name: Apply headless ping fix
+
+on:
+  push:
+    branches:
+      - fix/headless-player-ping-current
+    paths:
+      - .github/workflows/apply-headless-ping-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Apply minimal headless player ping guard
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('src/platform/endstone/adapters.cpp')
+          text = path.read_text()
+          old = '''    for (const auto &player : server_.getOnlinePlayers()) {\n        result.emplace(player->getName(), static_cast<int>(player->getPing().count()));\n    }\n'''
+          new = '''    for (const auto &player : server_.getOnlinePlayers()) {\n        // Offline/headless clients can be present before Endstone has safe device metadata.\n        // Endstone's ping path may dereference that metadata, so only sample players with\n        // an authenticated XUID. The cached XUID accessor is safe for partially-initialised\n        // players and normal authenticated players keep the existing ping semantics.\n        if (player->getXuid().empty()) {\n            continue;\n        }\n        result.emplace(player->getName(), static_cast<int>(player->getPing().count()));\n    }\n'''
+          if old not in text:
+              raise SystemExit('ping provider target not found')
+          path.write_text(text.replace(old, new, 1))
+          PY
+          rm .github/workflows/apply-headless-ping-fix.yml
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'fix: skip unsafe headless player ping samples'
+          git push origin HEAD:fix/headless-player-ping-current
