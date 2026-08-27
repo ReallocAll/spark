@@ -23,6 +23,28 @@ jobs:
         run: |
           git checkout origin/develop -- src/native/alloc/allocation_sampler_linux.cpp
           python .github/scripts/apply_allocation_tls_fast_path.py
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('.github/scripts/apply_allocation_counter_shards.py')
+          text = path.read_text()
+          old_success = 'replace_once("    std::atomic<std::uint64_t> successful_allocation_calls{0};\\n", "")'
+          new_success = '''replace_once(
+              "    std::array<HotCounters, KHookCallShards> hot_counters{};\\n"
+              "    std::atomic<std::uint64_t> successful_allocation_calls{0};\\n",
+              "    std::array<HotCounters, KHookCallShards> hot_counters{};\\n",
+          )'''
+          old_observed = 'replace_once("    std::atomic<std::uint64_t> observed_bytes{0};\\n", "")'
+          new_observed = '''replace_once(
+              "    std::atomic<std::uint64_t> filtered_samples{0};\\n"
+              "    std::atomic<std::uint64_t> observed_bytes{0};\\n"
+              "    std::atomic<std::uint64_t> dropped_samples{0};\\n",
+              "    std::atomic<std::uint64_t> filtered_samples{0};\\n"
+              "    std::atomic<std::uint64_t> dropped_samples{0};\\n",
+          )'''
+          if text.count(old_success) != 1 or text.count(old_observed) != 1:
+              raise SystemExit('hot-counter script repair markers not unique')
+          path.write_text(text.replace(old_success, new_success).replace(old_observed, new_observed))
+          PY
           python .github/scripts/apply_allocation_counter_shards.py
           git diff --check
           git diff -- src/native/alloc/allocation_sampler_linux.cpp
@@ -31,5 +53,5 @@ jobs:
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add src/native/alloc/allocation_sampler_linux.cpp
-          git commit -m "perf: shard Linux allocation hook counters"
+          git commit -m "perf: shard Linux allocation hot counters"
           git push origin HEAD:perf/allocation-profiler-lifecycle
