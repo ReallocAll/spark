@@ -103,6 +103,9 @@ std::string buildMetadata(const ProfileMetadata &m)
         ProtoWriter cw(c);
         cw.varint(1, m.creator_is_player ? 1 : 0);
         cw.string(2, m.creator_name);
+        if (m.creator_is_player && !m.creator_unique_id.empty()) {
+            cw.string(3, m.creator_unique_id);
+        }
         w.message(1, c);
     }
     w.int64(2, m.start_time_ms);

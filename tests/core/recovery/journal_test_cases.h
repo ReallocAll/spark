@@ -2,6 +2,7 @@
 #define SPARK_TESTS_CORE_RECOVERY_JOURNAL_TEST_CASES_H
 
 void testFileHeaderMagic();
+void testSupportedJournalVersions();
 void testRecordSerialization();
 void testModuleDefRoundTrip();
 void testSampleRoundTrip();

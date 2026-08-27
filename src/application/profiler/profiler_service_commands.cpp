@@ -35,6 +35,7 @@ void ProfilerService::cmdStart(CommandSender &sender, const Arguments &args)
     spark::ProfilerOptions options = std::move(parsed.options);
     options.creator_name = sender.getName();
     options.creator_is_player = sender.isPlayer();
+    options.creator_unique_id = options.creator_is_player ? sender.getUniqueId() : std::string{};
     const std::int64_t timeout = options.timeout_seconds;
 
     std::uint64_t tid = main_tid_;
@@ -114,6 +115,7 @@ void ProfilerService::cmdStart(CommandSender &sender, const Arguments &args)
     session_native_plugin_sources_ = std::move(native_plugin_sources);
     start_sender_name_ = sender.getName();
     start_sender_is_player_ = sender.isPlayer();
+    start_sender_unique_id_ = start_sender_is_player_ ? sender.getUniqueId() : std::string{};
     session_type_ = SessionType::Foreground;
     background_suppressed_ = background_enabled_;
 
@@ -216,7 +218,9 @@ void ProfilerService::cmdStop(CommandSender &sender, const Arguments &args)
     if (background_enabled_) {
         restart_background_after_export_ = true;
     }
-    finishProfiler(sender.getName(), sender.isPlayer(), save, comment);
+    const bool sender_is_player = sender.isPlayer();
+    finishProfiler(sender.getName(), sender_is_player, sender_is_player ? sender.getUniqueId() : std::string{}, save,
+                   comment);
 }
 
 void ProfilerService::cmdInfo(CommandSender &sender)

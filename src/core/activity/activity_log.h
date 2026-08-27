@@ -11,6 +11,7 @@ namespace spark {
 struct Activity {
     std::string user_name;
     bool user_is_player = false;
+    std::string user_unique_id;
     std::int64_t time_ms = 0;
     std::string type;
 
@@ -22,9 +23,9 @@ struct Activity {
     std::string data_value;
 
     static Activity url(std::string user_name, bool user_is_player, std::int64_t time_ms, std::string type,
-                        std::string url);
+                        std::string url, std::string user_unique_id = {});
     static Activity file(std::string user_name, bool user_is_player, std::int64_t time_ms, std::string type,
-                         std::string path);
+                         std::string path, std::string user_unique_id = {});
 
     bool shouldExpire(std::int64_t now_ms) const;
     std::string serialize() const;

@@ -27,6 +27,24 @@ void testFileHeaderMagic()
     std::cout << "testFileHeaderMagic: PASS\n";
 }
 
+void testSupportedJournalVersions()
+{
+    const auto dir = makeTempDir();
+    const auto path = dir / "segment-0.jnl";
+    for (const std::uint16_t version : {kLegacyJournalVersion, kPreviousJournalVersion, kJournalVersion}) {
+        const auto header = serializeFileHeader(9, 10, 0, version);
+        std::FILE *file = std::fopen(path.string().c_str(), "wb");
+        assert(file);
+        assert(std::fwrite(header.data(), 1, header.size(), file) == header.size());
+        std::fclose(file);
+        JournalReadResult result;
+        assert(JournalReader::readSegment(path, result));
+        assert(result.valid);
+        assert(result.version == version);
+    }
+    std::cout << "testSupportedJournalVersions: PASS\n";
+}
+
 void testRecordSerialization()
 {
     JournalBuffer payload = buildTickEventPayload(7, 42.5);
@@ -125,8 +143,9 @@ void testSampleRoundTrip()
 void testSessionConfigRoundTrip()
 {
     std::vector<std::string> patterns = {"Server thread", "Worker-*"};
-    JournalBuffer payload = buildSessionConfigPayload(8000, 50, true, false, true, 2, 1, true, "Console", false,
-                                                      "test profile", patterns, 0);
+    JournalBuffer payload =
+        buildSessionConfigPayload(8000, 50, true, false, true, 2, 1, true, "PlayerOne", true, "test profile", patterns,
+                                  0, "123e4567-e89b-12d3-a456-426614174000");
     auto record = serializeRecord(RecordType::SessionConfig, 0, payload);
 
     JournalRecord rec;
@@ -145,14 +164,36 @@ void testSessionConfigRoundTrip()
     assert(sc.thread_grouper == 2);
     assert(sc.profile_type == 1);
     assert(sc.live_only);
-    assert(sc.creator_name == "Console");
-    assert(!sc.creator_is_player);
+    assert(sc.creator_name == "PlayerOne");
+    assert(sc.creator_is_player);
+    assert(sc.creator_unique_id == "123e4567-e89b-12d3-a456-426614174000");
     assert(sc.comment == "test profile");
     assert(sc.thread_patterns.size() == 2);
     assert(sc.thread_patterns[0] == "Server thread");
     assert(sc.thread_patterns[1] == "Worker-*");
     assert(sc.has_window_adjustment);
     assert(sc.window_adjustment_ms == 0);
+
+    JournalBuffer previous_payload =
+        buildSessionConfigPayload(4000, 0, false, false, false, 1, 0, false, "Console", false, {}, {}, 17);
+    auto previous_bytes = previous_payload.take();
+    assert(previous_bytes.size() >= 2);
+    previous_bytes.resize(previous_bytes.size() - 2);  // v3 had no UUID string suffix.
+    JournalRecord previous_record{.type = RecordType::SessionConfig, .sequence = 1, .payload = previous_bytes};
+    SessionConfig previous_config;
+    assert(previous_record.asSessionConfig(previous_config));
+    assert(previous_config.has_window_adjustment);
+    assert(previous_config.window_adjustment_ms == 17);
+    assert(previous_config.creator_unique_id.empty());
+
+    assert(previous_bytes.size() >= sizeof(std::int32_t));
+    previous_bytes.resize(previous_bytes.size() - sizeof(std::int32_t));  // v2 had no window adjustment.
+    JournalRecord legacy_record{.type = RecordType::SessionConfig, .sequence = 2, .payload = previous_bytes};
+    SessionConfig legacy_config;
+    assert(legacy_record.asSessionConfig(legacy_config));
+    assert(!legacy_config.has_window_adjustment);
+    assert(legacy_config.creator_unique_id.empty());
+
     std::cout << "testSessionConfigRoundTrip: PASS\n";
 }
 
