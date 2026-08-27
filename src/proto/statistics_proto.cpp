@@ -94,6 +94,15 @@ std::string buildWorldStatistics(const WorldInfo &world)
         }
         writer.message(4, rule);
     }
+    for (const DataPackInfo &data_pack : world.data_packs) {
+        std::string pack;
+        ProtoWriter pack_writer(pack);
+        pack_writer.string(1, data_pack.name);
+        pack_writer.string(2, data_pack.description);
+        pack_writer.string(3, data_pack.source);
+        pack_writer.boolean(4, data_pack.builtin);
+        writer.message(5, pack);
+    }
     return out;
 }
 

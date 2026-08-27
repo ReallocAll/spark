@@ -12,6 +12,7 @@
 #include <variant>
 #include <vector>
 
+#include "core/metadata/behavior_packs.h"
 #include "core/metadata/gamerule_semantics.h"
 #include "core/metadata/server_properties.h"
 #include "core/profiler/profiler.h"
@@ -268,7 +269,8 @@ void EndstoneMetadataProvider::gatherWorldMetadata(ExportContext &ctx)
     appendGameRules(ctx.world, level, world_name, ctx.minecraft_version, KBooleanGameRules);
     appendGameRules(ctx.world, level, world_name, ctx.minecraft_version, KIntegerGameRules);
 
-    ctx.world.present = !ctx.world.worlds.empty() || !ctx.world.game_rules.empty();
+    ctx.world.data_packs = discoverActiveBehaviorPacks(std::filesystem::current_path(), world_name);
+    ctx.world.present = !ctx.world.worlds.empty() || !ctx.world.game_rules.empty() || !ctx.world.data_packs.empty();
 }
 
 std::int64_t EndstoneMetadataProvider::serverUptimeSeconds()
