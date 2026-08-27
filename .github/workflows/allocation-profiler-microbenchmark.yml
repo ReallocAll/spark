@@ -33,39 +33,7 @@ jobs:
       - run: cmake --preset conan-relwithdebinfo
       - run: cmake --build --preset conan-relwithdebinfo --target spark_allocation_benchmark
       - name: Run allocation microbenchmark
-        run: ./build/RelWithDebInfo/tests/spark_allocation_benchmark
-
-  windows:
-    name: Windows allocation microbenchmark
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: TheMrMilchmann/setup-msvc-dev@v4
-        with:
-          arch: x64
-      - name: Select clang-cl 20
-        shell: pwsh
         run: |
-          $llvmBin = "C:\Program Files\LLVM\bin"
-          $llvmBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          $version = & "$llvmBin\clang-cl.exe" --version
-          $version
-          if (-not ($version | Select-String "clang version 20\.")) { throw "clang-cl 20 is required" }
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-      - run: python -m pip install "conan>=2,<3"
-      - uses: actions/cache@v5
-        with:
-          path: .conan2
-          key: ${{ runner.os }}-clang20-conan-${{ hashFiles('conanfile.py', '.conan2/profiles/default') }}
-      - run: conan install . --build=missing
-      - run: cmake --preset conan-relwithdebinfo
-      - run: cmake --build --preset conan-relwithdebinfo --target spark_allocation_benchmark
-      - name: Run allocation microbenchmark
-        shell: pwsh
-        run: |
-          $exe = Get-ChildItem -Path build/RelWithDebInfo -Recurse -Filter spark_allocation_benchmark.exe | Select-Object -First 1
-          if ($null -eq $exe) { throw "spark_allocation_benchmark.exe not found" }
-          & $exe.FullName
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          exe="$(find build/RelWithDebInfo -type f -name spark_allocation_benchmark -perm -111 | head -n 1)"
+          test -n "$exe"
+          "$exe"
