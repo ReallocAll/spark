@@ -54,6 +54,7 @@ constexpr std::size_t KLiveIndexShards = 64;
 constexpr std::size_t KLiveIndexShardCapacity = KLiveIndexCapacity / KLiveIndexShards;
 constexpr std::size_t KLivePresenceBuckets = KLiveIndexCapacity;
 constexpr std::size_t KHookCallShards = 1024;
+constexpr std::size_t KLiveLockAttempts = 64;
 constexpr std::size_t KMaxSampledThreads = 256;
 constexpr std::size_t KMaxAllocationModules = 512;
 constexpr std::size_t KMaxProfileNodes = 131072;
@@ -634,6 +635,43 @@ struct AllocationSampler::Impl {
         return state != nullptr && !state->tracking_suppressed;
     }
 
+    static void liveLockPause() noexcept
+    {
+#if defined(__x86_64__) || defined(__i386__)
+        __builtin_ia32_pause();
+#else
+        std::atomic_signal_fence(std::memory_order_seq_cst);
+#endif
+    }
+
+    bool tryLockLivePool() noexcept
+    {
+        if (config.force_live_lock_contention_for_testing) {
+            return false;
+        }
+        for (std::size_t attempt = 0; attempt < KLiveLockAttempts; ++attempt) {
+            if (::pthread_mutex_trylock(&live_pool_mutex) == 0) {
+                return true;
+            }
+            liveLockPause();
+        }
+        return false;
+    }
+
+    bool tryLockLiveIndexShard(std::size_t shard) noexcept
+    {
+        if (config.force_live_lock_contention_for_testing) {
+            return false;
+        }
+        for (std::size_t attempt = 0; attempt < KLiveLockAttempts; ++attempt) {
+            if (::pthread_rwlock_trywrlock(&live_index_locks[shard]) == 0) {
+                return true;
+            }
+            liveLockPause();
+        }
+        return false;
+    }
+
     static std::uint64_t liveIndexHash(void *pointer) noexcept
     {
         const auto value = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(pointer) >> 4);
@@ -716,8 +754,7 @@ struct AllocationSampler::Impl {
             return nullptr;
         }
         const std::size_t shard = liveIndexShard(hash);
-        if (config.force_live_lock_contention_for_testing ||
-            ::pthread_rwlock_trywrlock(&live_index_locks[shard]) != 0) {
+        if (!tryLockLiveIndexShard(shard)) {
             lifecycle_dropped.fetch_add(1, std::memory_order_relaxed);
             contention_dropped.fetch_add(1, std::memory_order_relaxed);
             return nullptr;
@@ -915,7 +952,7 @@ struct AllocationSampler::Impl {
 
     LiveAllocation *acquireLiveRecord() noexcept
     {
-        if (config.force_live_lock_contention_for_testing || ::pthread_mutex_trylock(&live_pool_mutex) != 0) {
+        if (!tryLockLivePool()) {
             contention_dropped.fetch_add(1, std::memory_order_relaxed);
             return nullptr;
         }
@@ -949,8 +986,7 @@ struct AllocationSampler::Impl {
         const std::uint64_t hash = liveIndexHash(pointer);
         const std::size_t presence_slot = livePresenceSlot(hash);
         const std::size_t shard = liveIndexShard(hash);
-        if (config.force_live_lock_contention_for_testing ||
-            ::pthread_rwlock_trywrlock(&live_index_locks[shard]) != 0) {
+        if (!tryLockLiveIndexShard(shard)) {
             contention_dropped.fetch_add(1, std::memory_order_relaxed);
             return false;
         }
@@ -1023,7 +1059,7 @@ struct AllocationSampler::Impl {
                                                           std::memory_order_relaxed));
             return;
         }
-        if (config.force_live_lock_contention_for_testing || ::pthread_mutex_trylock(&live_pool_mutex) != 0) {
+        if (!tryLockLivePool()) {
             lifecycle_dropped.fetch_add(1, std::memory_order_relaxed);
             contention_dropped.fetch_add(1, std::memory_order_relaxed);
             return;
