@@ -7,7 +7,7 @@ on:
 permissions:
   contents: read
 
-# Temporary Linux-only validation for native thread-pointer shards plus lifecycle presence and hot-counter sharding.
+# Temporary Linux-only validation for native thread-pointer shards plus bounded sampled-lifecycle lock retries.
 jobs:
   linux:
     name: Linux allocation microbenchmark
