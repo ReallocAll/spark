@@ -15,6 +15,7 @@ find_package(concurrentqueue REQUIRED)
 find_package(ZLIB REQUIRED)
 find_package(CURL REQUIRED)
 find_package(tomlplusplus REQUIRED)
+find_package(nlohmann_json REQUIRED)
 if (NOT WIN32)
     find_package(OpenSSL REQUIRED)
 endif ()
@@ -158,6 +159,7 @@ add_library(spark_core STATIC
         src/core/util/format.cpp
         src/core/util/state_file.cpp
         src/core/util/world_region.cpp
+        src/core/metadata/behavior_packs.cpp
         src/core/metadata/server_properties.cpp
         src/core/activity/activity_log.cpp
         src/core/command/arguments.cpp
@@ -191,12 +193,14 @@ if (WIN32)
     target_sources(spark_core PRIVATE
             src/core/stats/network_monitor_windows.cpp
             src/core/ws/crypto_cng.cpp)
-    target_link_libraries(spark_core PUBLIC spark_native ZLIB::ZLIB CURL::libcurl tomlplusplus::tomlplusplus bcrypt)
+    target_link_libraries(spark_core PUBLIC spark_native ZLIB::ZLIB CURL::libcurl tomlplusplus::tomlplusplus
+        nlohmann_json::nlohmann_json bcrypt)
 else ()
     target_sources(spark_core PRIVATE
             src/core/stats/network_monitor_linux.cpp
             src/core/ws/crypto.cpp)
-    target_link_libraries(spark_core PUBLIC spark_native ZLIB::ZLIB CURL::libcurl tomlplusplus::tomlplusplus OpenSSL::Crypto)
+    target_link_libraries(spark_core PUBLIC spark_native ZLIB::ZLIB CURL::libcurl tomlplusplus::tomlplusplus
+        nlohmann_json::nlohmann_json OpenSSL::Crypto)
 endif ()
 if (WIN32)
     target_compile_definitions(spark_core PUBLIC NOMINMAX _WIN32_WINNT=0x0600 NTDDI_VERSION=0x06000000)

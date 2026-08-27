@@ -410,6 +410,12 @@ set_target_properties(spark_server_properties_json_test PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME spark_server_properties_json_test COMMAND spark_server_properties_json_test)
 
+add_executable(spark_behavior_packs_test core/metadata/behavior_packs_test.cpp)
+target_link_libraries(spark_behavior_packs_test PRIVATE spark_core)
+set_target_properties(spark_behavior_packs_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME spark_behavior_packs_test COMMAND spark_behavior_packs_test)
+
 add_executable(spark_symbol_guess_dwarf_test native/symbol/symbol_guess_dwarf_test.cpp)
 target_link_libraries(spark_symbol_guess_dwarf_test PRIVATE spark_core)
 set_target_properties(spark_symbol_guess_dwarf_test PROPERTIES

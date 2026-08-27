@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include "core/metadata/behavior_packs.h"
 #include "core/stats/network_monitor.h"
 
 namespace spark {
@@ -49,6 +50,7 @@ struct WorldInfo {
     std::map<std::string, int> entity_counts;  // entity type -> count
     std::vector<WorldEntry> worlds;
     std::vector<GameRuleInfo> game_rules;
+    std::vector<DataPackInfo> data_packs;
 };
 
 // Server-side statistics sourced from the Endstone API (on the main thread).
