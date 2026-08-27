@@ -54,7 +54,25 @@ public:
     void onTick(double mspt);
 
     // Sets the server main thread ID (identified lazily).
-    void setMainThreadId(std::uint64_t tid) { main_tid_ = tid; }
+    void setMainThreadId(std::uint64_t tid)
+    {
+        main_tid_ = tid;
+        if (tid == 0 || !allocation_rate_metrics_enabled_ || allocation_rate_metrics_start_attempted_) {
+            return;
+        }
+        allocation_rate_metrics_start_attempted_ = true;
+        std::string error;
+        if (!profiler_.setPersistentAllocationCountingEnabled(true, tid, error)) {
+            allocation_rate_metrics_enabled_ = false;
+        }
+    }
+    void configureAllocationRateMetrics(bool enabled)
+    {
+        allocation_rate_metrics_enabled_ = enabled;
+        allocation_rate_metrics_start_attempted_ = false;
+    }
+    [[nodiscard]] bool allocationRateMetricsActive() const { return profiler_.persistentAllocationCountingEnabled(); }
+    [[nodiscard]] std::uint64_t persistentAllocationBytes() const { return profiler_.persistentAllocationBytes(); }
 
     // Sets a callback that returns the current ping samples for export.
     void setPingSamplesProvider(std::function<std::vector<int>()> provider)
@@ -157,6 +175,8 @@ private:
     bool restart_background_after_export_ = false;
     bool background_enabled_ = true;
     int background_interval_ = 10;
+    bool allocation_rate_metrics_enabled_ = false;
+    bool allocation_rate_metrics_start_attempted_ = false;
     std::string background_thread_grouper_ = "by-pool";
     std::string background_thread_dumper_ = "default";
     std::string start_sender_name_ = "CONSOLE";

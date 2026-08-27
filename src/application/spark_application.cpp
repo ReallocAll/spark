@@ -39,6 +39,7 @@ SparkApplication::SparkApplication(std::string bds_executable_sha256, const std:
       watchdog_(server_heartbeat_)
 {
     recovery_dir_ = profile_storage_dir / "recovery";
+    profiler_.configureAllocationRateMetrics(config_.allocation_rate_metrics_enabled);
     activity_log_.load();
     registerCommands();
     profiler_.setPingSamplesProvider([this]() { return health_.pingSamples(); });
@@ -109,6 +110,9 @@ bool SparkApplication::dispatchCommand(CommandSender &sender, const std::vector<
 void SparkApplication::onTick(double mspt)
 {
     server_heartbeat_.beat();
+    if (profiler_.allocationRateMetricsActive()) {
+        statistics_.recordAllocationBytes(profiler_.persistentAllocationBytes());
+    }
     if (statistics_.onTick(mspt)) {
         statistics_.recordPlayerCount(metadata_provider_.playerCount());
         const WorldGaugeValues gauges = metadata_provider_.worldGauges();

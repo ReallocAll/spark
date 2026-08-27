@@ -24,6 +24,7 @@ spark::MetricsSnapshot sampleMetrics()
     memory.max_present = true;
     memory.max = 789;
     metrics.memory_usage_heap = {{.timestamp_ms = 1'000, .values = memory}};
+    metrics.memory_allocation = {{.timestamp_ms = 1'000, .value = 4096.0}, {.timestamp_ms = 11'001, .value = 8192.0}};
     metrics.world_info = {{.timestamp_ms = 1'000, .players = 4, .entities = 30, .chunks = 40}};
     metrics.player_ping = {{.timestamp_ms = 1'000,
                             .values = {.mean = 30.0, .max = 50.0, .min = 10.0, .median = 30.0, .percentile95 = 50.0}}};
@@ -39,7 +40,7 @@ void testMetricsFields()
     assert(spark::proto_test::hasMessage(bytes, 4));
     assert(spark::proto_test::hasMessage(bytes, 5));
     assert(!spark::proto_test::hasField(bytes, 6));
-    assert(!spark::proto_test::hasField(bytes, 7));
+    assert(spark::proto_test::hasMessage(bytes, 7));
     assert(spark::proto_test::hasMessage(bytes, 8));
     assert(spark::proto_test::hasMessage(bytes, 9));
     assert(spark::proto_test::findMessageBytes(bytes, 1, [](std::string_view series) {
@@ -114,7 +115,7 @@ void testMetadataFields()
     assert(spark::proto_test::findMessageBytes(health_bytes, 1, [](std::string_view metadata) {
         return spark::proto_test::findMessageBytes(metadata, 9, [](std::string_view bytes) {
             return spark::proto_test::hasMessage(bytes, 1) && spark::proto_test::hasMessage(bytes, 5) &&
-                   spark::proto_test::hasMessage(bytes, 9);
+                   spark::proto_test::hasMessage(bytes, 7) && spark::proto_test::hasMessage(bytes, 9);
         });
     }));
 
@@ -129,7 +130,7 @@ void testMetadataFields()
     assert(spark::proto_test::findMessageBytes(profile_bytes, 1, [](std::string_view metadata) {
         return spark::proto_test::findMessageBytes(metadata, 18, [](std::string_view bytes) {
             return spark::proto_test::hasMessage(bytes, 1) && spark::proto_test::hasMessage(bytes, 5) &&
-                   spark::proto_test::hasMessage(bytes, 9);
+                   spark::proto_test::hasMessage(bytes, 7) && spark::proto_test::hasMessage(bytes, 9);
         });
     }));
 }
