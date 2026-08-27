@@ -5,6 +5,8 @@ on:
     branches: ["perf/allocation-profiler-lifecycle"]
     paths:
       - ".github/workflows/apply-allocation-presence-filter.yml"
+      - ".github/scripts/apply_allocation_tls_fast_path.py"
+      - ".github/scripts/apply_allocation_counter_shards.py"
 
 permissions:
   contents: write
@@ -17,10 +19,11 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - name: Apply Linux allocation TLS and lifecycle fast paths
+      - name: Apply Linux allocation fast paths
         run: |
           git checkout origin/develop -- src/native/alloc/allocation_sampler_linux.cpp
           python .github/scripts/apply_allocation_tls_fast_path.py
+          python .github/scripts/apply_allocation_counter_shards.py
           git diff --check
           git diff -- src/native/alloc/allocation_sampler_linux.cpp
       - name: Commit fast paths
@@ -28,5 +31,5 @@ jobs:
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add src/native/alloc/allocation_sampler_linux.cpp
-          git commit -m "perf: reduce Linux allocation hook overhead"
+          git commit -m "perf: shard Linux allocation hook counters"
           git push origin HEAD:perf/allocation-profiler-lifecycle
