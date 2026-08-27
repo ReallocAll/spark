@@ -1,0 +1,159 @@
+name: Apply Allocation Presence Filter
+
+on:
+  push:
+    branches: ["perf/allocation-profiler-lifecycle"]
+    paths:
+      - ".github/workflows/apply-allocation-presence-filter.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Apply Linux sampled-pointer presence filter
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("src/native/alloc/allocation_sampler_linux.cpp")
+          text = path.read_text()
+
+          def replace_once(old: str, new: str) -> None:
+              global text
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"expected one match, got {count}: {old[:120]!r}")
+              text = text.replace(old, new, 1)
+
+          replace_once(
+              "constexpr std::size_t KLiveIndexShardCapacity = KLiveIndexCapacity / KLiveIndexShards;\n"
+              "constexpr std::size_t KMaxSampledThreads = 256;",
+              "constexpr std::size_t KLiveIndexShardCapacity = KLiveIndexCapacity / KLiveIndexShards;\n"
+              "constexpr std::size_t KLivePresenceBuckets = KLiveIndexCapacity;\n"
+              "constexpr std::size_t KMaxSampledThreads = 256;",
+          )
+
+          replace_once(
+              "    std::array<pthread_rwlock_t, KLiveIndexShards> live_index_locks{};\n"
+              "    pthread_mutex_t live_pool_mutex = PTHREAD_MUTEX_INITIALIZER;",
+              "    std::array<pthread_rwlock_t, KLiveIndexShards> live_index_locks{};\n"
+              "    std::array<std::atomic<std::uint32_t>, KLivePresenceBuckets> live_presence{};\n"
+              "    pthread_mutex_t live_pool_mutex = PTHREAD_MUTEX_INITIALIZER;",
+          )
+
+          replace_once(
+              "    static std::size_t liveIndexShard(std::uint64_t hash) noexcept\n"
+              "    {\n"
+              "        return static_cast<std::size_t>(hash & (KLiveIndexShards - 1));\n"
+              "    }\n\n"
+              "    static std::size_t liveIndexSlot(std::uint64_t hash, std::size_t shard, std::size_t offset = 0) noexcept",
+              "    static std::size_t liveIndexShard(std::uint64_t hash) noexcept\n"
+              "    {\n"
+              "        return static_cast<std::size_t>(hash & (KLiveIndexShards - 1));\n"
+              "    }\n\n"
+              "    static std::size_t livePresenceSlot(std::uint64_t hash) noexcept\n"
+              "    {\n"
+              "        return static_cast<std::size_t>((hash >> 6) & (KLivePresenceBuckets - 1));\n"
+              "    }\n\n"
+              "    static std::size_t liveIndexSlot(std::uint64_t hash, std::size_t shard, std::size_t offset = 0) noexcept",
+          )
+
+          replace_once(
+              "        const std::uint64_t hash = liveIndexHash(pointer);\n"
+              "        const std::size_t shard = liveIndexShard(hash);\n"
+              "        if (config.force_live_lock_contention_for_testing ||\n"
+              "            ::pthread_rwlock_trywrlock(&live_index_locks[shard]) != 0) {",
+              "        const std::uint64_t hash = liveIndexHash(pointer);\n"
+              "        const std::size_t presence_slot = livePresenceSlot(hash);\n"
+              "        if (!config.force_live_lock_contention_for_testing &&\n"
+              "            live_presence[presence_slot].load(std::memory_order_acquire) == 0) {\n"
+              "            return nullptr;\n"
+              "        }\n"
+              "        const std::size_t shard = liveIndexShard(hash);\n"
+              "        if (config.force_live_lock_contention_for_testing ||\n"
+              "            ::pthread_rwlock_trywrlock(&live_index_locks[shard]) != 0) {",
+          )
+
+          replace_once(
+              "                detached = entry_allocation;\n"
+              "                clearEntry(entry);\n"
+              "                break;",
+              "                detached = entry_allocation;\n"
+              "                clearEntry(entry);\n"
+              "                live_presence[presence_slot].fetch_sub(1, std::memory_order_release);\n"
+              "                break;",
+          )
+
+          replace_once(
+              "        const std::uint64_t weight = allocation->weight_bytes;\n"
+              "        const std::uint64_t hash = liveIndexHash(pointer);\n"
+              "        const std::size_t shard = liveIndexShard(hash);",
+              "        const std::uint64_t weight = allocation->weight_bytes;\n"
+              "        const std::uint64_t hash = liveIndexHash(pointer);\n"
+              "        const std::size_t presence_slot = livePresenceSlot(hash);\n"
+              "        const std::size_t shard = liveIndexShard(hash);",
+          )
+
+          replace_once(
+              "        LiveAllocation *replaced = nullptr;\n"
+              "        bool inserted = false;\n"
+              "        std::size_t tombstone = KLiveIndexCapacity;",
+              "        LiveAllocation *replaced = nullptr;\n"
+              "        bool inserted = false;\n"
+              "        bool added_presence = false;\n"
+              "        std::size_t tombstone = KLiveIndexCapacity;",
+          )
+
+          replace_once(
+              "                publishEntry(destination, pointer, allocation_id, allocation);\n"
+              "                inserted = true;\n"
+              "                break;",
+              "                publishEntry(destination, pointer, allocation_id, allocation);\n"
+              "                inserted = true;\n"
+              "                added_presence = true;\n"
+              "                break;",
+          )
+
+          replace_once(
+              "            publishEntry(live_index[tombstone], pointer, allocation_id, allocation);\n"
+              "            inserted = true;\n"
+              "        }\n"
+              "        lifecycle_version.fetch_add(1, std::memory_order_release);",
+              "            publishEntry(live_index[tombstone], pointer, allocation_id, allocation);\n"
+              "            inserted = true;\n"
+              "            added_presence = true;\n"
+              "        }\n"
+              "        if (added_presence) {\n"
+              "            live_presence[presence_slot].fetch_add(1, std::memory_order_release);\n"
+              "        }\n"
+              "        lifecycle_version.fetch_add(1, std::memory_order_release);",
+          )
+
+          replace_once(
+              "        lifecycle_writers.store(0, std::memory_order_relaxed);\n"
+              "        deferred_live.store(nullptr, std::memory_order_relaxed);",
+              "        lifecycle_writers.store(0, std::memory_order_relaxed);\n"
+              "        for (auto &presence : live_presence) {\n"
+              "            presence.store(0, std::memory_order_relaxed);\n"
+              "        }\n"
+              "        deferred_live.store(nullptr, std::memory_order_relaxed);",
+          )
+
+          path.write_text(text)
+          PY
+          git diff --check
+          git diff -- src/native/alloc/allocation_sampler_linux.cpp
+      - name: Commit fast path
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/native/alloc/allocation_sampler_linux.cpp
+          git commit -m "perf: skip empty allocation lifecycle buckets on Linux"
+          git push origin HEAD:perf/allocation-profiler-lifecycle
