@@ -3,6 +3,7 @@
 
 #include <filesystem>
 #include <string>
+#include <vector>
 
 namespace spark {
 
@@ -34,6 +35,11 @@ public:
     int background_profiler_interval = 10;
     std::string background_profiler_thread_grouper = "by-pool";
     std::string background_profiler_thread_dumper = "default";
+
+    // --- Metadata ---
+    // Administrator-reviewed server.properties keys appended to Spark's strict
+    // built-in allowlist. Known-sensitive key names remain blocked.
+    std::vector<std::string> server_properties_additional_keys;
 
     // --- Response behaviour ---
     bool disable_response_broadcast = false;

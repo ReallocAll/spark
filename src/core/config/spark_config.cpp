@@ -11,6 +11,7 @@
 #include <curl/curl.h>
 
 #include "core/config/spark_config_environment.h"
+#include "core/metadata/server_properties.h"
 #include "core/util/state_file.h"
 
 namespace spark {
@@ -19,6 +20,8 @@ namespace {
 
 constexpr std::int64_t KMaxBackgroundProfilerIntervalMs = 1000;
 constexpr std::size_t KMaxConfigFileBytes = 1U * 1024U * 1024U;
+constexpr std::size_t KMaxAdditionalServerPropertyKeys = 64;
+constexpr std::size_t KMaxServerPropertyKeyLength = 128;
 
 struct ConfigValues {
     std::string viewer_url;
@@ -28,6 +31,7 @@ struct ConfigValues {
     std::int64_t background_profiler_interval;
     std::string background_profiler_thread_grouper;
     std::string background_profiler_thread_dumper;
+    std::vector<std::string> server_properties_additional_keys;
     bool disable_response_broadcast;
 };
 
@@ -128,6 +132,71 @@ std::string escapeString(std::string_view s)
     return out;
 }
 
+std::string trimConfigToken(std::string_view value)
+{
+    std::size_t begin = 0;
+    while (begin < value.size() && (value[begin] == ' ' || value[begin] == '\t')) {
+        ++begin;
+    }
+    std::size_t end = value.size();
+    while (end > begin && (value[end - 1] == ' ' || value[end - 1] == '\t')) {
+        --end;
+    }
+    return std::string(value.substr(begin, end - begin));
+}
+
+bool validServerPropertyKey(std::string_view key)
+{
+    if (key.empty() || key.size() > KMaxServerPropertyKeyLength) {
+        return false;
+    }
+    return std::ranges::all_of(key, [](unsigned char ch) {
+        return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '-' ||
+               ch == '_' || ch == '.';
+    });
+}
+
+bool parseAdditionalServerPropertyKeys(std::string_view text, std::vector<std::string> &keys, std::string &error)
+{
+    keys.clear();
+    std::size_t start = 0;
+    while (start <= text.size()) {
+        const std::size_t comma = text.find(',', start);
+        const std::size_t end = comma == std::string_view::npos ? text.size() : comma;
+        std::string key = trimConfigToken(text.substr(start, end - start));
+        if (!key.empty()) {
+            if (!validServerPropertyKey(key)) {
+                error = "Invalid serverPropertiesAdditionalKeys entry - using defaults";
+                return false;
+            }
+            if (std::ranges::find(keys, key) == keys.end()) {
+                keys.push_back(std::move(key));
+                if (keys.size() > KMaxAdditionalServerPropertyKeys) {
+                    error = "Too many serverPropertiesAdditionalKeys entries - using defaults";
+                    return false;
+                }
+            }
+        }
+        if (comma == std::string_view::npos) {
+            break;
+        }
+        start = comma + 1;
+    }
+    return true;
+}
+
+std::string joinAdditionalServerPropertyKeys(const std::vector<std::string> &keys)
+{
+    std::string result;
+    for (const auto &key : keys) {
+        if (!result.empty()) {
+            result += ',';
+        }
+        result += key;
+    }
+    return result;
+}
+
 void applyEnvironmentOverrides(ConfigValues &values)
 {
     const SparkConfigEnvironment environment = readSparkConfigEnvironment();
@@ -199,6 +268,7 @@ ConfigValues currentConfigValues(const SparkConfig &config)
             .background_profiler_interval = config.background_profiler_interval,
             .background_profiler_thread_grouper = config.background_profiler_thread_grouper,
             .background_profiler_thread_dumper = config.background_profiler_thread_dumper,
+            .server_properties_additional_keys = config.server_properties_additional_keys,
             .disable_response_broadcast = config.disable_response_broadcast};
 }
 
@@ -211,7 +281,9 @@ void commitConfigValues(SparkConfig &config, ConfigValues values)
     config.background_profiler_interval = static_cast<int>(values.background_profiler_interval);
     config.background_profiler_thread_grouper = std::move(values.background_profiler_thread_grouper);
     config.background_profiler_thread_dumper = std::move(values.background_profiler_thread_dumper);
+    config.server_properties_additional_keys = std::move(values.server_properties_additional_keys);
     config.disable_response_broadcast = values.disable_response_broadcast;
+    setAdditionalSafeServerPropertyKeys(config.server_properties_additional_keys);
 }
 
 }  // namespace
@@ -247,6 +319,7 @@ bool SparkConfig::load()
             result["backgroundProfilerThreadGrouper"].value<std::string>().value_or(background_profiler_thread_grouper),
         .background_profiler_thread_dumper =
             result["backgroundProfilerThreadDumper"].value<std::string>().value_or(background_profiler_thread_dumper),
+        .server_properties_additional_keys = server_properties_additional_keys,
         .disable_response_broadcast =
             result["disableResponseBroadcast"].value<bool>().value_or(disable_response_broadcast)};
 
@@ -258,11 +331,20 @@ bool SparkConfig::load()
         invalid_type("bytesocksHost", std::string{}) || invalid_type("backgroundProfiler", bool{}) ||
         invalid_type("backgroundProfilerThreadGrouper", std::string{}) ||
         invalid_type("backgroundProfilerThreadDumper", std::string{}) ||
+        invalid_type("serverPropertiesAdditionalKeys", std::string{}) ||
         invalid_type("disableResponseBroadcast", bool{}) ||
         invalid_type("backgroundProfilerInterval", std::int64_t{})) {
         last_error_ = "Invalid type for a spark configuration value - using defaults";
         return false;
     }
+
+    if (const auto additional_keys = result["serverPropertiesAdditionalKeys"].value<std::string>(); additional_keys) {
+        if (!parseAdditionalServerPropertyKeys(*additional_keys, values.server_properties_additional_keys,
+                                               last_error_)) {
+            return false;
+        }
+    }
+
     applyEnvironmentOverrides(values);
     if (!validateConfigValues(values, last_error_)) {
         return false;
@@ -321,6 +403,11 @@ void SparkConfig::writeTemplate(std::ostream &out) const
     out << "\n";
     out << "# Thread selection: default or all\n";
     out << "backgroundProfilerThreadDumper = \"" << escapeString(background_profiler_thread_dumper) << "\"\n";
+    out << "\n";
+    out << "# Comma-separated server.properties keys explicitly reviewed as safe to upload\n";
+    out << "# Known-sensitive names (seeds, credentials, debugger endpoints) remain blocked\n";
+    out << "serverPropertiesAdditionalKeys = \""
+        << escapeString(joinAdditionalServerPropertyKeys(server_properties_additional_keys)) << "\"\n";
     out << "\n";
     out << "# Restrict result notifications to the originating player\n";
     out << "disableResponseBroadcast = " << (disable_response_broadcast ? "true" : "false") << "\n";
