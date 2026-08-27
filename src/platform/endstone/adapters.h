@@ -6,7 +6,6 @@
 #include <memory>
 #include <string>
 #include <utility>
-#include <vector>
 
 #include <endstone/endstone.hpp>
 
@@ -98,10 +97,8 @@ private:
 // Gathers server/world metadata from the Endstone API.
 class EndstoneMetadataProvider : public ProfileMetadataProvider {
 public:
-    EndstoneMetadataProvider(::endstone::Plugin &plugin, ::endstone::Server &server, std::string bds_executable_sha256,
-                             std::vector<std::string> additional_server_property_keys = {})
-        : plugin_(plugin), server_(server), bds_executable_sha256_(std::move(bds_executable_sha256)),
-          additional_server_property_keys_(std::move(additional_server_property_keys))
+    EndstoneMetadataProvider(::endstone::Plugin &plugin, ::endstone::Server &server, std::string bds_executable_sha256)
+        : plugin_(plugin), server_(server), bds_executable_sha256_(std::move(bds_executable_sha256))
     {
     }
 
@@ -117,7 +114,6 @@ private:
     ::endstone::Plugin &plugin_;
     ::endstone::Server &server_;
     std::string bds_executable_sha256_;
-    std::vector<std::string> additional_server_property_keys_;
     std::unique_ptr<EndstonePlayerPingProvider> ping_provider_;
     std::unique_ptr<EndstoneWorldGaugeProvider> world_gauges_;
 };
