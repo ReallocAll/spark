@@ -398,10 +398,14 @@ bool parseActivity(const JsonValue &elem, Activity &out)
 
     const JsonValue *name = user->find("name");
     const JsonValue *is_player = user->find("isPlayer");
+    const JsonValue *unique_id = user->find("uniqueId");
     if (!name || name->type != JsonValue::Type::String) {
         return false;
     }
     if (!is_player || is_player->type != JsonValue::Type::Bool) {
+        return false;
+    }
+    if (unique_id && unique_id->type != JsonValue::Type::String) {
         return false;
     }
 
@@ -416,6 +420,7 @@ bool parseActivity(const JsonValue &elem, Activity &out)
 
     out.user_name = name->str_val;
     out.user_is_player = is_player->bool_val;
+    out.user_unique_id = out.user_is_player && unique_id ? unique_id->str_val : std::string{};
     out.time_ms = static_cast<std::int64_t>(time->num_val);
     out.type = type->str_val;
     out.data_type = (data_type->str_val == "url") ? Activity::DataType::Url : Activity::DataType::File;
@@ -426,11 +431,12 @@ bool parseActivity(const JsonValue &elem, Activity &out)
 }  // namespace
 
 Activity Activity::url(std::string user_name, bool user_is_player, std::int64_t time_ms, std::string type,
-                       std::string url)
+                       std::string url, std::string user_unique_id)
 {
     Activity a;
     a.user_name = std::move(user_name);
     a.user_is_player = user_is_player;
+    a.user_unique_id = user_is_player ? std::move(user_unique_id) : std::string{};
     a.time_ms = time_ms;
     a.type = std::move(type);
     a.data_type = DataType::Url;
@@ -439,11 +445,12 @@ Activity Activity::url(std::string user_name, bool user_is_player, std::int64_t 
 }
 
 Activity Activity::file(std::string user_name, bool user_is_player, std::int64_t time_ms, std::string type,
-                        std::string path)
+                        std::string path, std::string user_unique_id)
 {
     Activity a;
     a.user_name = std::move(user_name);
     a.user_is_player = user_is_player;
+    a.user_unique_id = user_is_player ? std::move(user_unique_id) : std::string{};
     a.time_ms = time_ms;
     a.type = std::move(type);
     a.data_type = DataType::File;
@@ -462,8 +469,11 @@ bool Activity::shouldExpire(std::int64_t now_ms) const
 std::string Activity::serialize() const
 {
     std::ostringstream ss;
-    ss << R"({"user":{"name":")" << jsonEscape(user_name) << R"(","isPlayer":)" << (user_is_player ? "true" : "false")
-       << "},\"time\":" << time_ms << R"(,"type":")" << jsonEscape(type) << "\""
+    ss << R"({"user":{"name":")" << jsonEscape(user_name) << R"(","isPlayer":)" << (user_is_player ? "true" : "false");
+    if (user_is_player && !user_unique_id.empty()) {
+        ss << R"(,"uniqueId":")" << jsonEscape(user_unique_id) << '"';
+    }
+    ss << "},\"time\":" << time_ms << R"(,"type":")" << jsonEscape(type) << "\""
        << R"(,"data":{"type":")" << (data_type == DataType::Url ? "url" : "file") << R"(","value":")"
        << jsonEscape(data_value) << "\"}}";
     return ss.str();
@@ -546,7 +556,14 @@ void ActivityLog::save() const
             ss << "  {\n";
             ss << "    \"user\": {\n";
             ss << R"(      "name": ")" << jsonEscape(a.user_name) << "\",\n";
-            ss << "      \"isPlayer\": " << (a.user_is_player ? "true" : "false") << "\n";
+            ss << "      \"isPlayer\": " << (a.user_is_player ? "true" : "false");
+            if (a.user_is_player && !a.user_unique_id.empty()) {
+                ss << ",\n";
+                ss << R"(      "uniqueId": ")" << jsonEscape(a.user_unique_id) << "\"\n";
+            }
+            else {
+                ss << "\n";
+            }
             ss << "    },\n";
             ss << "    \"time\": " << a.time_ms << ",\n";
             ss << R"(    "type": ")" << jsonEscape(a.type) << "\",\n";

@@ -18,7 +18,8 @@ namespace spark {
 // Journal format constants.
 inline constexpr char kJournalMagic[8] = {'S', 'P', 'R', 'K', 'J', 'N', 'R', 'L'};
 inline constexpr std::uint16_t kLegacyJournalVersion = 2;
-inline constexpr std::uint16_t kJournalVersion = 3;
+inline constexpr std::uint16_t kPreviousJournalVersion = 3;
+inline constexpr std::uint16_t kJournalVersion = 4;
 
 // Metadata snapshot constants.  The snapshot is a sidecar file that preserves
 // SessionConfig, all ModuleDefs, and all ThreadDefs so a rolling journal can
@@ -188,7 +189,8 @@ inline JournalBuffer buildSessionConfigPayload(std::uint32_t interval_us, std::i
                                                std::string_view creator_name, bool creator_is_player,
                                                std::string_view comment,
                                                const std::vector<std::string> &thread_patterns,
-                                               std::int32_t window_adjustment_ms)
+                                               std::int32_t window_adjustment_ms,
+                                               std::string_view creator_unique_id = {})
 {
     JournalBuffer p;
     p.u32(interval_us);
@@ -209,6 +211,7 @@ inline JournalBuffer buildSessionConfigPayload(std::uint32_t interval_us, std::i
         p.str(thread_patterns[i]);
     }
     p.i32(window_adjustment_ms);
+    p.str(creator_unique_id);
     return p;
 }
 

@@ -15,6 +15,7 @@ public:
 
     virtual std::string getName() const = 0;
     virtual bool isPlayer() const = 0;
+    virtual std::string getUniqueId() const { return {}; }
 
     // Returns true if the sender has the given permission.
     // Default returns true for non-platform contexts (e.g. tests).

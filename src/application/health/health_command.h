@@ -74,7 +74,8 @@ private:
     void trustViewer(CommandSender &sender, const Arguments &args);
     void uploadHealthReport(CommandSender &sender);
     HealthData captureHealthData(const CommandSender &sender, std::int64_t now_ms);
-    HealthData captureHealthDataForSender(const std::string &sender_name, bool sender_is_player, std::int64_t now_ms);
+    HealthData captureHealthDataForSender(const std::string &sender_name, bool sender_is_player, std::int64_t now_ms,
+                                          std::string sender_unique_id = {});
     void onTickAt(std::int64_t now_ms);
     UploadResult uploadHealthData(const HealthData &data, CancellationToken cancellation = {});
     void runHealthUpload(const HealthData &data, std::string sender_name, bool sender_is_player, std::int64_t now_ms,
@@ -98,6 +99,7 @@ private:
     std::unique_ptr<HealthDashboard> dashboard_;
     std::string dashboard_sender_;
     bool dashboard_sender_is_player_ = false;
+    std::string dashboard_sender_unique_id_;
     std::int64_t dashboard_open_time_ms_ = 0;
     std::uint64_t accepted_dashboard_generation_ = 0;
     std::thread upload_thread_;
@@ -111,6 +113,7 @@ private:
     UploadResult upload_result_;
     std::string upload_sender_;
     bool upload_sender_is_player_ = false;
+    std::string upload_sender_unique_id_;
     std::int64_t upload_time_ms_ = 0;
     UploadFunction upload_fn_;
     std::shared_ptr<int> lifetime_{std::make_shared<int>(0)};

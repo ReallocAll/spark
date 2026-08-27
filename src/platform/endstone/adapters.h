@@ -22,6 +22,11 @@ public:
 
     std::string getName() const override { return sender_.getName(); }
     bool isPlayer() const override { return sender_.is<::endstone::Player>(); }
+    std::string getUniqueId() const override
+    {
+        const auto *player = dynamic_cast<const ::endstone::Player *>(&sender_);
+        return player != nullptr ? player->getUniqueId().str() : std::string{};
+    }
     bool hasPermission(const std::string &name) const override { return sender_.hasPermission(name); }
 
 private:

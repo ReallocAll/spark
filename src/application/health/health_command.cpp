@@ -138,7 +138,8 @@ void HealthCommand::onTickAt(std::int64_t now_ms)
     dashboard_->tick();
     if (dashboard_->updateDue(now_ms)) {
         try {
-            HealthData snapshot = captureHealthDataForSender(dashboard_sender_, dashboard_sender_is_player_, now_ms);
+            HealthData snapshot = captureHealthDataForSender(dashboard_sender_, dashboard_sender_is_player_, now_ms,
+                                                             dashboard_sender_unique_id_);
             dashboard_->enqueueUpdate(std::move(snapshot), now_ms);
         }
         catch (...) {  // NOLINT(bugprone-empty-catch): dashboard updates are best effort.
@@ -147,6 +148,7 @@ void HealthCommand::onTickAt(std::int64_t now_ms)
     if (dashboard_->consumeFailure()) {
         const std::string sender = dashboard_sender_;
         dashboard_sender_.clear();
+        dashboard_sender_unique_id_.clear();
         accepted_dashboard_generation_ = 0;
         if (!sender.empty()) {
             notifyBestEffort(sender, "Health dashboard connection failed.");
