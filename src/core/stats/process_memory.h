@@ -156,8 +156,7 @@ inline ProcessMemoryUsage gatherProcessMemoryUsage()
             display_total = used;
         }
     }
-    if (display_total > 0 &&
-        display_total <= static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
+    if (display_total > 0 && display_total <= static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
         result.display_total_bytes = static_cast<std::int64_t>(display_total);
         result.display_total_present = true;
     }
