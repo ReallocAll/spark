@@ -255,6 +255,7 @@ void HealthCommand::completeHealthDashboard(HealthDashboard::OpenResult result)
             }
             if (!result.ok) {
                 dashboard_sender_.clear();
+                dashboard_sender_unique_id_.clear();
                 accepted_dashboard_generation_ = 0;
                 try {
                     notifier_.notify(result.sender_name, "Failed to open the health dashboard.");
