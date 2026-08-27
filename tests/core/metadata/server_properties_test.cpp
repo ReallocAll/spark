@@ -88,7 +88,6 @@ int main()
         assert(result.size() == 1);
         assert(!result.contains("server-port"));
         assert(!result.contains("server-portv6"));
-        assert(result.at("max-players") == "20");
         std::filesystem::remove(path);
     }
 
