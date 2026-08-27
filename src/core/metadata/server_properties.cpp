@@ -4,6 +4,7 @@
 #include <array>
 #include <cstdio>
 #include <fstream>
+#include <mutex>
 #include <string>
 #include <string_view>
 
@@ -86,6 +87,9 @@ constexpr std::array<std::string_view, 6> KSensitiveKeyFragments = {
     "private-key",
 };
 
+std::mutex g_additional_safe_keys_mutex;
+std::vector<std::string> g_additional_safe_keys;
+
 std::string lowerAscii(std::string_view value)
 {
     std::string result(value);
@@ -109,17 +113,24 @@ bool isSensitiveKey(std::string_view key)
     });
 }
 
+bool containsKey(const std::vector<std::string> &keys, std::string_view key)
+{
+    return std::ranges::any_of(keys, [key](const std::string &candidate) { return key == candidate; });
+}
+
 bool isAllowlisted(std::string_view key, const std::vector<std::string> &additional_safe_keys)
 {
     if (isSensitiveKey(key)) {
         return false;
     }
     if (std::ranges::any_of(KKnownSafeProperties,
-                            [key](std::string_view candidate) { return key == candidate; })) {
+                            [key](std::string_view candidate) { return key == candidate; }) ||
+        containsKey(additional_safe_keys, key)) {
         return true;
     }
-    return std::ranges::any_of(additional_safe_keys,
-                               [key](const std::string &candidate) { return key == candidate; });
+
+    const std::scoped_lock lock(g_additional_safe_keys_mutex);
+    return containsKey(g_additional_safe_keys, key);
 }
 
 std::string trim(std::string_view s)
@@ -190,6 +201,12 @@ void appendJsonString(std::string &out, std::string_view value)
 }
 
 }  // namespace
+
+void setAdditionalSafeServerPropertyKeys(std::vector<std::string> keys)
+{
+    const std::scoped_lock lock(g_additional_safe_keys_mutex);
+    g_additional_safe_keys = std::move(keys);
+}
 
 std::map<std::string, std::string> parseServerProperties(const std::filesystem::path &file,
                                                          const std::vector<std::string> &additional_safe_keys)
