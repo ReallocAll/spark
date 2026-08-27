@@ -57,6 +57,8 @@ constexpr std::size_t KEventCapacity = 16384;
 constexpr std::size_t KLiveIndexCapacity = KEventCapacity * 2;
 constexpr std::size_t KLiveIndexShards = 64;
 constexpr std::size_t KLiveIndexShardCapacity = KLiveIndexCapacity / KLiveIndexShards;
+constexpr std::size_t KWindowsHotCounterShards = 256;
+static_assert((KWindowsHotCounterShards & (KWindowsHotCounterShards - 1)) == 0);
 constexpr std::size_t KMaxSampledThreads = 256;
 constexpr std::size_t KMaxThreadStates = 2048;
 constexpr std::size_t KMaxAllocationModules = 512;
@@ -201,6 +203,14 @@ struct AllocationSampler::Impl {
         std::atomic<std::uint64_t> value{0};
     };
 
+    struct alignas(64) HotCounters {
+        std::atomic<std::uint64_t> hook_calls{0};
+        std::atomic<std::uint64_t> successful_allocation_calls{0};
+        std::atomic<std::uint64_t> observed_bytes{0};
+        std::atomic<std::uint64_t> tracking_hook_calls{0};
+    };
+    static_assert(sizeof(HotCounters) == 64);
+
     static std::atomic<Impl *> mActiveInstance;
     static std::array<HookCounter, 64> mActiveHookCalls;
 
@@ -219,6 +229,17 @@ struct AllocationSampler::Impl {
     };
 
     inline static thread_local bool mCountOnlyInsideHook = false;
+
+    static std::size_t currentHotCounterShard() noexcept
+    {
+        std::uintptr_t value = reinterpret_cast<std::uintptr_t>(::NtCurrentTeb()) >> 12;
+        value ^= value >> 17;
+        value *= 0x9e3779b97f4a7c15ULL;
+        value ^= value >> 29;
+        return static_cast<std::size_t>(value & (KWindowsHotCounterShards - 1));
+    }
+
+    HotCounters &hotCountersForCurrentThread() noexcept { return hot_counters[currentHotCounterShard()]; }
 
     class HookCallGuard {
     public:
@@ -240,23 +261,23 @@ struct AllocationSampler::Impl {
 
     class TrackingCallGuard {
     public:
-        explicit TrackingCallGuard(Impl &impl) noexcept : impl_(impl)
+        explicit TrackingCallGuard(Impl &impl) noexcept : impl_(impl), counters_(&impl.hotCountersForCurrentThread())
         {
             if (!impl_.tracking.load(std::memory_order_acquire)) {
                 return;
             }
-            impl_.tracking_hook_calls.fetch_add(1, std::memory_order_acq_rel);
+            counters_->tracking_hook_calls.fetch_add(1, std::memory_order_acq_rel);
             if (impl_.tracking.load(std::memory_order_acquire)) {
                 active_ = true;
                 return;
             }
-            impl_.tracking_hook_calls.fetch_sub(1, std::memory_order_release);
+            counters_->tracking_hook_calls.fetch_sub(1, std::memory_order_release);
         }
 
         ~TrackingCallGuard()
         {
             if (active_) {
-                impl_.tracking_hook_calls.fetch_sub(1, std::memory_order_release);
+                counters_->tracking_hook_calls.fetch_sub(1, std::memory_order_release);
             }
         }
 
@@ -264,6 +285,7 @@ struct AllocationSampler::Impl {
 
     private:
         Impl &impl_;
+        HotCounters *counters_ = nullptr;
         bool active_ = false;
     };
 
@@ -371,18 +393,15 @@ struct AllocationSampler::Impl {
     std::atomic<std::uint64_t> generation{0};
     std::atomic<std::uint64_t> interval_bytes{kDefaultAllocationIntervalBytes};
     std::atomic<std::uint64_t> sampling_seed{0};
-    std::atomic<std::uint64_t> hook_calls{0};
-    std::atomic<std::uint64_t> successful_allocation_calls{0};
+    std::array<HotCounters, KWindowsHotCounterShards> hot_counters{};
     std::atomic<std::uint64_t> sampling_points{0};
     std::atomic<std::uint64_t> filtered_samples{0};
-    std::atomic<std::uint64_t> observed_bytes{0};
     std::atomic<std::uint64_t> dropped_samples{0};
     std::atomic<std::uint64_t> dropped_events{0};
     std::atomic<std::uint64_t> dropped_tick_events{0};
     std::atomic<std::uint64_t> enqueued_samples{0};
     std::atomic<std::uint64_t> ready_event_count{0};
     std::atomic<std::uint64_t> ready_event_high_water{0};
-    std::atomic<std::uint64_t> tracking_hook_calls{0};
     std::atomic<std::uint64_t> next_allocation_id{1};
     std::atomic<std::uint64_t> next_session_thread_id{1};
     std::atomic<std::uint64_t> registered_threads{0};
@@ -431,7 +450,7 @@ struct AllocationSampler::Impl {
             std::abort();
         }
         if (self->tracking.load(std::memory_order_relaxed)) {
-            self->hook_calls.fetch_add(1, std::memory_order_relaxed);
+            self->hotCountersForCurrentThread().hook_calls.fetch_add(1, std::memory_order_relaxed);
         }
         return self;
     }
@@ -1245,11 +1264,12 @@ struct AllocationSampler::Impl {
 
     void recordAllocation(void *pointer, std::uint64_t requested_bytes) noexcept
     {
-        successful_allocation_calls.fetch_add(1, std::memory_order_relaxed);
+        HotCounters &counters = hotCountersForCurrentThread();
+        counters.successful_allocation_calls.fetch_add(1, std::memory_order_relaxed);
         if (requested_bytes == 0) {
             return;
         }
-        observed_bytes.fetch_add(requested_bytes, std::memory_order_relaxed);
+        counters.observed_bytes.fetch_add(requested_bytes, std::memory_order_relaxed);
         if (config.count_only) {
             return;
         }
@@ -2166,18 +2186,20 @@ struct AllocationSampler::Impl {
         }
         module_cache.clear();
         current_tick.store(0, std::memory_order_relaxed);
-        hook_calls.store(0, std::memory_order_relaxed);
-        successful_allocation_calls.store(0, std::memory_order_relaxed);
+        for (HotCounters &counters : hot_counters) {
+            counters.hook_calls.store(0, std::memory_order_relaxed);
+            counters.successful_allocation_calls.store(0, std::memory_order_relaxed);
+            counters.observed_bytes.store(0, std::memory_order_relaxed);
+            counters.tracking_hook_calls.store(0, std::memory_order_relaxed);
+        }
         sampling_points.store(0, std::memory_order_relaxed);
         filtered_samples.store(0, std::memory_order_relaxed);
-        observed_bytes.store(0, std::memory_order_relaxed);
         dropped_samples.store(0, std::memory_order_relaxed);
         dropped_events.store(0, std::memory_order_relaxed);
         dropped_tick_events.store(0, std::memory_order_relaxed);
         enqueued_samples.store(0, std::memory_order_relaxed);
         ready_event_count.store(0, std::memory_order_relaxed);
         ready_event_high_water.store(0, std::memory_order_relaxed);
-        tracking_hook_calls.store(0, std::memory_order_relaxed);
         next_allocation_id.store(1, std::memory_order_relaxed);
         next_session_thread_id.store(1, std::memory_order_relaxed);
         registered_threads.store(0, std::memory_order_relaxed);
@@ -2204,7 +2226,10 @@ struct AllocationSampler::Impl {
     bool waitForTrackingQuiescence(std::string &error) noexcept
     {
         for (int attempt = 0; attempt < 5000; ++attempt) {
-            if (tracking_hook_calls.load(std::memory_order_acquire) == 0) {
+            const bool active = std::ranges::any_of(hot_counters, [](const HotCounters &counters) {
+                return counters.tracking_hook_calls.load(std::memory_order_acquire) != 0;
+            });
+            if (!active) {
                 return true;
             }
             ::Sleep(1);
@@ -2481,12 +2506,20 @@ std::uint64_t AllocationSampler::numberOfTicks() const
 
 std::uint64_t AllocationSampler::hookCalls() const
 {
-    return impl_->hook_calls.load(std::memory_order_relaxed);
+    std::uint64_t total = 0;
+    for (const auto &counters : impl_->hot_counters) {
+        total += counters.hook_calls.load(std::memory_order_relaxed);
+    }
+    return total;
 }
 
 std::uint64_t AllocationSampler::successfulAllocationCalls() const
 {
-    return impl_->successful_allocation_calls.load(std::memory_order_relaxed);
+    std::uint64_t total = 0;
+    for (const auto &counters : impl_->hot_counters) {
+        total += counters.successful_allocation_calls.load(std::memory_order_relaxed);
+    }
+    return total;
 }
 
 std::uint64_t AllocationSampler::sampleCount() const
@@ -2521,7 +2554,11 @@ std::uint64_t AllocationSampler::threadIdentityCacheDrops() const
 
 std::uint64_t AllocationSampler::observedBytes() const
 {
-    return impl_->observed_bytes.load(std::memory_order_relaxed);
+    std::uint64_t total = 0;
+    for (const auto &counters : impl_->hot_counters) {
+        total += counters.observed_bytes.load(std::memory_order_relaxed);
+    }
+    return total;
 }
 
 std::uint64_t AllocationSampler::droppedSamples() const
