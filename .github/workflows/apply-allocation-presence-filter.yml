@@ -1,4 +1,4 @@
-name: Apply Allocation TLS Fast Path
+name: Apply Allocation Fast Paths
 
 on:
   push:
@@ -17,16 +17,16 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - name: Apply Linux allocation TLS fast path
+      - name: Apply Linux allocation TLS and lifecycle fast paths
         run: |
           git checkout origin/develop -- src/native/alloc/allocation_sampler_linux.cpp
           python .github/scripts/apply_allocation_tls_fast_path.py
           git diff --check
           git diff -- src/native/alloc/allocation_sampler_linux.cpp
-      - name: Commit fast path
+      - name: Commit fast paths
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add src/native/alloc/allocation_sampler_linux.cpp
-          git commit -m "perf: cache Linux allocation thread identity"
+          git commit -m "perf: reduce Linux allocation hook overhead"
           git push origin HEAD:perf/allocation-profiler-lifecycle
