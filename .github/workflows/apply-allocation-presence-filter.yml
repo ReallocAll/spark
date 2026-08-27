@@ -8,6 +8,7 @@ on:
       - ".github/scripts/apply_allocation_tls_fast_path.py"
       - ".github/scripts/apply_allocation_counter_shards.py"
       - ".github/scripts/apply_allocation_thread_pointer_shard.py"
+      - ".github/scripts/apply_allocation_lifecycle_retry.py"
 
 permissions:
   contents: write
@@ -48,6 +49,7 @@ jobs:
           PY
           python .github/scripts/apply_allocation_counter_shards.py
           python .github/scripts/apply_allocation_thread_pointer_shard.py
+          python .github/scripts/apply_allocation_lifecycle_retry.py
           git diff --check
           git diff -- src/native/alloc/allocation_sampler_linux.cpp
       - name: Commit fast paths
@@ -55,5 +57,5 @@ jobs:
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add src/native/alloc/allocation_sampler_linux.cpp
-          git commit -m "perf: use native Linux hook shard identity"
+          git commit -m "perf: bound Linux allocation lifecycle retries"
           git push origin HEAD:perf/allocation-profiler-lifecycle
