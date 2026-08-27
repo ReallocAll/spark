@@ -163,6 +163,9 @@ std::string buildMetrics(const MetricsSnapshot &metrics)
     if (!metrics.memory_usage_heap.empty()) {
         writer.message(5, buildMemorySeries(metrics.memory_usage_heap));
     }
+    if (!metrics.memory_allocation.empty()) {
+        writer.message(7, buildDoubleSeries(metrics.memory_allocation));
+    }
     if (!metrics.world_info.empty()) {
         writer.message(8, buildWorldSeries(metrics.world_info));
     }

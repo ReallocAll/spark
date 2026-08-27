@@ -102,6 +102,12 @@ public:
     bool backendFailure(std::string &error) const;
     const std::vector<AllocationHookCapability> &allocationHookCapabilities() const;
     std::size_t allocationHookTargetCount() const;
+    bool setPersistentAllocationCountingEnabled(bool enabled, std::uint64_t session_seed, std::string &error);
+    [[nodiscard]] bool persistentAllocationCountingEnabled() const
+    {
+        return persistent_allocation_counting_enabled_.load(std::memory_order_acquire);
+    }
+    [[nodiscard]] std::uint64_t persistentAllocationBytes() const;
 
     // Returns false and sets `error` if sampling can't start.
     bool start(const ProfilerOptions &options, std::uint64_t main_tid, std::string &error);
@@ -157,9 +163,16 @@ private:
     void stopRecoveryWriter();
     bool reapRecoveryWriter();
     bool hasPendingRecoveryWriter() const;
+    bool startPersistentAllocationCounting(std::string &error);
+    bool stopPersistentAllocationCounting(std::string &error);
+    void accumulatePersistentAllocationBytes() noexcept;
 
     Sampler sampler_;
     AllocationSampler allocation_sampler_;
+    std::atomic<bool> persistent_allocation_counting_enabled_{false};
+    std::atomic<bool> persistent_allocation_counting_active_{false};
+    std::atomic<std::uint64_t> persistent_allocation_bytes_base_{0};
+    std::uint64_t persistent_allocation_session_seed_ = 0;
     ProfilerOptions options_;
     ProfileMode mode_ = ProfileMode::Execution;
     std::atomic<bool> running_{false};

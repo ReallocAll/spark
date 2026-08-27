@@ -68,6 +68,12 @@ set_target_properties(spark_stable_shard_snapshot_test PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME spark_stable_shard_snapshot_test COMMAND spark_stable_shard_snapshot_test)
 
+add_executable(spark_allocation_count_only_test native/alloc/allocation_count_only_test.cpp)
+target_link_libraries(spark_allocation_count_only_test PRIVATE spark_core)
+set_target_properties(spark_allocation_count_only_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME spark_allocation_count_only_test COMMAND spark_allocation_count_only_test)
+
 add_executable(spark_allocation_profile_aggregation_test native/alloc/allocation_profile_aggregation_test.cpp)
 target_link_libraries(spark_allocation_profile_aggregation_test PRIVATE spark_core)
 set_target_properties(spark_allocation_profile_aggregation_test PROPERTIES

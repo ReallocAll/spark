@@ -31,6 +31,7 @@ struct ConfigValues {
     std::int64_t background_profiler_interval;
     std::string background_profiler_thread_grouper;
     std::string background_profiler_thread_dumper;
+    bool allocation_rate_metrics_enabled;
     std::vector<std::string> server_properties_additional_keys;
     bool disable_response_broadcast;
 };
@@ -221,6 +222,9 @@ void applyEnvironmentOverrides(ConfigValues &values)
     if (environment.background_profiler_thread_dumper) {
         values.background_profiler_thread_dumper = *environment.background_profiler_thread_dumper;
     }
+    if (environment.allocation_rate_metrics_enabled) {
+        values.allocation_rate_metrics_enabled = *environment.allocation_rate_metrics_enabled;
+    }
     if (environment.disable_response_broadcast) {
         values.disable_response_broadcast = *environment.disable_response_broadcast;
     }
@@ -268,6 +272,7 @@ ConfigValues currentConfigValues(const SparkConfig &config)
             .background_profiler_interval = config.background_profiler_interval,
             .background_profiler_thread_grouper = config.background_profiler_thread_grouper,
             .background_profiler_thread_dumper = config.background_profiler_thread_dumper,
+            .allocation_rate_metrics_enabled = config.allocation_rate_metrics_enabled,
             .server_properties_additional_keys = config.server_properties_additional_keys,
             .disable_response_broadcast = config.disable_response_broadcast};
 }
@@ -281,6 +286,7 @@ void commitConfigValues(SparkConfig &config, ConfigValues values)
     config.background_profiler_interval = static_cast<int>(values.background_profiler_interval);
     config.background_profiler_thread_grouper = std::move(values.background_profiler_thread_grouper);
     config.background_profiler_thread_dumper = std::move(values.background_profiler_thread_dumper);
+    config.allocation_rate_metrics_enabled = values.allocation_rate_metrics_enabled;
     config.server_properties_additional_keys = std::move(values.server_properties_additional_keys);
     config.disable_response_broadcast = values.disable_response_broadcast;
     setAdditionalSafeServerPropertyKeys(config.server_properties_additional_keys);
@@ -319,6 +325,8 @@ bool SparkConfig::load()
             result["backgroundProfilerThreadGrouper"].value<std::string>().value_or(background_profiler_thread_grouper),
         .background_profiler_thread_dumper =
             result["backgroundProfilerThreadDumper"].value<std::string>().value_or(background_profiler_thread_dumper),
+        .allocation_rate_metrics_enabled =
+            result["allocationRateMetrics"].value<bool>().value_or(allocation_rate_metrics_enabled),
         .server_properties_additional_keys = server_properties_additional_keys,
         .disable_response_broadcast =
             result["disableResponseBroadcast"].value<bool>().value_or(disable_response_broadcast)};
@@ -331,6 +339,7 @@ bool SparkConfig::load()
         invalid_type("bytesocksHost", std::string{}) || invalid_type("backgroundProfiler", bool{}) ||
         invalid_type("backgroundProfilerThreadGrouper", std::string{}) ||
         invalid_type("backgroundProfilerThreadDumper", std::string{}) ||
+        invalid_type("allocationRateMetrics", bool{}) ||
         invalid_type("serverPropertiesAdditionalKeys", std::string{}) ||
         invalid_type("disableResponseBroadcast", bool{}) ||
         invalid_type("backgroundProfilerInterval", std::int64_t{})) {
@@ -403,6 +412,10 @@ void SparkConfig::writeTemplate(std::ostream &out) const
     out << "\n";
     out << "# Thread selection: default or all\n";
     out << "backgroundProfilerThreadDumper = \"" << escapeString(background_profiler_thread_dumper) << "\"\n";
+    out << "\n";
+    out << "# Track native process allocation throughput using the existing allocator hooks\n";
+    out << "# Enabled by default after Linux/Windows real-BDS overhead validation\n";
+    out << "allocationRateMetrics = " << (allocation_rate_metrics_enabled ? "true" : "false") << "\n";
     out << "\n";
     out << "# Comma-separated server.properties keys explicitly reviewed as safe to upload\n";
     out << "# Known-sensitive names (seeds, credentials, debugger endpoints) remain blocked\n";

@@ -114,42 +114,50 @@ std::string buildPlatformStatistics(const PlatformStats &platform, const Statist
     std::string out;
     ProtoWriter writer(out);
 
-    if (platform.process_mem_present) {
-        const ProcessMemoryUsage process_memory =
-            process_memory_override != nullptr ? *process_memory_override : gatherProcessMemoryUsage();
-
-        // spark-viewer's top-level Memory(process) widget unconditionally uses
-        // MemoryUsage.committed as its denominator. Proto3 decodes an omitted
-        // scalar as zero, which previously produced RSS / 0 bytes and Infinity.
-        //
-        // Keep native semantics honest internally: Linux VmSize / reserved VA is
-        // never used here. Prefer a real private committed value when it is at
-        // least the current RSS; otherwise use the effective resident capacity
-        // (OS/container limit or physical RAM), finally falling back to RSS.
-        // Metrics.memory_usage_heap continues to serialize strict committed/max
-        // presence independently.
-        std::int64_t viewer_total = 0;
-        if (process_memory.committed_present && process_memory.committed_bytes >= platform.process_mem_bytes) {
-            viewer_total = process_memory.committed_bytes;
-        }
-        else if (process_memory.display_total_present) {
-            viewer_total = process_memory.display_total_bytes;
-        }
-        viewer_total = std::max(viewer_total, platform.process_mem_bytes);
-        if (viewer_total <= 0) {
-            viewer_total = 1;
-        }
-
-        std::string heap;
-        ProtoWriter heap_writer(heap);
-        heap_writer.int64(1, platform.process_mem_bytes);
-        heap_writer.int64(2, viewer_total);
-        if (process_memory.max_present && process_memory.max_bytes > 0) {
-            heap_writer.int64(4, process_memory.max_bytes);
-        }
+    const bool allocation_rates_present = statistics.allocation.last_1m.present ||
+                                          statistics.allocation.last_5m.present ||
+                                          statistics.allocation.last_15m.present;
+    if (platform.process_mem_present || allocation_rates_present) {
         std::string memory;
         ProtoWriter memory_writer(memory);
-        memory_writer.message(1, heap);
+        if (platform.process_mem_present) {
+            const ProcessMemoryUsage process_memory =
+                process_memory_override != nullptr ? *process_memory_override : gatherProcessMemoryUsage();
+
+            // spark-viewer's top-level Memory(process) widget unconditionally uses
+            // MemoryUsage.committed as its denominator. Proto3 decodes an omitted
+            // scalar as zero, which previously produced RSS / 0 bytes and Infinity.
+            //
+            // Keep native semantics honest internally: Linux VmSize / reserved VA is
+            // never used here. Prefer a real private committed value when it is at
+            // least the current RSS; otherwise use the effective resident capacity
+            // (OS/container limit or physical RAM), finally falling back to RSS.
+            // Metrics.memory_usage_heap continues to serialize strict committed/max
+            // presence independently.
+            std::int64_t viewer_total = 0;
+            if (process_memory.committed_present && process_memory.committed_bytes >= platform.process_mem_bytes) {
+                viewer_total = process_memory.committed_bytes;
+            }
+            else if (process_memory.display_total_present) {
+                viewer_total = process_memory.display_total_bytes;
+            }
+            viewer_total = std::max(viewer_total, platform.process_mem_bytes);
+            if (viewer_total <= 0) {
+                viewer_total = 1;
+            }
+
+            std::string heap;
+            ProtoWriter heap_writer(heap);
+            heap_writer.int64(1, platform.process_mem_bytes);
+            heap_writer.int64(2, viewer_total);
+            if (process_memory.max_present && process_memory.max_bytes > 0) {
+                heap_writer.int64(4, process_memory.max_bytes);
+            }
+            memory_writer.message(1, heap);
+        }
+        writeDistribution(memory_writer, 4, statistics.allocation.last_1m);
+        writeDistribution(memory_writer, 5, statistics.allocation.last_5m);
+        writeDistribution(memory_writer, 6, statistics.allocation.last_15m);
         writer.message(1, memory);
     }
     writer.int64(3, platform.uptime_ms);

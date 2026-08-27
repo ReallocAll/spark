@@ -58,22 +58,25 @@ double runTrials(std::size_t threads, std::size_t operations_per_thread)
     return trials[trials.size() / 2];
 }
 
-void printResult(const char *name, std::size_t threads, std::int32_t interval, bool live_only,
-                 std::size_t operations_per_thread, double elapsed_ns, std::uint64_t samples, std::uint64_t dropped)
+void printResult(const char *name, std::size_t threads, std::int32_t interval, bool live_only, bool count_only,
+                 std::size_t operations_per_thread, double elapsed_ns, std::uint64_t samples, std::uint64_t dropped,
+                 std::uint64_t observed_bytes)
 {
     const auto operations = static_cast<double>(threads * operations_per_thread);
-    std::printf("%s,%zu,%d,%d,%zu,%.0f,%.2f,%llu,%llu\n", name, threads, interval, live_only ? 1 : 0,
-                threads * operations_per_thread, elapsed_ns, elapsed_ns / operations,
-                static_cast<unsigned long long>(samples), static_cast<unsigned long long>(dropped));
+    std::printf("%s,%zu,%d,%d,%d,%zu,%.0f,%.2f,%llu,%llu,%llu\n", name, threads, interval, live_only ? 1 : 0,
+                count_only ? 1 : 0, threads * operations_per_thread, elapsed_ns, elapsed_ns / operations,
+                static_cast<unsigned long long>(samples), static_cast<unsigned long long>(dropped),
+                static_cast<unsigned long long>(observed_bytes));
 }
 
 bool runProfiledCase(spark::AllocationSampler &sampler, const char *name, std::size_t threads, std::int32_t interval,
-                     bool live_only, std::size_t operations_per_thread, bool saturated)
+                     bool live_only, bool count_only, std::size_t operations_per_thread, bool saturated)
 {
     spark::AllocationSamplerConfig config;
     config.interval_bytes = interval;
     config.session_seed = spark::currentNativeThreadId();
     config.live_only = live_only;
+    config.count_only = count_only;
 #ifdef SPARK_ALLOCATION_BENCHMARK_CURRENT
     config.aggregator_delay_ms_for_testing = saturated ? 1000 : 0;
 #else
@@ -95,7 +98,8 @@ bool runProfiledCase(spark::AllocationSampler &sampler, const char *name, std::s
 #else
     const std::uint64_t dropped = sampler.droppedSamples();
 #endif
-    printResult(name, threads, interval, live_only, operations_per_thread, elapsed, sampler.sampleCount(), dropped);
+    printResult(name, threads, interval, live_only, count_only, operations_per_thread, elapsed, sampler.sampleCount(),
+                dropped, sampler.observedBytes());
     return true;
 }
 
@@ -106,28 +110,32 @@ int main()
     constexpr std::size_t k_operations = 200000;
     constexpr std::size_t k_pressure_operations = 16384;
 
-    std::printf("case,threads,interval,live_only,operations_per_trial,median_ns,"
-                "ns_per_op,samples_all_trials,dropped_all_trials\n");
-    printResult("unprofiled", 1, 0, false, k_operations, runTrials(1, k_operations), 0, 0);
-    printResult("unprofiled", 4, 0, false, k_operations, runTrials(4, k_operations), 0, 0);
+    std::printf("case,threads,interval,live_only,count_only,operations_per_trial,median_ns,"
+                "ns_per_op,samples_all_trials,dropped_all_trials,observed_bytes\n");
+    printResult("unprofiled", 1, 0, false, false, k_operations, runTrials(1, k_operations), 0, 0, 0);
+    printResult("unprofiled", 4, 0, false, false, k_operations, runTrials(4, k_operations), 0, 0, 0);
 
     spark::AllocationSampler sampler;
-    if (!runProfiledCase(sampler, "normal-default", 1, spark::kDefaultAllocationIntervalBytes, false, k_operations,
+    if (!runProfiledCase(sampler, "count-only", 1, spark::kDefaultAllocationIntervalBytes, false, true, k_operations,
+                         false) ||
+        !runProfiledCase(sampler, "count-only", 4, spark::kDefaultAllocationIntervalBytes, false, true, k_operations,
                          false)) {
         std::string ignored;
         sampler.shutdown(ignored);
         return 1;
     }
-    printResult("disabled-hooks", 1, 0, false, k_operations, runTrials(1, k_operations), 0, 0);
-    printResult("disabled-hooks", 4, 0, false, k_operations, runTrials(4, k_operations), 0, 0);
+    printResult("disabled-hooks", 1, 0, false, false, k_operations, runTrials(1, k_operations), 0, 0, 0);
+    printResult("disabled-hooks", 4, 0, false, false, k_operations, runTrials(4, k_operations), 0, 0, 0);
 
-    if (!runProfiledCase(sampler, "normal-default", 4, spark::kDefaultAllocationIntervalBytes, false, k_operations,
-                         false) ||
-        !runProfiledCase(sampler, "normal-4k", 1, 4096, false, k_operations, false) ||
-        !runProfiledCase(sampler, "normal-4k", 4, 4096, false, k_operations, false) ||
-        !runProfiledCase(sampler, "live-4k", 1, 4096, true, k_operations, false) ||
-        !runProfiledCase(sampler, "live-4k", 4, 4096, true, k_operations, false) ||
-        !runProfiledCase(sampler, "saturated", 4, 1, false, k_pressure_operations, true)) {
+    if (!runProfiledCase(sampler, "normal-default", 1, spark::kDefaultAllocationIntervalBytes, false, false,
+                         k_operations, false) ||
+        !runProfiledCase(sampler, "normal-default", 4, spark::kDefaultAllocationIntervalBytes, false, false,
+                         k_operations, false) ||
+        !runProfiledCase(sampler, "normal-4k", 1, 4096, false, false, k_operations, false) ||
+        !runProfiledCase(sampler, "normal-4k", 4, 4096, false, false, k_operations, false) ||
+        !runProfiledCase(sampler, "live-4k", 1, 4096, true, false, k_operations, false) ||
+        !runProfiledCase(sampler, "live-4k", 4, 4096, true, false, k_operations, false) ||
+        !runProfiledCase(sampler, "saturated", 4, 1, false, false, k_pressure_operations, true)) {
         std::string ignored;
         sampler.shutdown(ignored);
         return 1;

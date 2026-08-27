@@ -218,6 +218,8 @@ struct AllocationSampler::Impl {
         bool identity_announced = false;
     };
 
+    inline static thread_local bool mCountOnlyInsideHook = false;
+
     class HookCallGuard {
     public:
         HookCallGuard() noexcept
@@ -267,8 +269,17 @@ struct AllocationSampler::Impl {
 
     class RecursionGuard {
     public:
-        explicit RecursionGuard(Impl &impl) noexcept : state_(impl.currentThreadState())
+        explicit RecursionGuard(Impl &impl) noexcept
         {
+            if (impl.config.count_only) {
+                if (!mCountOnlyInsideHook) {
+                    mCountOnlyInsideHook = true;
+                    count_only_owner_ = true;
+                    owner_ = true;
+                }
+                return;
+            }
+            state_ = impl.currentThreadState();
             if (state_ != nullptr && !state_->inside_hook) {
                 state_->inside_hook = true;
                 owner_ = true;
@@ -277,6 +288,10 @@ struct AllocationSampler::Impl {
 
         ~RecursionGuard()
         {
+            if (count_only_owner_) {
+                mCountOnlyInsideHook = false;
+                return;
+            }
             if (owner_) {
                 state_->inside_hook = false;
             }
@@ -286,6 +301,7 @@ struct AllocationSampler::Impl {
 
     private:
         ThreadSamplingState *state_ = nullptr;
+        bool count_only_owner_ = false;
         bool owner_ = false;
     };
 
@@ -653,6 +669,9 @@ struct AllocationSampler::Impl {
     {
         if (!tracking.load(std::memory_order_relaxed)) {
             return false;
+        }
+        if (config.count_only) {
+            return true;
         }
         auto *self = const_cast<Impl *>(this);
         ThreadSamplingState *state = self->currentThreadState();
@@ -1231,6 +1250,9 @@ struct AllocationSampler::Impl {
             return;
         }
         observed_bytes.fetch_add(requested_bytes, std::memory_order_relaxed);
+        if (config.count_only) {
+            return;
+        }
 
         ThreadSamplingState *thread_pointer = currentThreadState();
         if (thread_pointer == nullptr) {
@@ -2231,13 +2253,21 @@ struct AllocationSampler::Impl {
         const std::uint64_t new_generation = generation.fetch_add(1, std::memory_order_relaxed) + 1;
         sampling_seed.store(new_generation ^ monotonicMs() ^ new_config.session_seed, std::memory_order_relaxed);
 
-        if (!prepareHooks(error) || !allocateEventPool(error)) {
+        if (!prepareHooks(error)) {
+            return false;
+        }
+        if (!new_config.count_only && !allocateEventPool(error)) {
             return false;
         }
 
         if (!installHooks(error)) {
             freeEventPool();
             return false;
+        }
+        if (new_config.count_only) {
+            running.store(true, std::memory_order_release);
+            tracking.store(true, std::memory_order_release);
+            return true;
         }
 
         aggregator_running.store(true, std::memory_order_release);
@@ -2343,7 +2373,17 @@ struct AllocationSampler::Impl {
             dropped_tick_events.fetch_add(1, std::memory_order_relaxed);
         }
 
-        const std::uint64_t now = monotonicMs();
+        if (config.count_only) {
+            if ((finished % 40U) == 0U && hooks != nullptr) {
+                std::unique_lock lock(lifecycle_mutex, std::try_to_lock);
+                if (lock.owns_lock() && funchook_refresh(hooks) != FUNCHOOK_ERROR_SUCCESS) {
+                    const char *hook_error = funchook_error_message(hooks);
+                    running.store(false, std::memory_order_release);
+                    markAggregatorFailure(hook_error != nullptr ? hook_error : "allocation hook refresh failed");
+                }
+            }
+            return;
+        }
         const std::int32_t window = profiling_window::windowNow();
         aggregation.recordTick(window, mspt_ms);
     }

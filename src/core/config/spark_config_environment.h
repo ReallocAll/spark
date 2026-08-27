@@ -15,6 +15,7 @@ struct SparkConfigEnvironment {
     std::optional<std::int64_t> background_profiler_interval;
     std::optional<std::string> background_profiler_thread_grouper;
     std::optional<std::string> background_profiler_thread_dumper;
+    std::optional<bool> allocation_rate_metrics_enabled;
     std::optional<bool> disable_response_broadcast;
 };
 

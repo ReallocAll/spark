@@ -18,6 +18,12 @@ std::int64_t nowMs()
     return monotonicUnixMillis();
 }
 
+std::uint64_t saturatingAdd(std::uint64_t left, std::uint64_t right) noexcept
+{
+    const auto maximum = (std::numeric_limits<std::uint64_t>::max)();
+    return left > maximum - right ? maximum : left + right;
+}
+
 }  // namespace
 
 std::uint64_t Profiler::sampleCount() const
@@ -86,6 +92,95 @@ bool Profiler::setCurrentThreadAllocationTrackingSuppressed(bool suppressed) noe
 std::size_t Profiler::allocationHookTargetCount() const
 {
     return allocation_sampler_.hookTargetCount();
+}
+
+void Profiler::accumulatePersistentAllocationBytes() noexcept
+{
+    const std::uint64_t current = persistent_allocation_bytes_base_.load(std::memory_order_relaxed);
+    persistent_allocation_bytes_base_.store(saturatingAdd(current, allocation_sampler_.observedBytes()),
+                                            std::memory_order_release);
+}
+
+bool Profiler::startPersistentAllocationCounting(std::string &error)
+{
+    error.clear();
+    if (persistent_allocation_counting_active_.load(std::memory_order_acquire)) {
+        return true;
+    }
+    if (!persistent_allocation_counting_enabled_.load(std::memory_order_acquire) ||
+        persistent_allocation_session_seed_ == 0) {
+        error = "persistent allocation counting is not configured";
+        return false;
+    }
+    AllocationSamplerConfig config;
+    config.interval_bytes = kDefaultAllocationIntervalBytes;
+    config.session_seed = persistent_allocation_session_seed_;
+    config.all_threads = true;
+    config.count_only = true;
+    allocation_sampler_.setRecoverySink(nullptr);
+    if (!allocation_sampler_.start(config, error)) {
+        return false;
+    }
+    persistent_allocation_counting_active_.store(true, std::memory_order_release);
+    return true;
+}
+
+bool Profiler::stopPersistentAllocationCounting(std::string &error)
+{
+    error.clear();
+    if (!persistent_allocation_counting_active_.load(std::memory_order_acquire)) {
+        return true;
+    }
+    if (!allocation_sampler_.stop(error)) {
+        if (!allocation_sampler_.running()) {
+            accumulatePersistentAllocationBytes();
+            persistent_allocation_counting_active_.store(false, std::memory_order_release);
+        }
+        return false;
+    }
+    accumulatePersistentAllocationBytes();
+    persistent_allocation_counting_active_.store(false, std::memory_order_release);
+    return true;
+}
+
+bool Profiler::setPersistentAllocationCountingEnabled(bool enabled, std::uint64_t session_seed, std::string &error)
+{
+    std::scoped_lock lifecycle_lock(lifecycle_mutex_);
+    error.clear();
+    if (!enabled) {
+        if (!stopPersistentAllocationCounting(error)) {
+            return false;
+        }
+        persistent_allocation_counting_enabled_.store(false, std::memory_order_release);
+        persistent_allocation_session_seed_ = 0;
+        return true;
+    }
+    if (session_seed == 0) {
+        error = "the allocation rate session seed is not available";
+        return false;
+    }
+    persistent_allocation_session_seed_ = session_seed;
+    persistent_allocation_counting_enabled_.store(true, std::memory_order_release);
+    if (running_.load(std::memory_order_acquire) && mode_ == ProfileMode::Allocation) {
+        return true;
+    }
+    if (!startPersistentAllocationCounting(error)) {
+        persistent_allocation_counting_enabled_.store(false, std::memory_order_release);
+        persistent_allocation_session_seed_ = 0;
+        return false;
+    }
+    return true;
+}
+
+std::uint64_t Profiler::persistentAllocationBytes() const
+{
+    if (!persistent_allocation_counting_enabled_.load(std::memory_order_acquire)) {
+        return 0;
+    }
+    const std::uint64_t base = persistent_allocation_bytes_base_.load(std::memory_order_acquire);
+    const bool current_session_counts = persistent_allocation_counting_active_.load(std::memory_order_acquire) ||
+                                        (running_.load(std::memory_order_acquire) && mode_ == ProfileMode::Allocation);
+    return current_session_counts ? saturatingAdd(base, allocation_sampler_.observedBytes()) : base;
 }
 
 void Profiler::requestStop() noexcept
@@ -158,6 +253,10 @@ bool Profiler::start(const ProfilerOptions &options, std::uint64_t main_tid, std
         }
         config.live_only = options.alloc_live_only;
         config.fail_aggregator_for_testing = options.fail_allocation_aggregator_for_testing;
+        if (persistent_allocation_counting_active_.load(std::memory_order_acquire) &&
+            !stopPersistentAllocationCounting(error)) {
+            return false;
+        }
         if (!recovery_dir_.empty()) {
             RecoveryWriter::Config wc;
             wc.directory = recovery_dir_;
@@ -232,6 +331,13 @@ bool Profiler::start(const ProfilerOptions &options, std::uint64_t main_tid, std
 
     if (!started) {
         stopRecoveryWriter();
+        if (mode_ == ProfileMode::Allocation &&
+            persistent_allocation_counting_enabled_.load(std::memory_order_acquire)) {
+            std::string resume_error;
+            if (!startPersistentAllocationCounting(resume_error)) {
+                persistent_allocation_counting_enabled_.store(false, std::memory_order_release);
+            }
+        }
         return false;
     }
 
@@ -245,6 +351,13 @@ bool Profiler::start(const ProfilerOptions &options, std::uint64_t main_tid, std
 
 void Profiler::onTick(double mspt_ms)
 {
+    if (persistent_allocation_counting_active_.load(std::memory_order_acquire)) {
+        allocation_sampler_.onTick(mspt_ms);
+        if (!allocation_sampler_.running()) {
+            persistent_allocation_counting_active_.store(false, std::memory_order_release);
+            persistent_allocation_counting_enabled_.store(false, std::memory_order_release);
+        }
+    }
     if (!running_.load()) {
         return;
     }
@@ -278,9 +391,22 @@ bool Profiler::stopSampling(std::string &error)
     if (mode_ == ProfileMode::Allocation) {
         if (!allocation_sampler_.stop(error)) {
             if (!allocation_sampler_.running()) {
+                const bool resume_persistent = persistent_allocation_counting_enabled_.load(std::memory_order_acquire);
+                if (resume_persistent) {
+                    accumulatePersistentAllocationBytes();
+                }
                 running_.store(false);
+                if (resume_persistent) {
+                    std::string resume_error;
+                    if (!startPersistentAllocationCounting(resume_error)) {
+                        persistent_allocation_counting_enabled_.store(false, std::memory_order_release);
+                    }
+                }
             }
             return false;
+        }
+        if (persistent_allocation_counting_enabled_.load(std::memory_order_acquire)) {
+            accumulatePersistentAllocationBytes();
         }
         stopRecoveryWriter();
     }
@@ -298,6 +424,12 @@ bool Profiler::stopSampling(std::string &error)
     }
     running_.store(false);
     end_time_ms_ = requested_end_time_ms;
+    if (mode_ == ProfileMode::Allocation && persistent_allocation_counting_enabled_.load(std::memory_order_acquire)) {
+        std::string resume_error;
+        if (!startPersistentAllocationCounting(resume_error)) {
+            persistent_allocation_counting_enabled_.store(false, std::memory_order_release);
+        }
+    }
     return true;
 }
 
@@ -401,9 +533,10 @@ bool Profiler::cancel(std::string &error)
         return true;
     }
 
-    // A failed aggregator invalidates the data; completed cleanup is a successful cancel.
-    std::string backend_error;
-    if (!running_.load() && backendFailure(backend_error)) {
+    // A backend failure invalidates the data; if stopSampling completed native cleanup,
+    // cancel is still successful. Persistent count-only may already have restarted
+    // and reset the allocation backend's per-session failure state at this point.
+    if (!running_.load()) {
         error.clear();
         discardRecoveryJournal();
         return true;
@@ -424,6 +557,8 @@ bool Profiler::shutdown(std::string &error)
     sampling_stop_requested_.store(true, std::memory_order_release);
     std::scoped_lock lifecycle_lock(lifecycle_mutex_);
     error.clear();
+    persistent_allocation_counting_enabled_.store(false, std::memory_order_release);
+    persistent_allocation_counting_active_.store(false, std::memory_order_release);
     if (running_.load() && mode_ == ProfileMode::Allocation) {
         if (!allocation_sampler_.shutdown(error)) {
             return false;

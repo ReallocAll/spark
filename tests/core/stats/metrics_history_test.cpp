@@ -106,6 +106,56 @@ void testStatisticsRecordingDelayAndAnchors()
     assert(std::isfinite(snapshot.tps.front().value));
 }
 
+void testAllocationRateRollingAndMetrics()
+{
+    spark::StatisticsService statistics;
+    statistics.startAt(1'000, 5'000'000, initialCpu());
+    statistics.recordAllocationBytesAt(0, 1'000);
+
+    // A rate sample must use the same nominal 10-second cadence as MetricsHistory.
+    statistics.recordAllocationBytesAt(9'999, 10'999);
+    assert(!statistics.snapshotAt(10'999).allocation.last_1m.present);
+    assert(statistics.metricsSnapshot().memory_allocation.empty());
+
+    // Use a deliberately non-round elapsed time to prove the rate uses the
+    // real timestamp delta instead of assuming exactly 10.000 seconds.
+    statistics.recordAllocationBytesAt(10'250, 11'250);
+    spark::StatisticsSnapshot rolling = statistics.snapshotAt(11'250);
+    assert(rolling.allocation.last_1m.present);
+    assert(rolling.allocation.last_5m.present);
+    assert(rolling.allocation.last_15m.present);
+    assert(std::abs(rolling.allocation.last_1m.mean - 1000.0) < 0.001);
+    assert(rolling.allocation.last_1m.samples == 1);
+
+    spark::MetricsSnapshot metrics = statistics.metricsSnapshot();
+    assert(metrics.memory_allocation.size() == 1);
+    assert(std::abs(metrics.memory_allocation.front().value - 1000.0) < 0.001);
+    assert(metrics.memory_allocation.front().timestamp_ms == 5'010'250);
+
+    // Less than another 10 seconds must not create a rolling or metric sample.
+    statistics.recordAllocationBytesAt(20'000, 21'000);
+    assert(statistics.snapshotAt(21'000).allocation.last_1m.samples == 1);
+    assert(statistics.metricsSnapshot().memory_allocation.size() == 1);
+
+    statistics.recordAllocationBytesAt(21'000, 22'000);
+    rolling = statistics.snapshotAt(22'000);
+    assert(rolling.allocation.last_1m.samples == 2);
+    assert(std::abs(rolling.allocation.last_1m.mean - 1000.0) < 0.001);
+    metrics = statistics.metricsSnapshot();
+    assert(metrics.memory_allocation.size() == 2);
+    assert(metrics.memory_allocation.back().timestamp_ms == 5'021'000);
+    assert(std::abs(metrics.memory_allocation.back().value - 1000.0) < 0.001);
+
+    // A defensive counter reset/wrap establishes a fresh baseline instead of
+    // emitting a huge wrapped rate.
+    statistics.recordAllocationBytesAt(1, 23'000);
+    assert(statistics.snapshotAt(23'000).allocation.last_1m.samples == 2);
+    statistics.recordAllocationBytesAt(10'501, 33'500);
+    rolling = statistics.snapshotAt(33'500);
+    assert(rolling.allocation.last_1m.samples == 3);
+    assert(std::abs(rolling.allocation.last_1m.mean - 1000.0) < 0.001);
+}
+
 void testStatisticsCadenceOverflow()
 {
     spark::StatisticsService statistics;
@@ -122,6 +172,7 @@ int main()
     testRingRetentionAndOrder();
     testMemoryRingRetentionAndPresence();
     testStatisticsRecordingDelayAndAnchors();
+    testAllocationRateRollingAndMetrics();
     testStatisticsCadenceOverflow();
     return 0;
 }

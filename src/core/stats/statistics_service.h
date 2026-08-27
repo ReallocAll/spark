@@ -53,12 +53,19 @@ struct CpuRollingStatistics {
     RollingValue system_last_15m;
 };
 
+struct AllocationRollingStatistics {
+    DistributionValues last_1m;
+    DistributionValues last_5m;
+    DistributionValues last_15m;
+};
+
 struct StatisticsSnapshot {
     std::int64_t generated_time_ms = 0;
     std::int64_t history_span_ms = 0;
     TpsStatistics tps;
     MsptStatistics mspt;
     CpuRollingStatistics cpu;
+    AllocationRollingStatistics allocation;
 };
 
 // Maintains a fixed-capacity, profiler-independent history of completed ticks
@@ -72,6 +79,7 @@ public:
     static constexpr std::size_t kTickCapacity = static_cast<std::size_t>(profiling_window::kHistorySize) * 60 * 20;
     static constexpr std::size_t kCpuCapacity = static_cast<std::size_t>(profiling_window::kHistorySize) * 60;
     static constexpr std::size_t kGaugeCapacity = static_cast<std::size_t>(profiling_window::kHistorySize) * 60;
+    static constexpr std::size_t kAllocationRateCapacity = 15 * 60 + 2;
     static constexpr std::size_t kPlaceholderTickDuration10sSamples = 20 * 10;
     static constexpr std::size_t kPlaceholderTickDuration1mSamples = 20 * 60;
 
@@ -96,6 +104,7 @@ public:
     // unavailable rather than inventing a real zero tile-entity count.
     void recordWorldGauges(int entities, int chunks) { recordWorldGauges(entities, 0, chunks, false); }
     void recordPlayerPing(const MetricsAverages &summary);
+    void recordAllocationBytes(std::uint64_t total_bytes);
 
     // Deterministic clock/CPU entry points used by the offline self-test.
     void startAt(std::int64_t steady_ms, std::int64_t unix_ms, const CpuSnapshot &initial_cpu);
@@ -109,6 +118,7 @@ public:
         recordWorldGaugesAt(entities, 0, chunks, false, steady_ms);
     }
     void recordPlayerPingAt(const MetricsAverages &summary, std::int64_t steady_ms);
+    void recordAllocationBytesAt(std::uint64_t total_bytes, std::int64_t steady_ms);
     StatisticsSnapshot snapshotAt(std::int64_t steady_ms) const;
 
     std::int64_t unixTimeFor(std::int64_t steady_ms) const;
@@ -139,29 +149,40 @@ private:
         bool world_gauges_set = false;
         bool tile_entities_present = false;
     };
+    struct AllocationRateSample {
+        std::int64_t steady_ms = 0;
+        double bytes_per_second = 0.0;
+    };
 
     RollingValue tpsFor(std::int64_t now_ms, std::int64_t window_ms) const;
     DistributionValues msptFor(std::int64_t now_ms, std::int64_t window_ms) const;
     DistributionValues msptForRecentSamples(std::size_t max_samples) const;
     RollingValue cpuFor(std::int64_t now_ms, std::int64_t window_ms, bool process) const;
+    DistributionValues allocationRateFor(std::int64_t now_ms, std::int64_t window_ms) const;
     std::int64_t effectiveStart(std::int64_t now_ms, std::int64_t window_ms) const;
     void recordMetricsAt(std::int64_t steady_ms);
 
     std::vector<TickSample> ticks_;
     std::vector<CpuSample> cpu_;
     std::vector<GaugeSample> gauges_;
+    std::vector<AllocationRateSample> allocation_rates_;
     std::size_t tick_begin_ = 0;
     std::size_t tick_size_ = 0;
     std::size_t cpu_begin_ = 0;
     std::size_t cpu_size_ = 0;
     std::size_t gauge_begin_ = 0;
     std::size_t gauge_size_ = 0;
+    std::size_t allocation_rate_begin_ = 0;
+    std::size_t allocation_rate_size_ = 0;
     std::int64_t start_steady_ms_ = 0;
     std::int64_t start_unix_ms_ = 0;
     std::int64_t last_observation_steady_ms_ = 0;
     std::int64_t last_metrics_steady_ms_ = 0;
     std::int64_t next_cpu_sample_steady_ms_ = 0;
     CpuSnapshot previous_cpu_{};
+    std::uint64_t last_allocation_total_bytes_ = 0;
+    std::int64_t last_allocation_sample_steady_ms_ = 0;
+    bool allocation_counter_initialized_ = false;
     MetricsHistory metrics_history_;
     bool metrics_recorded_ = false;
     bool started_ = false;

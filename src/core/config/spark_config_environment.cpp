@@ -87,6 +87,7 @@ SparkConfigEnvironment readSparkConfigEnvironment()
             .background_profiler_interval = readInteger("SPARK_BACKGROUNDPROFILERINTERVAL"),
             .background_profiler_thread_grouper = readEnvironmentValue("SPARK_BACKGROUNDPROFILERTHREADGROUPER"),
             .background_profiler_thread_dumper = readEnvironmentValue("SPARK_BACKGROUNDPROFILERTHREADDUMPER"),
+            .allocation_rate_metrics_enabled = readBoolean("SPARK_ALLOCATIONRATEMETRICS"),
             .disable_response_broadcast = readBoolean("SPARK_DISABLERESPONSEBROADCAST")};
 }
 

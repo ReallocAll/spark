@@ -41,7 +41,10 @@ bool elapsedMoreThan(std::int64_t now_ms, std::int64_t start_ms, std::int64_t in
 
 }  // namespace
 
-StatisticsService::StatisticsService() : ticks_(kTickCapacity), cpu_(kCpuCapacity), gauges_(kGaugeCapacity) {}
+StatisticsService::StatisticsService()
+    : ticks_(kTickCapacity), cpu_(kCpuCapacity), gauges_(kGaugeCapacity), allocation_rates_(kAllocationRateCapacity)
+{
+}
 
 void StatisticsService::start()
 {
@@ -58,6 +61,11 @@ void StatisticsService::startAt(std::int64_t steady_ms, std::int64_t unix_ms, co
     cpu_size_ = 0;
     gauge_begin_ = 0;
     gauge_size_ = 0;
+    allocation_rate_begin_ = 0;
+    allocation_rate_size_ = 0;
+    last_allocation_total_bytes_ = 0;
+    last_allocation_sample_steady_ms_ = 0;
+    allocation_counter_initialized_ = false;
     start_steady_ms_ = steady_ms;
     start_unix_ms_ = unix_ms;
     last_observation_steady_ms_ = steady_ms;
@@ -139,6 +147,55 @@ void StatisticsService::recordCpuSnapshot(const CpuSnapshot &current)
     previous_cpu_ = current;
     last_observation_steady_ms_ = (std::max)(last_observation_steady_ms_, current.wall_ms);
     recordMetricsAt(current.wall_ms);
+}
+
+void StatisticsService::recordAllocationBytes(std::uint64_t total_bytes)
+{
+    recordAllocationBytesAt(total_bytes, steadyNowMs());
+}
+
+void StatisticsService::recordAllocationBytesAt(std::uint64_t total_bytes, std::int64_t steady_ms)
+{
+    if (!started_) {
+        return;
+    }
+    steady_ms = (std::max)(steady_ms, last_observation_steady_ms_);
+    if (!allocation_counter_initialized_) {
+        allocation_counter_initialized_ = true;
+        last_allocation_total_bytes_ = total_bytes;
+        last_allocation_sample_steady_ms_ = steady_ms;
+        return;
+    }
+    if (steady_ms <= last_allocation_sample_steady_ms_) {
+        return;
+    }
+    if (total_bytes < last_allocation_total_bytes_) {
+        last_allocation_total_bytes_ = total_bytes;
+        last_allocation_sample_steady_ms_ = steady_ms;
+        return;
+    }
+    if (!elapsedAtLeast(steady_ms, last_allocation_sample_steady_ms_, MetricsHistory::kIntervalMs)) {
+        return;
+    }
+    const std::int64_t elapsed_ms = steady_ms - last_allocation_sample_steady_ms_;
+    const std::uint64_t delta_bytes = total_bytes - last_allocation_total_bytes_;
+    const double bytes_per_second = static_cast<double>(delta_bytes) * 1000.0 / static_cast<double>(elapsed_ms);
+
+    std::size_t index = (allocation_rate_begin_ + allocation_rate_size_) % allocation_rates_.size();
+    if (allocation_rate_size_ == allocation_rates_.size()) {
+        index = allocation_rate_begin_;
+        allocation_rate_begin_ = (allocation_rate_begin_ + 1) % allocation_rates_.size();
+    }
+    else {
+        ++allocation_rate_size_;
+    }
+    allocation_rates_[index] = {.steady_ms = steady_ms, .bytes_per_second = bytes_per_second};
+    last_allocation_total_bytes_ = total_bytes;
+    last_allocation_sample_steady_ms_ = steady_ms;
+
+    if (elapsedAtLeast(steady_ms, start_steady_ms_, MetricsHistory::kIntervalMs)) {
+        metrics_history_.recordMemoryAllocation(unixTimeFor(steady_ms), bytes_per_second);
+    }
 }
 
 void StatisticsService::recordPlayerCount(std::int64_t players)

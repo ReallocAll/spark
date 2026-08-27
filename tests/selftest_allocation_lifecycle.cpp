@@ -146,6 +146,10 @@ bool verifyAllocationLifecycle()
     }
 
     spark::Profiler failed_profiler;
+    if (!failed_profiler.setPersistentAllocationCountingEnabled(true, server_tid, error)) {
+        std::fprintf(stderr, "profiler failure state: persistent counter start failed: %s\n", error.c_str());
+        return false;
+    }
     spark::ProfilerOptions options;
     options.alloc = true;
     options.allocation_interval_bytes = 256;
@@ -164,6 +168,24 @@ bool verifyAllocationLifecycle()
     }
     if (!profiler_failed || !failed_profiler.cancel(error) || failed_profiler.running()) {
         std::fprintf(stderr, "profiler failure state: failed session did not cancel cleanly: %s\n", error.c_str());
+        return false;
+    }
+    if (!failed_profiler.persistentAllocationCountingEnabled()) {
+        std::fprintf(stderr, "profiler failure state: persistent counter did not resume after failed session\n");
+        return false;
+    }
+    const std::uint64_t persistent_before = failed_profiler.persistentAllocationBytes();
+    constexpr std::size_t k_persistent_probe_bytes = 4096;
+    void *persistent_probe = std::malloc(k_persistent_probe_bytes);
+    if (persistent_probe == nullptr) {
+        std::fprintf(stderr, "profiler failure state: persistent counter probe allocation failed\n");
+        return false;
+    }
+    static_cast<volatile unsigned char *>(persistent_probe)[0] = 1;
+    std::free(persistent_probe);
+    const std::uint64_t persistent_after = failed_profiler.persistentAllocationBytes();
+    if (persistent_after < persistent_before + k_persistent_probe_bytes) {
+        std::fprintf(stderr, "profiler failure state: persistent counter froze after failed session\n");
         return false;
     }
     options.fail_allocation_aggregator_for_testing = false;

@@ -37,6 +37,7 @@ void testSaveAndReload()
     config.bytebin_url = "https://upload-saved.example.com/";
     config.background_profiler_enabled = false;
     config.background_profiler_interval = 25;
+    config.allocation_rate_metrics_enabled = true;
     assert(config.save());
     SparkConfig reloaded(path);
     assert(reloaded.load());
@@ -44,6 +45,7 @@ void testSaveAndReload()
     assert(reloaded.bytebin_url == "https://upload-saved.example.com/");
     assert(!reloaded.background_profiler_enabled);
     assert(reloaded.background_profiler_interval == 25);
+    assert(reloaded.allocation_rate_metrics_enabled);
     std::printf("  [PASS] save and reload\n");
 }
 

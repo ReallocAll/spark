@@ -61,6 +61,10 @@ int main()
     spark::StatisticsSnapshot statistics;
     statistics.tps.last_1m = {.present = true, .value = 19.0};
     statistics.cpu.process_last_1m = {.present = true, .value = 0.25};
+    statistics.allocation.last_1m = {
+        .present = true, .mean = 1024.0, .min = 512.0, .median = 1024.0, .percentile95 = 2048.0, .max = 2048.0};
+    statistics.allocation.last_5m = statistics.allocation.last_1m;
+    statistics.allocation.last_15m = statistics.allocation.last_1m;
 
     spark::WorldInfo world;
     world.present = true;
@@ -84,6 +88,13 @@ int main()
         !check(spark::proto_test::hasVarint(platform_bytes, 9, 2), "online mode was not encoded") ||
         !check(spark::proto_test::findMessage(platform_bytes, 1, hasNativeMemorySemantics),
                "native process memory viewer compatibility was not encoded") ||
+        !check(spark::proto_test::findMessage(platform_bytes, 1,
+                                              [](spark::ProtoReader memory) {
+                                                  return spark::proto_test::hasMessage(memory, 4) &&
+                                                         spark::proto_test::hasMessage(memory, 5) &&
+                                                         spark::proto_test::hasMessage(memory, 6);
+                                              }),
+               "allocation rate rolling statistics were not encoded") ||
         !check(spark::proto_test::findMessage(
                    platform_bytes, 8,
                    [](spark::ProtoReader message) { return spark::proto_test::hasVarint(message, 1, 8); }),
