@@ -69,6 +69,17 @@ void printResult(const char *name, std::size_t threads, std::int32_t interval, b
                 static_cast<unsigned long long>(observed_bytes));
 }
 
+void printLifecycleDiagnostics(const spark::AllocationSampler &sampler, const char *name, std::size_t threads)
+{
+    std::fprintf(stderr,
+                 "diag,%s,%zu,freed=%llu,live=%llu,peak=%llu,lifecycle_dropped=%llu,contention_dropped=%llu\n",
+                 name, threads, static_cast<unsigned long long>(sampler.freedSamples()),
+                 static_cast<unsigned long long>(sampler.liveSamples()),
+                 static_cast<unsigned long long>(sampler.peakLiveSamples()),
+                 static_cast<unsigned long long>(sampler.lifecycleDropped()),
+                 static_cast<unsigned long long>(sampler.contentionDropped()));
+}
+
 bool runProfiledCase(spark::AllocationSampler &sampler, const char *name, std::size_t threads, std::int32_t interval,
                      bool live_only, bool count_only, std::size_t operations_per_thread, bool saturated)
 {
@@ -89,7 +100,9 @@ bool runProfiledCase(spark::AllocationSampler &sampler, const char *name, std::s
         return false;
     }
     const double elapsed = runTrials(threads, operations_per_thread);
-    if (!sampler.stop(error)) {
+    const bool stopped = sampler.stop(error);
+    printLifecycleDiagnostics(sampler, name, threads);
+    if (!stopped) {
         std::fprintf(stderr, "%s: stop failed: %s\n", name, error.c_str());
         return false;
     }
