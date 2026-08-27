@@ -11,6 +11,7 @@
 #include <curl/curl.h>
 
 #include "core/config/spark_config_environment.h"
+#include "core/metadata/server_properties.h"
 #include "core/util/state_file.h"
 
 namespace spark {
@@ -282,6 +283,7 @@ void commitConfigValues(SparkConfig &config, ConfigValues values)
     config.background_profiler_thread_dumper = std::move(values.background_profiler_thread_dumper);
     config.server_properties_additional_keys = std::move(values.server_properties_additional_keys);
     config.disable_response_broadcast = values.disable_response_broadcast;
+    setAdditionalSafeServerPropertyKeys(config.server_properties_additional_keys);
 }
 
 }  // namespace
