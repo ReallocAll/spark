@@ -276,7 +276,7 @@ struct AllocationSampler::Impl {
 
     static std::size_t currentHookShard() noexcept
     {
-        std::uintptr_t value = reinterpret_cast<std::uintptr_t>(__builtin_thread_pointer());
+        auto value = reinterpret_cast<std::uintptr_t>(__builtin_thread_pointer());
         value ^= value >> 17;
         value *= 0x9e3779b97f4a7c15ULL;
         value ^= value >> 29;
