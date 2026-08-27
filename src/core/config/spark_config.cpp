@@ -339,7 +339,8 @@ bool SparkConfig::load()
     }
 
     if (const auto additional_keys = result["serverPropertiesAdditionalKeys"].value<std::string>(); additional_keys) {
-        if (!parseAdditionalServerPropertyKeys(*additional_keys, values.server_properties_additional_keys, last_error_)) {
+        if (!parseAdditionalServerPropertyKeys(*additional_keys, values.server_properties_additional_keys,
+                                               last_error_)) {
             return false;
         }
     }
@@ -405,8 +406,8 @@ void SparkConfig::writeTemplate(std::ostream &out) const
     out << "\n";
     out << "# Comma-separated server.properties keys explicitly reviewed as safe to upload\n";
     out << "# Known-sensitive names (seeds, credentials, debugger endpoints) remain blocked\n";
-    out << "serverPropertiesAdditionalKeys = \"" << escapeString(joinAdditionalServerPropertyKeys(server_properties_additional_keys))
-        << "\"\n";
+    out << "serverPropertiesAdditionalKeys = \""
+        << escapeString(joinAdditionalServerPropertyKeys(server_properties_additional_keys)) << "\"\n";
     out << "\n";
     out << "# Restrict result notifications to the originating player\n";
     out << "disableResponseBroadcast = " << (disable_response_broadcast ? "true" : "false") << "\n";
