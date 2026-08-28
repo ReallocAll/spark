@@ -2,8 +2,10 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <limits>
 #include <string>
+#include <string_view>
 #include <thread>
 
 #ifdef _WIN32
@@ -12,6 +14,7 @@
 
 #include "core/profiler/profiler.h"
 #include "native/sampler/thread_info.h"
+#include "proto/proto_reader.h"
 
 namespace spark {
 
@@ -59,6 +62,72 @@ bool waitForCondition(Predicate pred, std::chrono::duration<Rep, Period> timeout
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
     return pred();
+}
+
+bool packedDoubleHasPositive(std::string_view bytes)
+{
+    if (bytes.empty() || bytes.size() % sizeof(double) != 0) {
+        return false;
+    }
+    for (std::size_t offset = 0; offset < bytes.size(); offset += sizeof(double)) {
+        double value = 0.0;
+        std::memcpy(&value, bytes.data() + offset, sizeof(value));
+        if (value > 0.0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool serializedAllocationTreeNonEmpty(std::string_view profile)
+{
+    bool allocation_mode = false;
+    bool non_empty_thread_tree = false;
+    spark::ProtoReader data(profile);
+    int field = 0;
+    int wire_type = 0;
+    while (data.nextField(field, wire_type)) {
+        if (field == 1 && wire_type == 2) {
+            spark::ProtoReader metadata = data.readMessage();
+            int metadata_field = 0;
+            int metadata_wire = 0;
+            while (metadata.nextField(metadata_field, metadata_wire)) {
+                if (metadata_field == 15 && metadata_wire == 0) {
+                    allocation_mode = metadata.readVarint() == 1;
+                }
+                else {
+                    metadata.skip(metadata_wire);
+                }
+            }
+            continue;
+        }
+        if (field == 2 && wire_type == 2) {
+            spark::ProtoReader thread = data.readMessage();
+            bool has_node = false;
+            bool has_positive_root_weight = false;
+            bool has_root_refs = false;
+            int thread_field = 0;
+            int thread_wire = 0;
+            while (thread.nextField(thread_field, thread_wire)) {
+                if (thread_field == 3 && thread_wire == 2) {
+                    has_node = !thread.readString().empty() || has_node;
+                }
+                else if (thread_field == 4 && thread_wire == 2) {
+                    has_positive_root_weight = packedDoubleHasPositive(thread.readString()) || has_positive_root_weight;
+                }
+                else if (thread_field == 5 && thread_wire == 2) {
+                    has_root_refs = !thread.readString().empty() || has_root_refs;
+                }
+                else {
+                    thread.skip(thread_wire);
+                }
+            }
+            non_empty_thread_tree = non_empty_thread_tree || (has_node && has_positive_root_weight && has_root_refs);
+            continue;
+        }
+        data.skip(wire_type);
+    }
+    return data.valid() && allocation_mode && non_empty_thread_tree;
 }
 
 #if defined(_WIN32) || defined(__linux__)
@@ -187,8 +256,13 @@ bool verifyPersistentAllocationExportOrdering()
         profiler.cancel(error);
         return false;
     }
-    if (!exerciseNativeAllocations() ||
-        !waitForCondition([&] { return profiler.sampleCount() != 0; }, 2s)) {
+    if (!profiler.resumePersistentAllocationCounting(error) ||
+        spark::ProfilerTestAccess::persistentAllocationCountingActive(profiler)) {
+        std::fprintf(stderr, "persistent export: resume was not a no-op during full profile\n");
+        profiler.cancel(error);
+        return false;
+    }
+    if (!exerciseNativeAllocations() || !waitForCondition([&] { return profiler.sampleCount() != 0; }, 2s)) {
         std::fprintf(stderr, "persistent export: no allocation samples were collected\n");
         profiler.cancel(error);
         return false;
@@ -215,15 +289,52 @@ bool verifyPersistentAllocationExportOrdering()
         return false;
     }
 
+    std::string restart_error;
+    if (profiler.start(options, server_tid, restart_error)) {
+        std::fprintf(stderr, "persistent export: profiler restarted before completed allocation export\n");
+        profiler.cancel(error);
+        return false;
+    }
+
     const std::string profile = profiler.exportData({});
-    if (profile.empty() || profiler.sampleCount() != samples_after_stop ||
+    if (profile.empty() || !serializedAllocationTreeNonEmpty(profile) || profiler.sampleCount() != samples_after_stop ||
         profiler.sampledAllocationBytes() != bytes_after_stop) {
-        std::fprintf(stderr, "persistent export: serialization did not preserve completed samples\n");
+        std::fprintf(stderr, "persistent export: serialized SamplerData did not preserve a non-empty allocation tree\n");
         return false;
     }
     if (!profiler.resumePersistentAllocationCounting(error) ||
+        !spark::ProfilerTestAccess::persistentAllocationCountingActive(profiler) ||
+        !profiler.resumePersistentAllocationCounting(error)) {
+        std::fprintf(stderr, "persistent export: count-only resume/idempotence failed: %s\n", error.c_str());
+        return false;
+    }
+
+    const std::uint64_t persistent_before = profiler.persistentAllocationBytes();
+    if (!exerciseNativeAllocations() ||
+        !waitForCondition([&] { return profiler.persistentAllocationBytes() > persistent_before; }, 2s)) {
+        std::fprintf(stderr, "persistent export: resumed count-only statistics did not advance\n");
+        return false;
+    }
+
+    if (!profiler.start(options, server_tid, error) ||
+        spark::ProfilerTestAccess::persistentAllocationCountingActive(profiler) || !exerciseNativeAllocations() ||
+        !waitForCondition([&] { return profiler.sampleCount() != 0; }, 2s) || !profiler.stopSampling(error)) {
+        std::fprintf(stderr, "persistent export: second full allocation cycle failed: %s\n", error.c_str());
+        return false;
+    }
+    const std::string second_profile = profiler.exportData({});
+    if (!serializedAllocationTreeNonEmpty(second_profile) || !profiler.resumePersistentAllocationCounting(error) ||
         !spark::ProfilerTestAccess::persistentAllocationCountingActive(profiler)) {
-        std::fprintf(stderr, "persistent export: count-only resume failed: %s\n", error.c_str());
+        std::fprintf(stderr, "persistent export: second serialized tree/resume cycle failed: %s\n", error.c_str());
+        return false;
+    }
+
+    if (!profiler.setPersistentAllocationCountingEnabled(false, server_tid, error) ||
+        profiler.persistentAllocationCountingEnabled() ||
+        spark::ProfilerTestAccess::persistentAllocationCountingActive(profiler) ||
+        !profiler.resumePersistentAllocationCounting(error) ||
+        spark::ProfilerTestAccess::persistentAllocationCountingActive(profiler)) {
+        std::fprintf(stderr, "persistent export: disabled resume was not a no-op: %s\n", error.c_str());
         return false;
     }
     return profiler.shutdown(error);
