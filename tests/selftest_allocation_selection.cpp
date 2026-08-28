@@ -206,6 +206,11 @@ bool verifyAllocationThreadSelection()
                      static_cast<unsigned long long>(profiler.sampleCount()), error.c_str());
         return false;
     }
+    if (!profiler.resumePersistentAllocationCounting(error)) {
+        std::fprintf(stderr, "allocation thread selection: completed selector profile could not be discarded: %s\n",
+                     error.c_str());
+        return false;
+    }
 
     options.threads = {"*"};
     if (!profiler.start(options, spark::currentNativeThreadId(), error)) {
@@ -217,6 +222,11 @@ bool verifyAllocationThreadSelection()
     profiler.onTick(50.0);
     if (!profiler.stopSampling(error) || profiler.sampleCount() == 0) {
         std::fprintf(stderr, "allocation thread selection: * selector captured no samples\n");
+        return false;
+    }
+    if (!profiler.resumePersistentAllocationCounting(error)) {
+        std::fprintf(stderr, "allocation thread selection: completed wildcard profile could not be discarded: %s\n",
+                     error.c_str());
         return false;
     }
 

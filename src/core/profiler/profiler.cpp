@@ -161,7 +161,10 @@ bool Profiler::setPersistentAllocationCountingEnabled(bool enabled, std::uint64_
     }
     persistent_allocation_session_seed_ = session_seed;
     persistent_allocation_counting_enabled_.store(true, std::memory_order_release);
-    if (running_.load(std::memory_order_acquire) && mode_ == ProfileMode::Allocation) {
+    // Enabling metrics must not reset either a running full allocation profile or
+    // a completed profile that has not reached the serialization/discard hand-off.
+    if (allocation_export_pending_.load(std::memory_order_acquire) ||
+        (running_.load(std::memory_order_acquire) && mode_ == ProfileMode::Allocation)) {
         return true;
     }
     if (!startPersistentAllocationCounting(error)) {
@@ -202,6 +205,10 @@ bool Profiler::start(const ProfilerOptions &options, std::uint64_t main_tid, std
     std::scoped_lock lifecycle_lock(lifecycle_mutex_);
     if (running_.load()) {
         error = "profiler is already running";
+        return false;
+    }
+    if (allocation_export_pending_.load(std::memory_order_acquire)) {
+        error = "previous allocation profile is still awaiting export or discard";
         return false;
     }
     if (!reapRecoveryWriter()) {
@@ -334,9 +341,7 @@ bool Profiler::start(const ProfilerOptions &options, std::uint64_t main_tid, std
         if (mode_ == ProfileMode::Allocation &&
             persistent_allocation_counting_enabled_.load(std::memory_order_acquire)) {
             std::string resume_error;
-            if (!startPersistentAllocationCounting(resume_error)) {
-                persistent_allocation_counting_enabled_.store(false, std::memory_order_release);
-            }
+            startPersistentAllocationCounting(resume_error);
         }
         return false;
     }
@@ -351,11 +356,24 @@ bool Profiler::start(const ProfilerOptions &options, std::uint64_t main_tid, std
 
 void Profiler::onTick(double mspt_ms)
 {
+    if (persistent_allocation_counting_enabled_.load(std::memory_order_acquire) &&
+        !persistent_allocation_counting_active_.load(std::memory_order_acquire) &&
+        !allocation_export_pending_.load(std::memory_order_acquire)) {
+        std::string ignored;
+        resumePersistentAllocationCounting(ignored);
+    }
     if (persistent_allocation_counting_active_.load(std::memory_order_acquire)) {
         allocation_sampler_.onTick(mspt_ms);
         if (!allocation_sampler_.running()) {
-            persistent_allocation_counting_active_.store(false, std::memory_order_release);
-            persistent_allocation_counting_enabled_.store(false, std::memory_order_release);
+            // This is an exceptional count-only backend stop. Serialize it with
+            // lifecycle operations so observed bytes are accumulated exactly once
+            // before a later restart resets the session counters.
+            std::scoped_lock lifecycle_lock(lifecycle_mutex_);
+            if (persistent_allocation_counting_active_.load(std::memory_order_acquire) &&
+                !allocation_sampler_.running()) {
+                std::string ignored;
+                stopPersistentAllocationCounting(ignored);
+            }
         }
     }
     if (!running_.load()) {
@@ -391,17 +409,12 @@ bool Profiler::stopSampling(std::string &error)
     if (mode_ == ProfileMode::Allocation) {
         if (!allocation_sampler_.stop(error)) {
             if (!allocation_sampler_.running()) {
-                const bool resume_persistent = persistent_allocation_counting_enabled_.load(std::memory_order_acquire);
-                if (resume_persistent) {
+                if (persistent_allocation_counting_enabled_.load(std::memory_order_acquire)) {
                     accumulatePersistentAllocationBytes();
                 }
+                allocation_export_pending_.store(true, std::memory_order_release);
                 running_.store(false);
-                if (resume_persistent) {
-                    std::string resume_error;
-                    if (!startPersistentAllocationCounting(resume_error)) {
-                        persistent_allocation_counting_enabled_.store(false, std::memory_order_release);
-                    }
-                }
+                end_time_ms_ = requested_end_time_ms;
             }
             return false;
         }
@@ -409,6 +422,7 @@ bool Profiler::stopSampling(std::string &error)
             accumulatePersistentAllocationBytes();
         }
         stopRecoveryWriter();
+        allocation_export_pending_.store(true, std::memory_order_release);
     }
     else {
         if (!sampler_.stop()) {
@@ -424,13 +438,49 @@ bool Profiler::stopSampling(std::string &error)
     }
     running_.store(false);
     end_time_ms_ = requested_end_time_ms;
-    if (mode_ == ProfileMode::Allocation && persistent_allocation_counting_enabled_.load(std::memory_order_acquire)) {
-        std::string resume_error;
-        if (!startPersistentAllocationCounting(resume_error)) {
-            persistent_allocation_counting_enabled_.store(false, std::memory_order_release);
+    // Do not restart persistent count-only here. startPersistentAllocationCounting()
+    // resets the allocation sampler session, including its completed call tree.
+    // Normal profile export is a two-phase stopSampling() -> exportData() flow, so
+    // the exporter resumes persistent counting immediately after serialization.
+    return true;
+}
+
+bool Profiler::resumePersistentAllocationCounting(std::string &error)
+{
+    std::scoped_lock lifecycle_lock(lifecycle_mutex_);
+    error.clear();
+    // A full allocation profile itself accounts allocation bytes. Calling resume
+    // while it is still running is a pure no-op; never create a second sampler.
+    if (running_.load(std::memory_order_acquire) && mode_ == ProfileMode::Allocation) {
+        return true;
+    }
+    // A count-only backend can be stopped independently of the foreground profile
+    // mode. Reap it before trusting the active flag or resetting its counters.
+    if (persistent_allocation_counting_active_.load(std::memory_order_acquire) && !allocation_sampler_.running()) {
+        if (!stopPersistentAllocationCounting(error)) {
+            return false;
         }
     }
-    return true;
+    // If a failed allocation stop left native cleanup incomplete, finish that
+    // cleanup before releasing the export/discard barrier or starting count-only.
+    if (mode_ == ProfileMode::Allocation && !running_.load(std::memory_order_acquire) &&
+        !allocation_sampler_.running()) {
+        std::string cleanup_error;
+        if (!allocation_sampler_.stop(cleanup_error)) {
+            error = std::move(cleanup_error);
+            return false;
+        }
+        stopRecoveryWriter();
+    }
+    // Calling resume is the hand-off that says a completed allocation tree has
+    // already been serialized or intentionally discarded. Only after native
+    // cleanup succeeds may count-only reset/reuse the allocation sampler.
+    allocation_export_pending_.store(false, std::memory_order_release);
+    if (!persistent_allocation_counting_enabled_.load(std::memory_order_acquire) ||
+        persistent_allocation_counting_active_.load(std::memory_order_acquire)) {
+        return true;
+    }
+    return startPersistentAllocationCounting(error);
 }
 
 void Profiler::stopSampling()
@@ -446,9 +496,21 @@ std::string Profiler::stop(const ExportContext &ctx)
     }
     std::string error;
     if (!stopSampling(error)) {
+        std::string ignored;
+        resumePersistentAllocationCounting(ignored);
         return {};
     }
-    return exportData(ctx);
+    try {
+        std::string data = exportData(ctx);
+        std::string ignored;
+        resumePersistentAllocationCounting(ignored);
+        return data;
+    }
+    catch (...) {
+        std::string ignored;
+        resumePersistentAllocationCounting(ignored);
+        throw;
+    }
 }
 
 std::string Profiler::liveExport(const ExportContext &ctx)
@@ -528,15 +590,19 @@ bool Profiler::cancel(std::string &error)
 {
     std::string stop_error;
     if (stopSampling(stop_error)) {
+        std::string resume_error;
+        resumePersistentAllocationCounting(resume_error);
         error.clear();
         discardRecoveryJournal();
         return true;
     }
 
     // A backend failure invalidates the data; if stopSampling completed native cleanup,
-    // cancel is still successful. Persistent count-only may already have restarted
-    // and reset the allocation backend's per-session failure state at this point.
+    // cancel is still successful. Resume persistent count-only because there will be no
+    // export phase to do it for us.
     if (!running_.load()) {
+        std::string resume_error;
+        resumePersistentAllocationCounting(resume_error);
         error.clear();
         discardRecoveryJournal();
         return true;
@@ -559,6 +625,7 @@ bool Profiler::shutdown(std::string &error)
     error.clear();
     persistent_allocation_counting_enabled_.store(false, std::memory_order_release);
     persistent_allocation_counting_active_.store(false, std::memory_order_release);
+    allocation_export_pending_.store(false, std::memory_order_release);
     if (running_.load() && mode_ == ProfileMode::Allocation) {
         if (!allocation_sampler_.shutdown(error)) {
             return false;
