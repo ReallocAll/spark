@@ -79,6 +79,7 @@ public:
         const int result = api_.run_simple_string(script.c_str(), nullptr);
         api_.gil_release(gil_state);
         if (result != 0 || !monitoring_active_.load(std::memory_order_acquire)) {
+            code_id_helper_ = nullptr;
             active_backend_.store(nullptr, std::memory_order_release);
             if (unavailable_reason_.empty()) {
                 unavailable_reason_ = "failed to initialize sys.monitoring PEP 669 callbacks";
@@ -95,6 +96,7 @@ public:
     {
         std::scoped_lock lifecycle_lock(lifecycle_mutex_);
         if (!monitoring_active_.load(std::memory_order_acquire)) {
+            code_id_helper_ = nullptr;
             if (active_backend_.load(std::memory_order_acquire) == this) {
                 active_backend_.store(nullptr, std::memory_order_release);
             }
@@ -109,6 +111,7 @@ public:
                                                   "    _spark_m.stop()\n"
                                                   "    sys.modules.pop('_endstone_spark_monitor', None)\n";
             (void)api_.run_simple_string(kStopScript, nullptr);
+            code_id_helper_ = nullptr;
             api_.gil_release(gil_state);
         }
         monitoring_active_.store(false, std::memory_order_release);
@@ -178,7 +181,7 @@ public:
         const std::uint64_t total_events = out.diagnostics.py_start + out.diagnostics.py_resume +
                                            out.diagnostics.py_throw + out.diagnostics.py_return +
                                            out.diagnostics.py_yield + out.diagnostics.py_unwind;
-        const std::uint64_t misses = out.diagnostics.code_objects;
+        const std::uint64_t misses = code_cache_misses_.load(std::memory_order_relaxed);
         out.diagnostics.code_cache_misses = misses;
         out.diagnostics.code_cache_hits = total_events > misses ? total_events - misses : 0;
         out.diagnostics.monitoring_callbacks_failed = callback_failures_.load(std::memory_order_relaxed);
@@ -186,11 +189,16 @@ public:
     }
 
 private:
+    using PyObject = void;
     using GetVersionFn = const char *(*)();
     using GilEnsureFn = int (*)();
     using GilReleaseFn = void (*)(int);
     using RunSimpleStringFn = int (*)(const char *, void *);
     using IsInitializedFn = int (*)();
+    using ObjectCallOneArgFn = PyObject *(*)(PyObject *, PyObject *);
+    using LongAsUnsignedLongLongFn = unsigned long long (*)(PyObject *);
+    using DecRefFn = void (*)(PyObject *);
+    using ErrClearFn = void (*)();
 
     struct PythonApi {
         GetVersionFn get_version = nullptr;
@@ -198,6 +206,21 @@ private:
         GilReleaseFn gil_release = nullptr;
         RunSimpleStringFn run_simple_string = nullptr;
         IsInitializedFn is_initialized = nullptr;
+        ObjectCallOneArgFn object_call_one_arg = nullptr;
+        LongAsUnsignedLongLongFn long_as_unsigned_long_long = nullptr;
+        DecRefFn dec_ref = nullptr;
+        ErrClearFn err_clear = nullptr;
+    };
+
+    struct EventCodeCacheEntry {
+        std::uintptr_t object = 0;
+        PythonCodeId code_id = kInvalidPythonCodeId;
+    };
+
+    struct EventCodeCache {
+        EndstonePythonAttribution *owner = nullptr;
+        std::uint64_t epoch = 0;
+        std::array<EventCodeCacheEntry, 512> entries{};
     };
 
     static constexpr std::size_t kCodeRegistryCapacity = 131072;
@@ -253,13 +276,21 @@ private:
         api_.gil_release = reinterpret_cast<GilReleaseFn>(symbol("PyGILState_Release"));
         api_.run_simple_string = reinterpret_cast<RunSimpleStringFn>(symbol("PyRun_SimpleStringFlags"));
         api_.is_initialized = reinterpret_cast<IsInitializedFn>(symbol("Py_IsInitialized"));
+        api_.object_call_one_arg = reinterpret_cast<ObjectCallOneArgFn>(symbol("PyObject_CallOneArg"));
+        api_.long_as_unsigned_long_long =
+            reinterpret_cast<LongAsUnsignedLongLongFn>(symbol("PyLong_AsUnsignedLongLong"));
+        api_.dec_ref = reinterpret_cast<DecRefFn>(symbol("Py_DecRef"));
+        api_.err_clear = reinterpret_cast<ErrClearFn>(symbol("PyErr_Clear"));
         return api_.get_version != nullptr && api_.gil_ensure != nullptr && api_.gil_release != nullptr &&
-               api_.run_simple_string != nullptr;
+               api_.run_simple_string != nullptr && api_.object_call_one_arg != nullptr &&
+               api_.long_as_unsigned_long_long != nullptr && api_.dec_ref != nullptr && api_.err_clear != nullptr;
     }
 
     void resetSessionState() noexcept
     {
         shadow_.resetSession();
+        callback_epoch_.fetch_add(1, std::memory_order_acq_rel);
+        code_id_helper_ = nullptr;
         supported_.store(false, std::memory_order_relaxed);
         monitoring_active_.store(false, std::memory_order_relaxed);
         attribution_samples_.store(0, std::memory_order_relaxed);
@@ -267,6 +298,7 @@ private:
         boundary_misses_.store(0, std::memory_order_relaxed);
         unknown_export_code_ids_.store(0, std::memory_order_relaxed);
         callback_failures_.store(0, std::memory_order_relaxed);
+        code_cache_misses_.store(0, std::memory_order_relaxed);
         for (auto &counter : event_counts_) {
             counter.store(0, std::memory_order_relaxed);
         }
@@ -288,7 +320,13 @@ private:
         script << "if _old is not None:\n    _old.stop()\n";
         script << "_m = types.ModuleType('_endstone_spark_monitor')\n";
         script << "_m.REGISTER_ADDR = " << reinterpret_cast<std::uintptr_t>(&registerThunk) << "\n";
-        script << "_m.EVENT_ADDR = " << reinterpret_cast<std::uintptr_t>(&eventThunk) << "\n";
+        script << "_m.SET_CODE_HELPER_ADDR = " << reinterpret_cast<std::uintptr_t>(&setCodeIdHelperThunk) << "\n";
+        script << "_m.PY_START_ADDR = " << reinterpret_cast<std::uintptr_t>(&pyStartThunk) << "\n";
+        script << "_m.PY_RESUME_ADDR = " << reinterpret_cast<std::uintptr_t>(&pyResumeThunk) << "\n";
+        script << "_m.PY_THROW_ADDR = " << reinterpret_cast<std::uintptr_t>(&pyThrowThunk) << "\n";
+        script << "_m.PY_RETURN_ADDR = " << reinterpret_cast<std::uintptr_t>(&pyReturnThunk) << "\n";
+        script << "_m.PY_YIELD_ADDR = " << reinterpret_cast<std::uintptr_t>(&pyYieldThunk) << "\n";
+        script << "_m.PY_UNWIND_ADDR = " << reinterpret_cast<std::uintptr_t>(&pyUnwindThunk) << "\n";
         script << "_m.BOOT_RESET_ADDR = " << reinterpret_cast<std::uintptr_t>(&bootstrapResetThunk) << "\n";
         script << "_m.BOOT_PUSH_ADDR = " << reinterpret_cast<std::uintptr_t>(&bootstrapPushThunk) << "\n";
         script << "_m.STATUS_ADDR = " << reinterpret_cast<std::uintptr_t>(&statusThunk) << "\n";
@@ -319,7 +357,13 @@ _REGISTER = ctypes.PYFUNCTYPE(
     ctypes.c_int,
     ctypes.c_char_p,
 )(REGISTER_ADDR)
-_EVENT = ctypes.PYFUNCTYPE(None, ctypes.c_int, ctypes.c_uint64)(EVENT_ADDR)
+_SET_CODE_HELPER = ctypes.PYFUNCTYPE(None, ctypes.py_object)(SET_CODE_HELPER_ADDR)
+_PY_START = ctypes.PYFUNCTYPE(None, ctypes.py_object, ctypes.c_int)(PY_START_ADDR)
+_PY_RESUME = ctypes.PYFUNCTYPE(None, ctypes.py_object, ctypes.c_int)(PY_RESUME_ADDR)
+_PY_THROW = ctypes.PYFUNCTYPE(None, ctypes.py_object, ctypes.c_int, ctypes.py_object)(PY_THROW_ADDR)
+_PY_RETURN = ctypes.PYFUNCTYPE(None, ctypes.py_object, ctypes.c_int, ctypes.py_object)(PY_RETURN_ADDR)
+_PY_YIELD = ctypes.PYFUNCTYPE(None, ctypes.py_object, ctypes.c_int, ctypes.py_object)(PY_YIELD_ADDR)
+_PY_UNWIND = ctypes.PYFUNCTYPE(None, ctypes.py_object, ctypes.c_int, ctypes.py_object)(PY_UNWIND_ADDR)
 _BOOT_RESET = ctypes.PYFUNCTYPE(None, ctypes.c_uint64)(BOOT_RESET_ADDR)
 _BOOT_PUSH = ctypes.PYFUNCTYPE(None, ctypes.c_uint64, ctypes.c_uint64)(BOOT_PUSH_ADDR)
 _STATUS = ctypes.PYFUNCTYPE(None, ctypes.c_int, ctypes.c_char_p)(STATUS_ADDR)
@@ -328,7 +372,6 @@ _FAILURE = ctypes.PYFUNCTYPE(None, ctypes.c_char_p)(FAILURE_ADDR)
 _cache = {}
 _module_files = {}
 _tool_id = None
-_thread_state = threading.local()
 _plugin_root = os.path.normcase(os.path.abspath(os.path.join('plugins', '.local')))
 _plugin_sources = {}
 try:
@@ -416,49 +459,6 @@ def _code_id(code):
     return code_id
 
 
-def _safe_event(kind, code):
-    try:
-        if not getattr(_thread_state, 'bootstrapped', False):
-            current = sys._current_frames().get(threading.get_ident())
-            chain = _bootstrap_frame(threading.get_native_id(), current) if current is not None else []
-            _thread_state.bootstrapped = True
-            # PY_START/PY_RESUME/PY_THROW run with the entered frame active.
-            # If the first event on a newly-created thread is already present
-            # in the public frame chain, bootstrap has accounted for it.
-            if kind <= 2 and any(existing is code for existing in chain):
-                return
-        _EVENT(kind, _code_id(code))
-    except BaseException as exc:
-        try:
-            _FAILURE(str(exc).encode('utf-8', 'replace'))
-        except BaseException:
-            pass
-
-
-def _py_start(code, instruction_offset):
-    _safe_event(0, code)
-
-
-def _py_resume(code, instruction_offset):
-    _safe_event(1, code)
-
-
-def _py_throw(code, instruction_offset, exception):
-    _safe_event(2, code)
-
-
-def _py_return(code, instruction_offset, retval):
-    _safe_event(3, code)
-
-
-def _py_yield(code, instruction_offset, retval):
-    _safe_event(4, code)
-
-
-def _py_unwind(code, instruction_offset, exception):
-    _safe_event(5, code)
-
-
 def _bootstrap_frame(native_id, frame):
     chain = []
     cursor = frame
@@ -483,14 +483,10 @@ def _bootstrap():
         for thread in threading.enumerate()
         if thread.ident is not None and getattr(thread, 'native_id', None) is not None
     }
-    current_ident = threading.get_ident()
     for ident, frame in sys._current_frames().items():
         native_id = native_by_ident.get(ident)
-        if native_id is None:
-            continue
-        _bootstrap_frame(native_id, frame)
-        if ident == current_ident:
-            _thread_state.bootstrapped = True
+        if native_id is not None:
+            _bootstrap_frame(native_id, frame)
 
 
 def start():
@@ -511,16 +507,16 @@ def start():
         _STATUS(-1, b'no free sys.monitoring tool id (tried 2, 3, 4)')
         return
 
-    events = monitoring.events
     callbacks = (
-        (events.PY_START, _py_start),
-        (events.PY_RESUME, _py_resume),
-        (events.PY_THROW, _py_throw),
-        (events.PY_RETURN, _py_return),
-        (events.PY_YIELD, _py_yield),
-        (events.PY_UNWIND, _py_unwind),
+        (monitoring.events.PY_START, _PY_START),
+        (monitoring.events.PY_RESUME, _PY_RESUME),
+        (monitoring.events.PY_THROW, _PY_THROW),
+        (monitoring.events.PY_RETURN, _PY_RETURN),
+        (monitoring.events.PY_YIELD, _PY_YIELD),
+        (monitoring.events.PY_UNWIND, _PY_UNWIND),
     )
     try:
+        _SET_CODE_HELPER(_code_id)
         for event, callback in callbacks:
             monitoring.register_callback(_tool_id, event, callback)
         _bootstrap()
@@ -586,14 +582,88 @@ def stop():
                  : kInvalidPythonCodeId;
     }
 
-    static void eventThunk(int event, PythonCodeId code_id) noexcept
+    static void setCodeIdHelperThunk(PyObject *helper) noexcept
     {
         EndstonePythonAttribution *backend = activeBackend();
-        if (backend == nullptr || event < 0 || event >= 6) {
+        if (backend != nullptr) {
+            backend->code_id_helper_ = helper;
+        }
+    }
+
+    static void pyStartThunk(PyObject *code, int) noexcept { dispatchDirectEvent(PythonExecutionEvent::Start, code); }
+    static void pyResumeThunk(PyObject *code, int) noexcept { dispatchDirectEvent(PythonExecutionEvent::Resume, code); }
+    static void pyThrowThunk(PyObject *code, int, PyObject *) noexcept
+    {
+        dispatchDirectEvent(PythonExecutionEvent::Throw, code);
+    }
+    static void pyReturnThunk(PyObject *code, int, PyObject *) noexcept
+    {
+        dispatchDirectEvent(PythonExecutionEvent::Return, code);
+    }
+    static void pyYieldThunk(PyObject *code, int, PyObject *) noexcept
+    {
+        dispatchDirectEvent(PythonExecutionEvent::Yield, code);
+    }
+    static void pyUnwindThunk(PyObject *code, int, PyObject *) noexcept
+    {
+        dispatchDirectEvent(PythonExecutionEvent::Unwind, code);
+    }
+
+    static void dispatchDirectEvent(PythonExecutionEvent event, PyObject *code) noexcept
+    {
+        EndstonePythonAttribution *backend = activeBackend();
+        if (backend == nullptr || code == nullptr) {
+            return;
+        }
+        const PythonCodeId code_id = backend->codeIdForObject(code);
+        if (code_id == kInvalidPythonCodeId) {
+            backend->callback_failures_.fetch_add(1, std::memory_order_relaxed);
             return;
         }
         backend->event_counts_[static_cast<std::size_t>(event)].fetch_add(1, std::memory_order_relaxed);
-        backend->shadow_.onEvent(currentNativeThreadId(), static_cast<PythonExecutionEvent>(event), code_id);
+        backend->shadow_.onEvent(currentNativeThreadId(), event, code_id);
+    }
+
+    PythonCodeId codeIdForObject(PyObject *code) noexcept
+    {
+        if (code == nullptr || code_id_helper_ == nullptr || api_.object_call_one_arg == nullptr ||
+            api_.long_as_unsigned_long_long == nullptr || api_.dec_ref == nullptr || api_.err_clear == nullptr) {
+            return kInvalidPythonCodeId;
+        }
+
+        thread_local EventCodeCache cache;
+        const std::uint64_t epoch = callback_epoch_.load(std::memory_order_relaxed);
+        if (cache.owner != this || cache.epoch != epoch) {
+            cache.owner = this;
+            cache.epoch = epoch;
+            for (EventCodeCacheEntry &entry : cache.entries) {
+                entry = {};
+            }
+        }
+
+        const std::uintptr_t object = reinterpret_cast<std::uintptr_t>(code);
+        const std::size_t index = static_cast<std::size_t>(((object >> 4) ^ (object >> 13) ^ (object >> 25)) &
+                                                           (cache.entries.size() - 1));
+        EventCodeCacheEntry &entry = cache.entries[index];
+        if (entry.object == object && entry.code_id != kInvalidPythonCodeId) {
+            return entry.code_id;
+        }
+
+        code_cache_misses_.fetch_add(1, std::memory_order_relaxed);
+        PyObject *result = api_.object_call_one_arg(code_id_helper_, code);
+        if (result == nullptr) {
+            api_.err_clear();
+            return kInvalidPythonCodeId;
+        }
+        const unsigned long long raw_id = api_.long_as_unsigned_long_long(result);
+        api_.dec_ref(result);
+        if (raw_id == static_cast<unsigned long long>(-1) || raw_id == kInvalidPythonCodeId) {
+            api_.err_clear();
+            return kInvalidPythonCodeId;
+        }
+        entry.object = object;
+        entry.code_id = static_cast<PythonCodeId>(raw_id);
+        return entry.code_id;
     }
 
     static void bootstrapResetThunk(std::uint64_t native_tid) noexcept
@@ -697,6 +767,8 @@ def stop():
     std::string backend_ = "none";
     std::string python_version_;
     std::string unavailable_reason_;
+    PyObject *code_id_helper_ = nullptr;  // Borrowed from _endstone_spark_monitor while monitoring is active.
+    std::atomic<std::uint64_t> callback_epoch_{1};
     std::atomic<bool> supported_{false};
     std::atomic<bool> monitoring_active_{false};
     std::array<std::atomic<std::uint64_t>, 6> event_counts_{};
@@ -706,6 +778,7 @@ def stop():
     std::atomic<std::uint64_t> boundary_misses_{0};
     std::atomic<std::uint64_t> unknown_export_code_ids_{0};
     std::atomic<std::uint64_t> callback_failures_{0};
+    std::atomic<std::uint64_t> code_cache_misses_{0};
 
     inline static std::atomic<EndstonePythonAttribution *> active_backend_{nullptr};
 };
