@@ -1,0 +1,40 @@
+name: Instrument Python worker attribution failure
+
+on:
+  push:
+    branches:
+      - feat/python-function-attribution
+    paths:
+      - .github/workflows/agent-python-worker-debug.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/python-function-attribution
+      - name: Add failure-only worker diagnostics
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('tests/native/python/python_attribution_runtime_test.cpp')
+          text = p.read_text()
+          old = '''    ok &= expect(anySnapshotContains(state, {"worker_thread_hotspot", "worker_leaf"}),\n                 "worker Python thread stack was not observed");\n'''
+          new = '''    const bool worker_stack_seen = anySnapshotContains(state, {"worker_thread_hotspot", "worker_leaf"});\n    if (!worker_stack_seen) {\n        std::cerr << "worker debug: registered=" << state.diagnostics.registered_threads\n                  << " mismatches=" << state.diagnostics.thread_mismatches << " start=" << state.diagnostics.py_start\n                  << " return=" << state.diagnostics.py_return << '\\n';\n        const auto worker_codes = codeMap(state);\n        for (const SnapshotRecord &record : g_snapshots) {\n            const auto names = namesFor(record, worker_codes);\n            std::cerr << "worker debug snapshot tid=" << record.native_tid << " depth=" << record.snapshot.depth << ':';\n            for (const std::string &name : names) {\n                std::cerr << ' ' << name;\n            }\n            std::cerr << '\\n';\n        }\n    }\n    ok &= expect(worker_stack_seen, "worker Python thread stack was not observed");\n'''
+          assert text.count(old) == 1
+          p.write_text(text.replace(old, new))
+          PY
+          git diff --check
+      - name: Commit diagnostics
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add tests/native/python/python_attribution_runtime_test.cpp
+          git commit -m "test: diagnose Python worker attribution"
+          git push origin HEAD:feat/python-function-attribution
