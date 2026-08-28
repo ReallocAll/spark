@@ -28,6 +28,45 @@ constexpr std::size_t KLeadingDrop = 0;
 #else
 constexpr std::size_t KLeadingDrop = 2;
 #endif
+
+char asciiLower(char ch) noexcept
+{
+    return ch >= 'A' && ch <= 'Z' ? static_cast<char>(ch - 'A' + 'a') : ch;
+}
+
+bool startsWithInsensitive(std::string_view value, std::string_view prefix) noexcept
+{
+    if (value.size() < prefix.size()) {
+        return false;
+    }
+    for (std::size_t i = 0; i < prefix.size(); ++i) {
+        if (asciiLower(value[i]) != asciiLower(prefix[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool isPythonRuntimeModule(std::string_view path) noexcept
+{
+    const std::size_t separator = path.find_last_of("/\\");
+    const std::string_view name = separator == std::string_view::npos ? path : path.substr(separator + 1);
+    return startsWithInsensitive(name, "libpython3") || startsWithInsensitive(name, "python3");
+}
+
+std::size_t pythonInsertionPoint(const std::vector<FrameKey> &frames, const ModuleTable &modules) noexcept
+{
+    for (std::size_t i = 0; i < frames.size(); ++i) {
+        if (frames[i].module == kInvalidModule || frames[i].module >= modules.size()) {
+            continue;
+        }
+        if (isPythonRuntimeModule(modules.path(frames[i].module))) {
+            return i;
+        }
+    }
+    return frames.size();
+}
+
 }  // namespace
 
 void Sampler::markWorkerFailure() noexcept
@@ -350,13 +389,18 @@ void Sampler::samplerLoop()
                 break;  // one potentially expensive stack-walk attempt per interval
             }
 
+            PythonStackProvider *python_provider = python_stack_provider_.load(std::memory_order_acquire);
+            PythonStackProvider::Snapshot python_snapshot;
+            const bool python_snapshot_consistent =
+                python_provider == nullptr || python_provider->snapshot(target.id, python_snapshot);
+
             Sample sample;
             sample.thread_id = target.id;
             sample.thread_name = target.name;
             sample.tick_id = current_tick_.load();
             sample.window = currentWindow();
             sample.weight = elapsed_us;
-            sample.frames.reserve(buf.count);
+            sample.frames.reserve(buf.count + (python_snapshot_consistent ? python_snapshot.depth : 0));
             for (std::size_t i = KLeadingDrop; i < buf.count; ++i) {
 #ifdef _WIN32
                 auto raw_address = static_cast<std::uint64_t>(buf.ips[i]);
@@ -413,6 +457,27 @@ void Sampler::samplerLoop()
             if (config_.ignore_sleeping && isSleepFrame(sample.frames.front().raw_address)) {
                 break;
             }
+
+            bool python_attributed = false;
+            bool python_boundary_miss = false;
+            if (python_provider != nullptr && python_snapshot_consistent && python_snapshot.depth != 0) {
+                const std::size_t insertion = pythonInsertionPoint(sample.frames, modules_);
+                if (insertion != sample.frames.size()) {
+                    sample.frames.insert(sample.frames.begin() + static_cast<std::ptrdiff_t>(insertion),
+                                         python_snapshot.depth, FrameKey{});
+                    for (std::size_t i = 0; i < python_snapshot.depth; ++i) {
+                        sample.frames[insertion + i] = pythonFrameKey(python_snapshot.codes[python_snapshot.depth - 1 - i]);
+                    }
+                    python_attributed = true;
+                }
+                else {
+                    python_boundary_miss = true;
+                }
+            }
+            if (python_provider != nullptr) {
+                python_provider->recordSample(python_attributed, python_boundary_miss);
+            }
+
             if (recovery_sink_ && !pending_recovery_module_definitions_.empty()) {
                 sample.recovery_module_definitions = pending_recovery_module_definitions_;
             }
