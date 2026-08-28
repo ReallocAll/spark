@@ -117,6 +117,10 @@ public:
     // exportData() performs symbolication and serialization on a background thread
     // once sampling has stopped.
     bool stopSampling(std::string &error);
+    // Restarts persistent allocation-rate counting after a stopped allocation
+    // profile has been serialized. Safe to call when counting is disabled or
+    // already active.
+    bool resumePersistentAllocationCounting(std::string &error);
     void stopSampling();  // compatibility helper that discards the error
     void requestStop() noexcept;
     std::string exportData(const ExportContext &ctx) const;
