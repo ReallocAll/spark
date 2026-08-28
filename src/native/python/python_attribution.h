@@ -316,15 +316,9 @@ private:
         return cache.slot;
     }
 
-    static void writeBegin(ThreadSlot &slot) noexcept
-    {
-        slot.sequence.fetch_add(1, std::memory_order_acq_rel);
-    }
+    static void writeBegin(ThreadSlot &slot) noexcept { slot.sequence.fetch_add(1, std::memory_order_acq_rel); }
 
-    static void writeEnd(ThreadSlot &slot) noexcept
-    {
-        slot.sequence.fetch_add(1, std::memory_order_release);
-    }
+    static void writeEnd(ThreadSlot &slot) noexcept { slot.sequence.fetch_add(1, std::memory_order_release); }
 
     void push(ThreadSlot &slot, PythonCodeId code_id) noexcept
     {
@@ -379,8 +373,8 @@ private:
     void updateMaxDepth(std::uint64_t depth) noexcept
     {
         std::uint64_t current = max_depth_.load(std::memory_order_relaxed);
-        while (depth > current &&
-               !max_depth_.compare_exchange_weak(current, depth, std::memory_order_relaxed, std::memory_order_relaxed)) {
+        while (depth > current && !max_depth_.compare_exchange_weak(current, depth, std::memory_order_relaxed,
+                                                                    std::memory_order_relaxed)) {
         }
     }
 

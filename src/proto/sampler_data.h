@@ -41,7 +41,8 @@ struct ProfileMetadata {
             diag.supported && diag.monitoring_active ? "true" : "false";
         extra_platform_metadata["Python monitoring active"] = diag.monitoring_active ? "true" : "false";
         if (!diag.unavailable_reason.empty()) {
-            extra_platform_metadata["Python attribution unavailable reason"] = pythonJsonString(diag.unavailable_reason);
+            extra_platform_metadata["Python attribution unavailable reason"] =
+                pythonJsonString(diag.unavailable_reason);
         }
         extra_platform_metadata["Python PY_START events"] = std::to_string(diag.py_start);
         extra_platform_metadata["Python PY_RESUME events"] = std::to_string(diag.py_resume);

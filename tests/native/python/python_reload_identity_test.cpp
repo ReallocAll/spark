@@ -108,9 +108,8 @@ assert _second['reload_identity_target']() == 7
 
     ok &= expect(runtime.run(kScript) == 0, "reload identity Python workload failed");
     const PythonAttributionExport state = bridge.exportState();
-    const auto reload_codes = static_cast<std::size_t>(std::ranges::count_if(state.codes, [](const auto &metadata) {
-        return metadata.qualname == "reload_identity_target";
-    }));
+    const auto reload_codes = static_cast<std::size_t>(std::ranges::count_if(
+        state.codes, [](const auto &metadata) { return metadata.qualname == "reload_identity_target"; }));
     ok &= expect(reload_codes == 2,
                  "structurally-equal code objects from separate loads reused one CodeId instead of two identities");
 

@@ -90,9 +90,8 @@ bool containsOrdered(const std::vector<std::string> &actual, const std::vector<s
 bool anySnapshotContains(const PythonAttributionExport &state, const std::vector<std::string_view> &expected)
 {
     const auto codes = codeMap(state);
-    return std::ranges::any_of(g_snapshots, [&](const SnapshotRecord &record) {
-        return containsOrdered(namesFor(record, codes), expected);
-    });
+    return std::ranges::any_of(
+        g_snapshots, [&](const SnapshotRecord &record) { return containsOrdered(namesFor(record, codes), expected); });
 }
 
 std::size_t countName(const SnapshotRecord &record, const std::unordered_map<PythonCodeId, PythonCodeMetadata> &codes,
@@ -299,8 +298,7 @@ json.dumps({'spark': [1, 2, 3], 'nested': {'ok': True}})
     ok &= expect(anySnapshotContains(state, {"catches_exception"}), "exception/catch execution was not observed");
     ok &= expect(anySnapshotContains(state, {"generator_hotspot"}), "generator execution was not observed");
     ok &= expect(anySnapshotContains(state, {"async_hotspot", "async_leaf"}), "async execution stack was not observed");
-    ok &= expect(anySnapshotContains(
-                     state, {"worker_thread_hotspot", "worker_thread_hotspot.<locals>.worker_leaf"}),
+    ok &= expect(anySnapshotContains(state, {"worker_thread_hotspot", "worker_thread_hotspot.<locals>.worker_leaf"}),
                  "worker Python thread stack was not observed");
     ok &= expect(anySnapshotContains(state, {"plugin_handler", "external_leaf"}),
                  "plugin -> external dependency stack was not observed");
@@ -310,7 +308,8 @@ json.dumps({'spark': [1, 2, 3], 'nested': {'ok': True}})
         return record.snapshot.depth == PythonStackProvider::kMaxDepth && countName(record, codes, "recurse") >= 250;
     });
     ok &= expect(deep_recursion, "deep recursion did not reach bounded shadow-stack capacity");
-    ok &= expect(state.diagnostics.max_depth > PythonStackProvider::kMaxDepth, "deep recursion max depth was not recorded");
+    ok &= expect(state.diagnostics.max_depth > PythonStackProvider::kMaxDepth,
+                 "deep recursion max depth was not recorded");
     ok &= expect(state.diagnostics.overflows > 0, "deep recursion did not increment overflow diagnostics");
     ok &= expect(state.diagnostics.py_start > 0 && state.diagnostics.py_return > 0,
                  "PY_START/PY_RETURN lifecycle counters are empty");
@@ -325,7 +324,8 @@ json.dumps({'spark': [1, 2, 3], 'nested': {'ok': True}})
     bool stdlib_code = false;
     for (const PythonCodeMetadata &metadata : state.codes) {
         if (metadata.qualname == "plugin_handler") {
-            plugin_code = metadata.category == spark::PythonCodeCategory::Plugin && metadata.plugin_source == "spark-python-hotspot-test" &&
+            plugin_code = metadata.category == spark::PythonCodeCategory::Plugin &&
+                          metadata.plugin_source == "spark-python-hotspot-test" &&
                           metadata.filename.find("plugins") != std::string::npos;
         }
         if (metadata.qualname == "external_leaf") {
@@ -379,7 +379,8 @@ late_a()
                  "late attach did not bootstrap the active Python execution chain");
 
     PythonStackProvider::Snapshot final_snapshot;
-    ok &= expect(bridge.snapshot(spark::currentNativeThreadId(), final_snapshot), "late-attach final snapshot inconsistent");
+    ok &= expect(bridge.snapshot(spark::currentNativeThreadId(), final_snapshot),
+                 "late-attach final snapshot inconsistent");
     ok &= expect(final_snapshot.depth == 0, "late-attached frames did not unwind after returning to native caller");
     bridge.stop();
     g_bridge = nullptr;
@@ -391,7 +392,8 @@ late_a()
 int main()
 {
 #ifdef _WIN32
-    std::cerr << "This standalone runtime test currently targets Linux CI; Windows compilation is covered by the main build.\n";
+    std::cerr << "This standalone runtime test currently targets Linux CI; Windows compilation is covered by the main "
+                 "build.\n";
     return 0;
 #else
     const char *library_path = std::getenv("SPARK_TEST_LIBPYTHON");

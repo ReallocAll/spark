@@ -89,8 +89,8 @@ public:
                 getLogger().info("Python attribution diagnostic mode: shadow-only");
             }
             else if (value != "auto" && !value.empty()) {
-                getLogger().warning("Ignoring unknown SPARK_PYTHON_ATTRIBUTION_MODE '{}'; expected auto, off, or shadow-only.",
-                                    value);
+                getLogger().warning(
+                    "Ignoring unknown SPARK_PYTHON_ATTRIBUTION_MODE '{}'; expected auto, off, or shadow-only.", value);
             }
         }
 
@@ -197,15 +197,14 @@ public:
             const auto &diag = state.diagnostics;
             const auto pushes = diag.py_start + diag.py_resume + diag.py_throw;
             const auto pops = diag.py_return + diag.py_yield + diag.py_unwind;
-            getLogger().info(
-                "Python attribution benchmark: pushes={} pops={} PY_START={} PY_RESUME={} PY_THROW={} "
-                "PY_RETURN={} PY_YIELD={} PY_UNWIND={} threads={} max_depth={} overflows={} "
-                "snapshot_attempts={} snapshot_failures={} attributed_samples={} native_only_samples={} "
-                "cache_hits={} cache_misses={} code_objects={}",
-                pushes, pops, diag.py_start, diag.py_resume, diag.py_throw, diag.py_return, diag.py_yield,
-                diag.py_unwind, diag.registered_threads, diag.max_depth, diag.overflows, diag.snapshot_attempts,
-                diag.snapshot_failures, diag.attribution_samples, diag.native_only_samples, diag.code_cache_hits,
-                diag.code_cache_misses, diag.code_objects);
+            getLogger().info("Python attribution benchmark: pushes={} pops={} PY_START={} PY_RESUME={} PY_THROW={} "
+                             "PY_RETURN={} PY_YIELD={} PY_UNWIND={} threads={} max_depth={} overflows={} "
+                             "snapshot_attempts={} snapshot_failures={} attributed_samples={} native_only_samples={} "
+                             "cache_hits={} cache_misses={} code_objects={}",
+                             pushes, pops, diag.py_start, diag.py_resume, diag.py_throw, diag.py_return, diag.py_yield,
+                             diag.py_unwind, diag.registered_threads, diag.max_depth, diag.overflows,
+                             diag.snapshot_attempts, diag.snapshot_failures, diag.attribution_samples,
+                             diag.native_only_samples, diag.code_cache_hits, diag.code_cache_misses, diag.code_objects);
         }
         const double mspt = getServer().getCurrentMillisecondsPerTick();
         app_->onTick(mspt);

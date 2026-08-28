@@ -103,12 +103,11 @@ public:
         if (api_.gil_ensure != nullptr && api_.gil_release != nullptr && api_.run_simple_string != nullptr &&
             (api_.is_initialized == nullptr || api_.is_initialized() != 0)) {
             const int gil_state = api_.gil_ensure();
-            static constexpr char kStopScript[] =
-                "import sys\n"
-                "_spark_m = sys.modules.get('_endstone_spark_monitor')\n"
-                "if _spark_m is not None:\n"
-                "    _spark_m.stop()\n"
-                "    sys.modules.pop('_endstone_spark_monitor', None)\n";
+            static constexpr char kStopScript[] = "import sys\n"
+                                                  "_spark_m = sys.modules.get('_endstone_spark_monitor')\n"
+                                                  "if _spark_m is not None:\n"
+                                                  "    _spark_m.stop()\n"
+                                                  "    sys.modules.pop('_endstone_spark_monitor', None)\n";
             (void)api_.run_simple_string(kStopScript, nullptr);
             api_.gil_release(gil_state);
         }
@@ -139,10 +138,7 @@ public:
         }
     }
 
-    void recordUnknownCodeId() noexcept override
-    {
-        unknown_export_code_ids_.fetch_add(1, std::memory_order_relaxed);
-    }
+    void recordUnknownCodeId() noexcept override { unknown_export_code_ids_.fetch_add(1, std::memory_order_relaxed); }
 
     PythonAttributionExport exportState() const override
     {
@@ -248,7 +244,9 @@ private:
             return reinterpret_cast<void *>(GetProcAddress(python, name));
         };
 #else
-        const auto symbol = [](const char *name) noexcept -> void * { return dlsym(RTLD_DEFAULT, name); };
+        const auto symbol = [](const char *name) noexcept -> void * {
+            return dlsym(RTLD_DEFAULT, name);
+        };
 #endif
         api_.get_version = reinterpret_cast<GetVersionFn>(symbol("Py_GetVersion"));
         api_.gil_ensure = reinterpret_cast<GilEnsureFn>(symbol("PyGILState_Ensure"));
@@ -579,12 +577,13 @@ def stop():
     }
 
     static PythonCodeId registerThunk(const char *filename, const char *module, const char *function_name,
-                                      const char *qualname, int first_line, int category, const char *plugin_source) noexcept
+                                      const char *qualname, int first_line, int category,
+                                      const char *plugin_source) noexcept
     {
         EndstonePythonAttribution *backend = activeBackend();
-        return backend != nullptr ? backend->registerCode(filename, module, function_name, qualname, first_line, category,
-                                                          plugin_source)
-                                  : kInvalidPythonCodeId;
+        return backend != nullptr
+                 ? backend->registerCode(filename, module, function_name, qualname, first_line, category, plugin_source)
+                 : kInvalidPythonCodeId;
     }
 
     static void eventThunk(int event, PythonCodeId code_id) noexcept

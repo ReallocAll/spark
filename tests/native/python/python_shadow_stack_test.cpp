@@ -40,14 +40,15 @@ bool verifyLifecycleAndOverflow()
         shadow.onEvent(tid, spark::PythonExecutionEvent::Start, code);
     }
     ok &= expect(shadow.snapshot(tid, snapshot), "overflow snapshot inconsistent");
-    ok &= expect(snapshot.depth == spark::PythonStackProvider::kMaxDepth, "overflow snapshot was not truncated to capacity");
+    ok &= expect(snapshot.depth == spark::PythonStackProvider::kMaxDepth,
+                 "overflow snapshot was not truncated to capacity");
     ok &= expect(shadow.maxDepth() == 300, "maximum logical depth is incorrect");
     ok &= expect(shadow.overflows() == 44, "overflow counter is incorrect");
     for (std::uint64_t code = 300; code >= 1; --code) {
         shadow.onEvent(tid, spark::PythonExecutionEvent::Return, code);
     }
-    ok &= expect(shadow.snapshot(tid, snapshot) && snapshot.depth == 0,
-                 "overflow hidden-depth unwind left stale frames");
+    ok &=
+        expect(shadow.snapshot(tid, snapshot) && snapshot.depth == 0, "overflow hidden-depth unwind left stale frames");
 
     shadow.onEvent(tid, spark::PythonExecutionEvent::Start, 10);
     shadow.onEvent(tid, spark::PythonExecutionEvent::Start, 20);
@@ -88,8 +89,7 @@ bool verifyConcurrentSnapshots()
             continue;
         }
         successful_snapshots.fetch_add(1, std::memory_order_relaxed);
-        const bool valid = snapshot.depth == 0 ||
-                           (snapshot.depth == 1 && snapshot.codes[0] == 11) ||
+        const bool valid = snapshot.depth == 0 || (snapshot.depth == 1 && snapshot.codes[0] == 11) ||
                            (snapshot.depth == 2 && snapshot.codes[0] == 11 && snapshot.codes[1] == 22);
         if (!valid) {
             invalid_snapshots.fetch_add(1, std::memory_order_relaxed);

@@ -466,7 +466,8 @@ void Sampler::samplerLoop()
                     sample.frames.insert(sample.frames.begin() + static_cast<std::ptrdiff_t>(insertion),
                                          python_snapshot.depth, FrameKey{});
                     for (std::size_t i = 0; i < python_snapshot.depth; ++i) {
-                        sample.frames[insertion + i] = pythonFrameKey(python_snapshot.codes[python_snapshot.depth - 1 - i]);
+                        sample.frames[insertion + i] =
+                            pythonFrameKey(python_snapshot.codes[python_snapshot.depth - 1 - i]);
                     }
                     python_attributed = true;
                 }
