@@ -299,8 +299,22 @@ json.dumps({'spark': [1, 2, 3], 'nested': {'ok': True}})
     ok &= expect(anySnapshotContains(state, {"catches_exception"}), "exception/catch execution was not observed");
     ok &= expect(anySnapshotContains(state, {"generator_hotspot"}), "generator execution was not observed");
     ok &= expect(anySnapshotContains(state, {"async_hotspot", "async_leaf"}), "async execution stack was not observed");
-    ok &= expect(anySnapshotContains(state, {"worker_thread_hotspot", "worker_leaf"}),
-                 "worker Python thread stack was not observed");
+    const bool worker_stack_seen = anySnapshotContains(state, {"worker_thread_hotspot", "worker_leaf"});
+    if (!worker_stack_seen) {
+        std::cerr << "worker debug: registered=" << state.diagnostics.registered_threads
+                  << " mismatches=" << state.diagnostics.thread_mismatches << " start=" << state.diagnostics.py_start
+                  << " return=" << state.diagnostics.py_return << '\n';
+        const auto worker_codes = codeMap(state);
+        for (const SnapshotRecord &record : g_snapshots) {
+            const auto names = namesFor(record, worker_codes);
+            std::cerr << "worker debug snapshot tid=" << record.native_tid << " depth=" << record.snapshot.depth << ':';
+            for (const std::string &name : names) {
+                std::cerr << ' ' << name;
+            }
+            std::cerr << '\n';
+        }
+    }
+    ok &= expect(worker_stack_seen, "worker Python thread stack was not observed");
     ok &= expect(anySnapshotContains(state, {"plugin_handler", "external_leaf"}),
                  "plugin -> external dependency stack was not observed");
 
