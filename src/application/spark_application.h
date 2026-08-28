@@ -41,6 +41,8 @@ public:
 
     // Sets the server main thread ID (identified lazily).
     void setMainThreadId(std::uint64_t tid) { profiler_.setMainThreadId(tid); }
+    void setPythonStackProvider(PythonStackProvider *provider) noexcept { profiler_.setPythonStackProvider(provider); }
+    [[nodiscard]] bool executionProfilerRunning() const { return profiler_.executionProfiling(); }
 
     // Lifecycle.
     void shutdown();
