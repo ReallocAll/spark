@@ -628,6 +628,7 @@ def stop():
         if (backend == nullptr) {
             return;
         }
+        std::scoped_lock lock(backend->registry_mutex_);
         if (status > 0) {
             backend->monitoring_active_.store(true, std::memory_order_release);
             backend->unavailable_reason_.clear();
@@ -643,17 +644,12 @@ def stop():
 
     static void callbackFailureThunk(const char *message) noexcept
     {
+        (void)message;
         EndstonePythonAttribution *backend = activeBackend();
-        if (backend == nullptr) {
-            return;
-        }
-        backend->callback_failures_.fetch_add(1, std::memory_order_relaxed);
-        if (message != nullptr && backend->unavailable_reason_.empty()) {
-            // Keep only the first failure for diagnostics; do not log from the hot path.
-            std::scoped_lock lock(backend->registry_mutex_);
-            if (backend->unavailable_reason_.empty()) {
-                backend->unavailable_reason_ = message;
-            }
+        if (backend != nullptr) {
+            // Failure reporting is an exceptional event callback path. Keep it
+            // allocation-free and lock-free; exportState reports the atomic count.
+            backend->callback_failures_.fetch_add(1, std::memory_order_relaxed);
         }
     }
 
