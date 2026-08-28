@@ -204,8 +204,8 @@ public:
                 "cache_hits={} cache_misses={} code_objects={}",
                 pushes, pops, diag.py_start, diag.py_resume, diag.py_throw, diag.py_return, diag.py_yield,
                 diag.py_unwind, diag.registered_threads, diag.max_depth, diag.overflows, diag.snapshot_attempts,
-                diag.snapshot_failures, diag.attribution_samples, diag.native_only_samples, diag.cache_hits,
-                diag.cache_misses, diag.code_objects);
+                diag.snapshot_failures, diag.attribution_samples, diag.native_only_samples, diag.code_cache_hits,
+                diag.code_cache_misses, diag.code_objects);
         }
         const double mspt = getServer().getCurrentMillisecondsPerTick();
         app_->onTick(mspt);
@@ -272,13 +272,13 @@ private:
         }
         catch (const std::exception &error) {
             if (metrics) {
-                metrics->shutdown();
+                metrics_->shutdown();
             }
             getLogger().warning("Unable to register bStats metrics: {}", error.what());
         }
         catch (...) {
             if (metrics) {
-                metrics->shutdown();
+                metrics_->shutdown();
             }
             getLogger().warning("Unable to register bStats metrics: unknown error");
         }
@@ -334,15 +334,15 @@ ENDSTONE_PLUGIN("spark", "0.5.3", SparkPlugin)
     permission("spark.ping").description("Allows use of /spark ping").default_(endstone::PermissionDefault::Operator);
 
     permission("spark.health")
-        .description("Allows use of /spark health")
+        .description("Allows use of the spark health command")
         .default_(endstone::PermissionDefault::Operator);
 
     permission("spark.activity")
-        .description("Allows use of /spark activity")
+        .description("Allows use of the spark activity command")
         .default_(endstone::PermissionDefault::Operator);
 
     permission("spark.tickmonitor")
-        .description("Allows use of /spark tickmonitor")
+        .description("Allows use of the spark tick monitor")
         .default_(endstone::PermissionDefault::Operator);
 }
 // NOLINTEND(bugprone-throwing-static-initialization,misc-use-anonymous-namespace,misc-use-internal-linkage)
