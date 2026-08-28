@@ -43,6 +43,7 @@ public:
     void setMainThreadId(std::uint64_t tid) { profiler_.setMainThreadId(tid); }
     void setPythonStackProvider(PythonStackProvider *provider) noexcept { profiler_.setPythonStackProvider(provider); }
     [[nodiscard]] bool executionProfilerRunning() const { return profiler_.executionProfiling(); }
+    [[nodiscard]] bool profilerExporting() const { return profiler_.exporting(); }
 
     // Lifecycle.
     void shutdown();
