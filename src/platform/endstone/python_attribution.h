@@ -397,22 +397,25 @@ def _category(filename, module):
 
 
 def _code_id(code):
-    try:
-        return _cache[code]
-    except KeyError:
-        filename, module = _module_for(code.co_filename)
-        category, source = _category(filename, module)
-        code_id = int(_REGISTER(
-            filename.encode('utf-8', 'replace'),
-            module.encode('utf-8', 'replace'),
-            code.co_name.encode('utf-8', 'replace'),
-            code.co_qualname.encode('utf-8', 'replace'),
-            int(code.co_firstlineno),
-            int(category),
-            source.encode('utf-8', 'replace'),
-        ))
-        _cache[code] = code_id
-        return code_id
+    key = id(code)
+    cached = _cache.get(key)
+    if cached is not None and cached[0] is code:
+        return cached[1]
+    filename, module = _module_for(code.co_filename)
+    category, source = _category(filename, module)
+    code_id = int(_REGISTER(
+        filename.encode('utf-8', 'replace'),
+        module.encode('utf-8', 'replace'),
+        code.co_name.encode('utf-8', 'replace'),
+        code.co_qualname.encode('utf-8', 'replace'),
+        int(code.co_firstlineno),
+        int(category),
+        source.encode('utf-8', 'replace'),
+    ))
+    # Hold the code object strongly for the session so its address cannot be
+    # recycled and a reloaded function can never inherit an older CodeId.
+    _cache[key] = (code, code_id)
+    return code_id
 
 
 def _safe_event(kind, code):
@@ -424,7 +427,7 @@ def _safe_event(kind, code):
             # PY_START/PY_RESUME/PY_THROW run with the entered frame active.
             # If the first event on a newly-created thread is already present
             # in the public frame chain, bootstrap has accounted for it.
-            if kind <= 2 and code in chain:
+            if kind <= 2 and any(existing is code for existing in chain):
                 return
         _EVENT(kind, _code_id(code))
     except BaseException as exc:
