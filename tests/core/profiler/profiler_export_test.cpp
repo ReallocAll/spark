@@ -45,6 +45,8 @@ struct ProfilerTestAccess {
     {
         return profiler.persistent_allocation_counting_active_.load(std::memory_order_acquire);
     }
+
+    static void requestPersistentAllocationBackendStop(Profiler &profiler) { profiler.allocation_sampler_.requestStop(); }
 };
 
 }  // namespace spark
@@ -295,6 +297,12 @@ bool verifyPersistentAllocationExportOrdering()
         profiler.cancel(error);
         return false;
     }
+    if (!profiler.setPersistentAllocationCountingEnabled(true, server_tid, error) ||
+        spark::ProfilerTestAccess::persistentAllocationCountingActive(profiler) ||
+        profiler.sampleCount() != samples_after_stop || profiler.sampledAllocationBytes() != bytes_after_stop) {
+        std::fprintf(stderr, "persistent export: enabling count-only reset a completed unexported profile\n");
+        return false;
+    }
 
     const std::string profile = profiler.exportData({});
     if (profile.empty() || !serializedAllocationTreeNonEmpty(profile) || profiler.sampleCount() != samples_after_stop ||
@@ -306,6 +314,19 @@ bool verifyPersistentAllocationExportOrdering()
         !spark::ProfilerTestAccess::persistentAllocationCountingActive(profiler) ||
         !profiler.resumePersistentAllocationCounting(error)) {
         std::fprintf(stderr, "persistent export: count-only resume/idempotence failed: %s\n", error.c_str());
+        return false;
+    }
+
+    spark::ProfilerTestAccess::requestPersistentAllocationBackendStop(profiler);
+    profiler.onTick(50.0);
+    if (!profiler.persistentAllocationCountingEnabled() ||
+        spark::ProfilerTestAccess::persistentAllocationCountingActive(profiler)) {
+        std::fprintf(stderr, "persistent export: transient count-only backend stop disabled configured metrics\n");
+        return false;
+    }
+    profiler.onTick(50.0);
+    if (!spark::ProfilerTestAccess::persistentAllocationCountingActive(profiler)) {
+        std::fprintf(stderr, "persistent export: idle tick did not restart stopped count-only backend\n");
         return false;
     }
 
