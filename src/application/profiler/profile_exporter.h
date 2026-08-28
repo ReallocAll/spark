@@ -27,7 +27,7 @@ public:
     explicit ProfileExporter(std::filesystem::path storage_dir, std::string bytebin_url, std::string viewer_url);
 
     // Saves raw protobuf locally; bytebin uploads use gzip with local fallback.
-    Result exportProfile(const Profiler &profiler, const ExportContext &ctx, bool save_to_file);
+    Result exportProfile(Profiler &profiler, const ExportContext &ctx, bool save_to_file);
 
 private:
     std::filesystem::path storage_dir_;

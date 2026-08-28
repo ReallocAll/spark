@@ -27,12 +27,16 @@ ProfileExporter::ProfileExporter(std::filesystem::path storage_dir, std::string 
 {
 }
 
-ProfileExporter::Result ProfileExporter::exportProfile(const Profiler &profiler, const ExportContext &ctx,
-                                                       bool save_to_file)
+ProfileExporter::Result ProfileExporter::exportProfile(Profiler &profiler, const ExportContext &ctx, bool save_to_file)
 {
     Result result;
     try {
         std::string body = profiler.exportData(ctx);
+        // Serialization has copied the completed allocation tree. Persistent
+        // count-only may now safely reset/reuse the native allocation sampler
+        // while gzip and network/file I/O continue in this export worker.
+        std::string resume_error;
+        profiler.resumePersistentAllocationCounting(resume_error);
         std::string compressed = gzipCompress(body);
         if (save_to_file) {
             ProfileFileResult saved = saveProfileToDirectory(storage_dir_, body, nowMs());
@@ -66,9 +70,13 @@ ProfileExporter::Result ProfileExporter::exportProfile(const Profiler &profiler,
         }
     }
     catch (const std::exception &e) {
+        std::string ignored;
+        profiler.resumePersistentAllocationCounting(ignored);
         result.message = std::string("Export failed: ") + e.what();
     }
     catch (...) {
+        std::string ignored;
+        profiler.resumePersistentAllocationCounting(ignored);
         result.message = "Export failed with an unknown error.";
     }
     return result;

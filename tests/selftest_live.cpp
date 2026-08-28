@@ -194,7 +194,8 @@ bool verifyLiveExportStopCancel(std::uint64_t worker_tid)
                 std::string finish_error;
                 if (operation == 0) {
                     if (profiler.stopSampling(finish_error)) {
-                        finish_ok.store(!profiler.exportData({}).empty());
+                        const std::string data = profiler.exportData({});
+                        finish_ok.store(!data.empty() && profiler.resumePersistentAllocationCounting(finish_error));
                     }
                 }
                 else {

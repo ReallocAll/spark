@@ -117,6 +117,10 @@ public:
     // exportData() performs symbolication and serialization on a background thread
     // once sampling has stopped.
     bool stopSampling(std::string &error);
+    // Marks a completed allocation profile as serialized/discarded, then restarts
+    // persistent allocation-rate counting. Safe to call when counting is disabled,
+    // already active, or a full allocation profile is still running.
+    bool resumePersistentAllocationCounting(std::string &error);
     void stopSampling();  // compatibility helper that discards the error
     void requestStop() noexcept;
     std::string exportData(const ExportContext &ctx) const;
@@ -134,7 +138,7 @@ public:
     const Heartbeat &samplerHeartbeat() const { return sampler_.samplerHeartbeat(); }
     const Heartbeat &aggregatorHeartbeat() const { return sampler_.aggregatorHeartbeat(); }
 
-    // Sets the recovery journal directory before start().
+    // Sets the directory for crash-safe recovery journals before start().
     void setRecoveryDirectory(std::filesystem::path dir) { recovery_dir_ = std::move(dir); }
 
     // Deletes the recovery journal directory.  Called after a successful
@@ -176,6 +180,7 @@ private:
     ProfilerOptions options_;
     ProfileMode mode_ = ProfileMode::Execution;
     std::atomic<bool> running_{false};
+    std::atomic<bool> allocation_export_pending_{false};
     std::int64_t start_time_ms_ = 0;
     std::int64_t end_time_ms_ = 0;
     std::int64_t auto_end_time_ms_ = -1;
