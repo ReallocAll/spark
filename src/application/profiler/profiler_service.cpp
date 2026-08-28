@@ -139,14 +139,15 @@ void ProfilerService::finishProfiler(const std::string &sender_name, bool sender
     std::string stop_error;
     if (!profiler_.stopSampling(stop_error)) {
         const bool stopped = !profiler_.running();
+        std::string backend_error;
+        const bool backend_failed = stopped && profiler_.backendFailure(backend_error);
         if (stopped) {
             session_type_ = SessionType::None;
             std::string resume_error;
             profiler_.resumePersistentAllocationCounting(resume_error);
             restore_background();
         }
-        std::string backend_error;
-        if (stopped && profiler_.backendFailure(backend_error)) {
+        if (backend_failed) {
             notify_best_effort(sender_name,
                                "Allocation profiler FAILED; incomplete profile data was discarded: " + backend_error);
             notify_best_effort(sender_name, "The allocation profiler backend is ready for a new session.");
