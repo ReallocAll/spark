@@ -68,7 +68,14 @@ public:
         return static_cast<ModuleId>(paths_.size() - 1);
     }
 
-    const std::string &path(ModuleId id) const { return paths_.at(id); }
+    const std::string &path(ModuleId id) const
+    {
+        if (id < paths_.size()) {
+            return paths_[id];
+        }
+        static const std::string synthetic_or_unknown = "<synthetic frame>";
+        return synthetic_or_unknown;
+    }
 
     std::size_t size() const { return paths_.size(); }
 
