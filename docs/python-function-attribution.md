@@ -25,7 +25,7 @@ Production monitoring enables only the PEP 669 events needed to describe Python 
 
 `LINE`, `INSTRUCTION` and the legacy `PyEval_SetProfile` API are not used.
 
-At profiler start, currently executing Python stacks are bootstrapped once from public runtime APIs so late attach does not begin from an empty stack. Python threads created after monitoring starts perform the same one-time bootstrap on their first lifecycle callback; subsequent events stay on the bounded CodeId push/pop path.
+At profiler start, Python stacks that are already executing are bootstrapped once from public runtime APIs so late attach does not begin from an empty stack. Python threads created after monitoring starts build their shadow stacks naturally from subsequent PEP 669 lifecycle events; no private frame-layout access or sampler-side Python call is required.
 
 Monitoring is enabled only for an active CPU profiler session. Export freezes the attribution state before monitoring is disabled, so code metadata remains valid through serialization.
 
@@ -48,6 +48,10 @@ Each registered code object records:
 - Endstone plugin source/entry-point name when applicable
 
 The full Python caller chain is retained when execution enters stdlib or a dependency, so a plugin remains visible as the originating caller.
+
+## Recovery behavior
+
+Synthetic Python frames use profiling-session-local `PythonCodeId` values. They are therefore retained in the live/completed profile tree and normal viewer export, but deliberately removed from the crash-recovery journal before persistence. A report reconstructed after a process crash remains a valid native Spark profile rather than exporting Python IDs whose metadata registry no longer exists after restart.
 
 ## Diagnostics
 
