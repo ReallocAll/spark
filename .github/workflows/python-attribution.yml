@@ -1,0 +1,59 @@
+name: Python attribution
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  runtime:
+    name: CPython ${{ matrix.python-version }} runtime
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+          - '3.11'
+          - '3.12'
+          - '3.13'
+          - '3.14'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Locate libpython
+        shell: bash
+        run: |
+          python - <<'PY' >> "$GITHUB_ENV"
+          import os
+          import sysconfig
+          libdir = sysconfig.get_config_var('LIBDIR')
+          library = sysconfig.get_config_var('LDLIBRARY') or sysconfig.get_config_var('INSTSONAME')
+          if not libdir or not library:
+              raise SystemExit('setup-python did not expose a shared libpython')
+          path = os.path.join(libdir, library)
+          if not os.path.isfile(path):
+              raise SystemExit(f'libpython not found: {path}')
+          print(f'SPARK_TEST_LIBPYTHON={path}')
+          PY
+
+      - name: Build production bridge runtime test
+        shell: bash
+        run: |
+          g++ -std=c++20 -O2 -Wall -Wextra -Wpedantic -Werror \
+            -Isrc \
+            tests/native/python/python_attribution_runtime_test.cpp \
+            src/native/sampler/thread_info.cpp \
+            -ldl -pthread \
+            -o python-attribution-runtime-test
+
+      - name: Run real CPython attribution test
+        shell: bash
+        run: ./python-attribution-runtime-test
