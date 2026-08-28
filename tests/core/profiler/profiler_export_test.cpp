@@ -301,14 +301,7 @@ bool verifyPersistentAllocationExportOrdering()
     const std::uint64_t bytes_after_stop = profiler.sampledAllocationBytes();
     if (spark::ProfilerTestAccess::persistentAllocationCountingActive(profiler) || samples_after_stop == 0 ||
         bytes_after_stop == 0 || samples_after_stop < samples_before_stop || bytes_after_stop < bytes_before_stop) {
-        std::fprintf(stderr,
-                     "persistent export: completed profile was lost before export "
-                     "(samples=%llu/%llu bytes=%llu/%llu active=%d)\n",
-                     static_cast<unsigned long long>(samples_after_stop),
-                     static_cast<unsigned long long>(samples_before_stop),
-                     static_cast<unsigned long long>(bytes_after_stop),
-                     static_cast<unsigned long long>(bytes_before_stop),
-                     static_cast<int>(spark::ProfilerTestAccess::persistentAllocationCountingActive(profiler)));
+        std::fprintf(stderr, "persistent export: completed profile was lost before export\n");
         return false;
     }
 
