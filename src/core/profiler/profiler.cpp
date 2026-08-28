@@ -365,9 +365,15 @@ void Profiler::onTick(double mspt_ms)
     if (persistent_allocation_counting_active_.load(std::memory_order_acquire)) {
         allocation_sampler_.onTick(mspt_ms);
         if (!allocation_sampler_.running()) {
-            // Keep the configured state so a later idle tick can retry a transient
-            // count-only backend stop instead of permanently disabling metrics.
-            persistent_allocation_counting_active_.store(false, std::memory_order_release);
+            // This is an exceptional count-only backend stop. Serialize it with
+            // lifecycle operations so observed bytes are accumulated exactly once
+            // and native hook calls quiesce before a later restart resets counters.
+            std::scoped_lock lifecycle_lock(lifecycle_mutex_);
+            if (persistent_allocation_counting_active_.load(std::memory_order_acquire) &&
+                !allocation_sampler_.running()) {
+                std::string ignored;
+                stopPersistentAllocationCounting(ignored);
+            }
         }
     }
     if (!running_.load()) {
@@ -448,13 +454,21 @@ bool Profiler::resumePersistentAllocationCounting(std::string &error)
     if (running_.load(std::memory_order_acquire) && mode_ == ProfileMode::Allocation) {
         return true;
     }
+    // A count-only backend can be stopped independently of the foreground profile
+    // mode. Reap it before trusting the active flag or resetting its counters.
+    if (persistent_allocation_counting_active_.load(std::memory_order_acquire) &&
+        !allocation_sampler_.running()) {
+        if (!stopPersistentAllocationCounting(error)) {
+            return false;
+        }
+    }
     // If a failed allocation stop left native cleanup incomplete, finish that
     // cleanup before releasing the export/discard barrier or starting count-only.
     if (mode_ == ProfileMode::Allocation && !running_.load(std::memory_order_acquire) &&
         !allocation_sampler_.running()) {
         std::string cleanup_error;
         if (!allocation_sampler_.stop(cleanup_error)) {
-            error = std::move(cleanup_error);
+            error = std::move(cleanup_error;
             return false;
         }
         stopRecoveryWriter();
