@@ -139,12 +139,15 @@ void ProfilerService::finishProfiler(const std::string &sender_name, bool sender
     std::string stop_error;
     if (!profiler_.stopSampling(stop_error)) {
         const bool stopped = !profiler_.running();
+        std::string backend_error;
+        const bool backend_failed = stopped && profiler_.backendFailure(backend_error);
         if (stopped) {
             session_type_ = SessionType::None;
+            std::string resume_error;
+            profiler_.resumePersistentAllocationCounting(resume_error);
             restore_background();
         }
-        std::string backend_error;
-        if (stopped && profiler_.backendFailure(backend_error)) {
+        if (backend_failed) {
             notify_best_effort(sender_name,
                                "Allocation profiler FAILED; incomplete profile data was discarded: " + backend_error);
             notify_best_effort(sender_name, "The allocation profiler backend is ready for a new session.");
@@ -175,6 +178,8 @@ void ProfilerService::finishProfiler(const std::string &sender_name, bool sender
         }
     }
     catch (const std::exception &error) {
+        std::string resume_error;
+        profiler_.resumePersistentAllocationCounting(resume_error);
         restore_background();
         try {
             notify_best_effort(sender_name, std::string("Failed to prepare the profile export: ") + error.what());
@@ -184,6 +189,8 @@ void ProfilerService::finishProfiler(const std::string &sender_name, bool sender
         return;
     }
     catch (...) {
+        std::string resume_error;
+        profiler_.resumePersistentAllocationCounting(resume_error);
         restore_background();
         notify_best_effort(sender_name, "Failed to prepare the profile export.");
         return;
@@ -205,6 +212,8 @@ void ProfilerService::finishProfiler(const std::string &sender_name, bool sender
     }
     catch (...) {
         exporting_.store(false);
+        std::string resume_error;
+        profiler_.resumePersistentAllocationCounting(resume_error);
         restore_background();
         notify_best_effort(sender_name, "Failed to start the profile export worker.");
     }
@@ -338,7 +347,13 @@ void ProfilerService::onTick(double mspt)
         }
     }
 
+    // Persistent allocation-rate counting is intentionally active even when no
+    // full profiler session is running. Tick it in that idle state so a transient
+    // post-export resume failure can be retried without waiting for another full
+    // profile, while allocation_export_pending_ inside Profiler still prevents an
+    // early reset before completed SamplerData serialization/discard.
     if (!profiler_.running()) {
+        profiler_.onTick(mspt);
         return;
     }
 
