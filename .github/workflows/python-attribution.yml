@@ -70,3 +70,17 @@ jobs:
       - name: Run real CPython attribution test
         shell: bash
         run: ./python-attribution-runtime-test
+
+      - name: Build reload identity regression test
+        shell: bash
+        run: |
+          g++ -std=c++20 -O2 -Wall -Wextra -Wpedantic -Werror \
+            -Isrc \
+            tests/native/python/python_reload_identity_test.cpp \
+            src/native/sampler/thread_info.cpp \
+            -ldl -pthread \
+            -o python-reload-identity-test
+
+      - name: Run reload identity regression test
+        shell: bash
+        run: ./python-reload-identity-test
