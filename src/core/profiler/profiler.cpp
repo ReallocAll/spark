@@ -367,7 +367,7 @@ void Profiler::onTick(double mspt_ms)
         if (!allocation_sampler_.running()) {
             // This is an exceptional count-only backend stop. Serialize it with
             // lifecycle operations so observed bytes are accumulated exactly once
-            // and native hook calls quiesce before a later restart resets counters.
+            // before a later restart resets the session counters.
             std::scoped_lock lifecycle_lock(lifecycle_mutex_);
             if (persistent_allocation_counting_active_.load(std::memory_order_acquire) &&
                 !allocation_sampler_.running()) {
@@ -456,8 +456,7 @@ bool Profiler::resumePersistentAllocationCounting(std::string &error)
     }
     // A count-only backend can be stopped independently of the foreground profile
     // mode. Reap it before trusting the active flag or resetting its counters.
-    if (persistent_allocation_counting_active_.load(std::memory_order_acquire) &&
-        !allocation_sampler_.running()) {
+    if (persistent_allocation_counting_active_.load(std::memory_order_acquire) && !allocation_sampler_.running()) {
         if (!stopPersistentAllocationCounting(error)) {
             return false;
         }
