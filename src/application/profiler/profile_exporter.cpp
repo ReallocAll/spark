@@ -27,8 +27,7 @@ ProfileExporter::ProfileExporter(std::filesystem::path storage_dir, std::string 
 {
 }
 
-ProfileExporter::Result ProfileExporter::exportProfile(Profiler &profiler, const ExportContext &ctx,
-                                                        bool save_to_file)
+ProfileExporter::Result ProfileExporter::exportProfile(Profiler &profiler, const ExportContext &ctx, bool save_to_file)
 {
     Result result;
     try {
