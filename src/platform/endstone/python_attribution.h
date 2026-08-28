@@ -642,8 +642,8 @@ def stop():
         }
 
         const std::uintptr_t object = reinterpret_cast<std::uintptr_t>(code);
-        const std::size_t index = static_cast<std::size_t>(((object >> 4) ^ (object >> 13) ^ (object >> 25)) &
-                                                           (cache.entries.size() - 1));
+        const std::size_t index =
+            static_cast<std::size_t>(((object >> 4) ^ (object >> 13) ^ (object >> 25)) & (cache.entries.size() - 1));
         EventCodeCacheEntry &entry = cache.entries[index];
         if (entry.object == object && entry.code_id != kInvalidPythonCodeId) {
             return entry.code_id;
