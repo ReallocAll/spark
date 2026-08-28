@@ -250,12 +250,10 @@ bool verifyPersistentAllocationExportOrdering()
     }
 
     const std::uint64_t persistent_before_direct_recovery = profiler.persistentAllocationBytes();
-    if (!exerciseNativeAllocations() || !waitForCondition(
-                                            [&] {
-                                                return profiler.persistentAllocationBytes() >
-                                                       persistent_before_direct_recovery;
-                                            },
-                                            2s)) {
+    const auto direct_recovery_advanced = [&] {
+        return profiler.persistentAllocationBytes() > persistent_before_direct_recovery;
+    };
+    if (!exerciseNativeAllocations() || !waitForCondition(direct_recovery_advanced, 2s)) {
         std::fprintf(stderr, "persistent export: initial count-only statistics did not advance\n");
         return false;
     }
@@ -303,8 +301,9 @@ bool verifyPersistentAllocationExportOrdering()
     const std::uint64_t bytes_after_stop = profiler.sampledAllocationBytes();
     if (spark::ProfilerTestAccess::persistentAllocationCountingActive(profiler) || samples_after_stop == 0 ||
         bytes_after_stop == 0 || samples_after_stop < samples_before_stop || bytes_after_stop < bytes_before_stop) {
-        std::fprintf(stderr, "persistent export: completed profile was lost before export "
-                             "(samples=%llu/%llu bytes=%llu/%llu active=%d)\n",
+        std::fprintf(stderr,
+                     "persistent export: completed profile was lost before export "
+                     "(samples=%llu/%llu bytes=%llu/%llu active=%d)\n",
                      static_cast<unsigned long long>(samples_after_stop),
                      static_cast<unsigned long long>(samples_before_stop),
                      static_cast<unsigned long long>(bytes_after_stop),
@@ -341,12 +340,10 @@ bool verifyPersistentAllocationExportOrdering()
     }
 
     const std::uint64_t persistent_before_backend_stop = profiler.persistentAllocationBytes();
-    if (!exerciseNativeAllocations() || !waitForCondition(
-                                            [&] {
-                                                return profiler.persistentAllocationBytes() >
-                                                       persistent_before_backend_stop;
-                                            },
-                                            2s)) {
+    const auto backend_stop_advanced = [&] {
+        return profiler.persistentAllocationBytes() > persistent_before_backend_stop;
+    };
+    if (!exerciseNativeAllocations() || !waitForCondition(backend_stop_advanced, 2s)) {
         std::fprintf(stderr, "persistent export: pre-stop count-only statistics did not advance\n");
         return false;
     }
