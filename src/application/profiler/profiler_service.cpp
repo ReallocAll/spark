@@ -331,7 +331,6 @@ void ProfilerService::onTick(double mspt)
         if (now >= next_background_retry_ms_) {
             if (startBackgroundSession()) {
                 background_started_ = true;
-                background_retry_delay_s_ = 0;
             }
             else {
                 // Exponential backoff: 5s -> 15s -> 30s -> 60s (cap).
@@ -346,7 +345,13 @@ void ProfilerService::onTick(double mspt)
         }
     }
 
+    // Persistent allocation-rate counting is intentionally active even when no
+    // full profiler session is running. Tick it in that idle state so a transient
+    // post-export resume failure can be retried without waiting for another full
+    // profile, while allocation_export_pending_ inside Profiler still prevents an
+    // early reset before completed SamplerData serialization/discard.
     if (!profiler_.running()) {
+        profiler_.onTick(mspt);
         return;
     }
 
