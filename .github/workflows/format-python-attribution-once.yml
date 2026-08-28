@@ -1,0 +1,62 @@
+name: Format Python attribution once
+
+on:
+  push:
+    branches:
+      - feat/python-function-attribution
+    paths:
+      - .github/workflows/format-python-attribution-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: feat/python-function-attribution
+          fetch-depth: 0
+      - name: Install clang-format 20
+        shell: bash
+        run: |
+          set -euo pipefail
+          wget -qO /tmp/llvm.sh https://apt.llvm.org/llvm.sh
+          chmod +x /tmp/llvm.sh
+          sudo /tmp/llvm.sh 20
+          sudo apt-get install -y clang-format-20
+      - name: Format attribution files
+        shell: bash
+        run: |
+          set -euo pipefail
+          clang-format-20 -i \
+            src/native/python/python_attribution.h \
+            src/native/sampler/sampler.cpp \
+            src/platform/endstone/python_attribution.h \
+            src/plugin.cpp \
+            src/proto/sampler_data.h \
+            tests/native/python/python_attribution_runtime_test.cpp \
+            tests/native/python/python_reload_identity_test.cpp \
+            tests/native/python/python_shadow_stack_test.cpp
+          git diff --check
+      - name: Commit formatting
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet; then
+            echo 'No formatting changes required.'
+            exit 0
+          fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/native/python/python_attribution.h \
+            src/native/sampler/sampler.cpp \
+            src/platform/endstone/python_attribution.h \
+            src/plugin.cpp \
+            src/proto/sampler_data.h \
+            tests/native/python/python_attribution_runtime_test.cpp \
+            tests/native/python/python_reload_identity_test.cpp \
+            tests/native/python/python_shadow_stack_test.cpp
+          git commit -m 'style: format Python attribution implementation'
+          git push origin HEAD:feat/python-function-attribution
