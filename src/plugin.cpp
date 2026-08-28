@@ -272,13 +272,13 @@ private:
         }
         catch (const std::exception &error) {
             if (metrics) {
-                metrics_->shutdown();
+                metrics->shutdown();
             }
             getLogger().warning("Unable to register bStats metrics: {}", error.what());
         }
         catch (...) {
             if (metrics) {
-                metrics_->shutdown();
+                metrics->shutdown();
             }
             getLogger().warning("Unable to register bStats metrics: unknown error");
         }
@@ -334,15 +334,15 @@ ENDSTONE_PLUGIN("spark", "0.5.3", SparkPlugin)
     permission("spark.ping").description("Allows use of /spark ping").default_(endstone::PermissionDefault::Operator);
 
     permission("spark.health")
-        .description("Allows use of the spark health command")
+        .description("Allows use of /spark health")
         .default_(endstone::PermissionDefault::Operator);
 
     permission("spark.activity")
-        .description("Allows use of the spark activity command")
+        .description("Allows use of /spark activity")
         .default_(endstone::PermissionDefault::Operator);
 
     permission("spark.tickmonitor")
-        .description("Allows use of the spark tick monitor")
+        .description("Allows use of /spark tickmonitor")
         .default_(endstone::PermissionDefault::Operator);
 }
 // NOLINTEND(bugprone-throwing-static-initialization,misc-use-anonymous-namespace,misc-use-internal-linkage)
