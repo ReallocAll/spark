@@ -8,11 +8,13 @@
 #include <dlfcn.h>
 #endif
 
+#include "native/sampler/thread_info.h"
 #include "platform/endstone/python_attribution.h"
 
 namespace {
 
 using spark::PythonAttributionExport;
+using spark::PythonStackProvider;
 using spark::endstone_adapter::EndstonePythonAttribution;
 
 bool expect(bool condition, std::string_view message)
@@ -92,6 +94,7 @@ int main()
     }
 
     static constexpr char kScript[] = R"PY(
+import gc
 _source = 'def reload_identity_target():\n    return 7\n'
 _first = {}
 _second = {}
@@ -104,6 +107,10 @@ assert _first_code == _second_code
 assert hash(_first_code) == hash(_second_code)
 assert _first['reload_identity_target']() == 7
 assert _second['reload_identity_target']() == 7
+# Simulate plugin unload while monitoring remains active. The registry must keep
+# cold metadata stable without keeping stale execution frames alive.
+del _first_code, _second_code, _first, _second
+gc.collect()
 )PY";
 
     ok &= expect(runtime.run(kScript) == 0, "reload identity Python workload failed");
@@ -113,7 +120,25 @@ assert _second['reload_identity_target']() == 7
     ok &= expect(reload_codes == 2,
                  "structurally-equal code objects from separate loads reused one CodeId instead of two identities");
 
+    PythonStackProvider::Snapshot after_unload;
+    ok &= expect(bridge.snapshot(spark::currentNativeThreadId(), after_unload),
+                 "shadow snapshot was inconsistent after plugin unload");
+    ok &= expect(after_unload.depth == 0, "plugin unload left stale frames on the current-thread shadow stack");
+    ok &= expect(bridge.active(), "monitoring unexpectedly stopped during plugin unload");
+
     bridge.stop();
+    ok &= expect(!bridge.active(), "bridge remained active after stop");
+    bridge.stop();
+    ok &= expect(!bridge.active(), "repeated stop was not idempotent");
+
+    diagnostic.clear();
+    ok &= expect(bridge.start(diagnostic), "bridge restart failed");
+    ok &= expect(bridge.active(), "bridge did not become active after restart");
+    const PythonAttributionExport restarted = bridge.exportState();
+    ok &= expect(restarted.diagnostics.monitoring_active, "restart diagnostics do not report active monitoring");
+    bridge.stop();
+    ok &= expect(!bridge.active(), "bridge remained active after restarted session stop");
+
     ok &= expect(runtime.finalize() == 0, "Py_FinalizeEx failed");
     return ok ? 0 : 1;
 #endif
