@@ -78,10 +78,29 @@ public:
         app_->setPythonStackProvider(&python_attribution_);
         spark::setGlobalPythonStackProvider(&python_attribution_);
 
+        if (const char *mode = std::getenv("SPARK_PYTHON_ATTRIBUTION_MODE"); mode != nullptr) {
+            const std::string value(mode);
+            if (value == "off") {
+                python_attribution_disabled_ = true;
+                getLogger().info("Python attribution diagnostic mode: off");
+            }
+            else if (value == "shadow-only") {
+                python_attribution_shadow_only_ = true;
+                getLogger().info("Python attribution diagnostic mode: shadow-only");
+            }
+            else if (value != "auto" && !value.empty()) {
+                getLogger().warning("Ignoring unknown SPARK_PYTHON_ATTRIBUTION_MODE '{}'; expected auto, off, or shadow-only.",
+                                    value);
+            }
+        }
+
         // Start before app_->enable() so a configured background execution
         // profiler never has an initial native-only window. If no execution
         // profiler starts, syncPythonAttribution() immediately disables it.
-        beginPythonSession();
+        // Explicit benchmark modes are opt-in and never change the default lifecycle.
+        if (!python_attribution_disabled_) {
+            beginPythonSession();
+        }
 
         app_->statistics().start();
         app_->statistics().recordPlayerCount(static_cast<std::int64_t>(getServer().getOnlinePlayers().size()));
@@ -155,7 +174,7 @@ public:
         // PEP 669 bootstrap happens before the native execution sampler starts.
         // Allocation profiles also pass here, but syncPythonAttribution() turns
         // monitoring back off immediately once the selected mode is known.
-        if (isProfilerStart(tokens)) {
+        if (isProfilerStart(tokens) && !python_attribution_disabled_) {
             beginPythonSession();
         }
 
@@ -173,6 +192,21 @@ public:
         }
         app_->setMainThreadId(main_tid_.load());
         syncPythonAttribution();
+        if (python_attribution_shadow_only_ && ++python_diagnostic_ticks_ % 200 == 0) {
+            const auto state = python_attribution_.exportState();
+            const auto &diag = state.diagnostics;
+            const auto pushes = diag.py_start + diag.py_resume + diag.py_throw;
+            const auto pops = diag.py_return + diag.py_yield + diag.py_unwind;
+            getLogger().info(
+                "Python attribution benchmark: pushes={} pops={} PY_START={} PY_RESUME={} PY_THROW={} "
+                "PY_RETURN={} PY_YIELD={} PY_UNWIND={} threads={} max_depth={} overflows={} "
+                "snapshot_attempts={} snapshot_failures={} attributed_samples={} native_only_samples={} "
+                "cache_hits={} cache_misses={} code_objects={}",
+                pushes, pops, diag.py_start, diag.py_resume, diag.py_throw, diag.py_return, diag.py_yield,
+                diag.py_unwind, diag.registered_threads, diag.max_depth, diag.overflows, diag.snapshot_attempts,
+                diag.snapshot_failures, diag.attribution_samples, diag.native_only_samples, diag.cache_hits,
+                diag.cache_misses, diag.code_objects);
+        }
         const double mspt = getServer().getCurrentMillisecondsPerTick();
         app_->onTick(mspt);
         // Timeouts, cancellation, export completion, and background restarts can
@@ -208,6 +242,14 @@ private:
     void syncPythonAttribution() noexcept
     {
         if (!app_) {
+            return;
+        }
+        if (python_attribution_disabled_) {
+            endPythonSession();
+            return;
+        }
+        if (python_attribution_shadow_only_) {
+            beginPythonSession();
             return;
         }
         if (app_->executionProfilerRunning()) {
@@ -253,6 +295,9 @@ private:
     spark::endstone_adapter::PapiIntegration papi_integration_;
     spark::endstone_adapter::EndstonePythonAttribution python_attribution_;
     bool python_session_requested_ = false;
+    bool python_attribution_disabled_ = false;
+    bool python_attribution_shadow_only_ = false;
+    std::uint64_t python_diagnostic_ticks_ = 0;
     std::string last_python_diagnostic_;
     std::unique_ptr<endstone::Metrics> metrics_;
 };
