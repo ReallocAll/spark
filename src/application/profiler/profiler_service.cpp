@@ -141,6 +141,8 @@ void ProfilerService::finishProfiler(const std::string &sender_name, bool sender
         const bool stopped = !profiler_.running();
         if (stopped) {
             session_type_ = SessionType::None;
+            std::string resume_error;
+            profiler_.resumePersistentAllocationCounting(resume_error);
             restore_background();
         }
         std::string backend_error;
@@ -175,6 +177,8 @@ void ProfilerService::finishProfiler(const std::string &sender_name, bool sender
         }
     }
     catch (const std::exception &error) {
+        std::string resume_error;
+        profiler_.resumePersistentAllocationCounting(resume_error);
         restore_background();
         try {
             notify_best_effort(sender_name, std::string("Failed to prepare the profile export: ") + error.what());
@@ -184,6 +188,8 @@ void ProfilerService::finishProfiler(const std::string &sender_name, bool sender
         return;
     }
     catch (...) {
+        std::string resume_error;
+        profiler_.resumePersistentAllocationCounting(resume_error);
         restore_background();
         notify_best_effort(sender_name, "Failed to prepare the profile export.");
         return;
@@ -205,6 +211,8 @@ void ProfilerService::finishProfiler(const std::string &sender_name, bool sender
     }
     catch (...) {
         exporting_.store(false);
+        std::string resume_error;
+        profiler_.resumePersistentAllocationCounting(resume_error);
         restore_background();
         notify_best_effort(sender_name, "Failed to start the profile export worker.");
     }

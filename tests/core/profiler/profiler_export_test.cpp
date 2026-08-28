@@ -37,6 +37,11 @@ struct ProfilerTestAccess {
     {
         return profiler.allocation_sampler_.contentionDropped();
     }
+
+    static bool persistentAllocationCountingActive(const Profiler &profiler)
+    {
+        return profiler.persistent_allocation_counting_active_.load(std::memory_order_acquire);
+    }
 };
 
 }  // namespace spark
@@ -155,6 +160,70 @@ SPARK_NOINLINE bool exerciseNativeAllocations()
     std::thread releaser([cross_thread]() { std::free(cross_thread); });
     releaser.join();
     return true;
+}
+
+bool verifyPersistentAllocationExportOrdering()
+{
+    using namespace std::chrono_literals;
+
+    spark::Profiler profiler;
+    const std::uint64_t server_tid = spark::currentNativeThreadId();
+    std::string error;
+    if (!profiler.setPersistentAllocationCountingEnabled(true, server_tid, error) ||
+        !spark::ProfilerTestAccess::persistentAllocationCountingActive(profiler)) {
+        std::fprintf(stderr, "persistent export: count-only setup failed: %s\n", error.c_str());
+        return false;
+    }
+
+    spark::ProfilerOptions options;
+    options.alloc = true;
+    options.allocation_interval_bytes = 1;
+    if (!profiler.start(options, server_tid, error)) {
+        std::fprintf(stderr, "persistent export: allocation start failed: %s\n", error.c_str());
+        return false;
+    }
+    if (spark::ProfilerTestAccess::persistentAllocationCountingActive(profiler)) {
+        std::fprintf(stderr, "persistent export: count-only remained active during full profile\n");
+        profiler.cancel(error);
+        return false;
+    }
+    if (!exerciseNativeAllocations() ||
+        !waitForCondition([&] { return profiler.sampleCount() != 0; }, 2s)) {
+        std::fprintf(stderr, "persistent export: no allocation samples were collected\n");
+        profiler.cancel(error);
+        return false;
+    }
+    const std::uint64_t samples_before_stop = profiler.sampleCount();
+    const std::uint64_t bytes_before_stop = profiler.sampledAllocationBytes();
+
+    if (!profiler.stopSampling(error)) {
+        std::fprintf(stderr, "persistent export: stop failed: %s\n", error.c_str());
+        return false;
+    }
+    if (spark::ProfilerTestAccess::persistentAllocationCountingActive(profiler) ||
+        profiler.sampleCount() != samples_before_stop || profiler.sampledAllocationBytes() != bytes_before_stop) {
+        std::fprintf(stderr,
+                     "persistent export: completed profile was reset before export "
+                     "(samples=%llu/%llu bytes=%llu/%llu active=%d)\n",
+                     static_cast<unsigned long long>(profiler.sampleCount()),
+                     static_cast<unsigned long long>(samples_before_stop),
+                     static_cast<unsigned long long>(profiler.sampledAllocationBytes()),
+                     static_cast<unsigned long long>(bytes_before_stop),
+                     static_cast<int>(spark::ProfilerTestAccess::persistentAllocationCountingActive(profiler)));
+        return false;
+    }
+
+    const std::string profile = profiler.exportData({});
+    if (profile.empty() || profiler.sampleCount() != samples_before_stop) {
+        std::fprintf(stderr, "persistent export: serialization did not preserve completed samples\n");
+        return false;
+    }
+    if (!profiler.resumePersistentAllocationCounting(error) ||
+        !spark::ProfilerTestAccess::persistentAllocationCountingActive(profiler)) {
+        std::fprintf(stderr, "persistent export: count-only resume failed: %s\n", error.c_str());
+        return false;
+    }
+    return profiler.shutdown(error);
 }
 
 bool verifyRetainedAllocationProfile()
@@ -401,6 +470,11 @@ bool verifyRetainedAllocationLiveExport()
 
 int main()
 {
+#if defined(_WIN32) || defined(__linux__)
+    if (!verifyPersistentAllocationExportOrdering()) {
+        return 1;
+    }
+#endif
 #ifdef __linux__
     if (!verifyRetainedAllocationProfile() || !verifyAllocationLiveExport() || !verifyRetainedAllocationLiveExport()) {
         return 1;

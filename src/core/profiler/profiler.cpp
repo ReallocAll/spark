@@ -391,17 +391,11 @@ bool Profiler::stopSampling(std::string &error)
     if (mode_ == ProfileMode::Allocation) {
         if (!allocation_sampler_.stop(error)) {
             if (!allocation_sampler_.running()) {
-                const bool resume_persistent = persistent_allocation_counting_enabled_.load(std::memory_order_acquire);
-                if (resume_persistent) {
+                if (persistent_allocation_counting_enabled_.load(std::memory_order_acquire)) {
                     accumulatePersistentAllocationBytes();
                 }
                 running_.store(false);
-                if (resume_persistent) {
-                    std::string resume_error;
-                    if (!startPersistentAllocationCounting(resume_error)) {
-                        persistent_allocation_counting_enabled_.store(false, std::memory_order_release);
-                    }
-                }
+                end_time_ms_ = requested_end_time_ms;
             }
             return false;
         }
@@ -424,11 +418,29 @@ bool Profiler::stopSampling(std::string &error)
     }
     running_.store(false);
     end_time_ms_ = requested_end_time_ms;
-    if (mode_ == ProfileMode::Allocation && persistent_allocation_counting_enabled_.load(std::memory_order_acquire)) {
-        std::string resume_error;
-        if (!startPersistentAllocationCounting(resume_error)) {
-            persistent_allocation_counting_enabled_.store(false, std::memory_order_release);
-        }
+    // Do not restart persistent count-only here. startPersistentAllocationCounting()
+    // resets the allocation sampler session, including its completed call tree.
+    // Normal profile export is a two-phase stopSampling() -> exportData() flow, so
+    // the exporter resumes persistent counting immediately after serialization.
+    return true;
+}
+
+bool Profiler::resumePersistentAllocationCounting(std::string &error)
+{
+    std::scoped_lock lifecycle_lock(lifecycle_mutex_);
+    error.clear();
+    if (!persistent_allocation_counting_enabled_.load(std::memory_order_acquire) ||
+        persistent_allocation_counting_active_.load(std::memory_order_acquire)) {
+        return true;
+    }
+    // A full allocation profile itself accounts allocation bytes. Never start a
+    // second allocation sampler while that profile is still active.
+    if (running_.load(std::memory_order_acquire) && mode_ == ProfileMode::Allocation) {
+        return true;
+    }
+    if (!startPersistentAllocationCounting(error)) {
+        persistent_allocation_counting_enabled_.store(false, std::memory_order_release);
+        return false;
     }
     return true;
 }
@@ -446,9 +458,21 @@ std::string Profiler::stop(const ExportContext &ctx)
     }
     std::string error;
     if (!stopSampling(error)) {
+        std::string ignored;
+        resumePersistentAllocationCounting(ignored);
         return {};
     }
-    return exportData(ctx);
+    try {
+        std::string data = exportData(ctx);
+        std::string ignored;
+        resumePersistentAllocationCounting(ignored);
+        return data;
+    }
+    catch (...) {
+        std::string ignored;
+        resumePersistentAllocationCounting(ignored);
+        throw;
+    }
 }
 
 std::string Profiler::liveExport(const ExportContext &ctx)
@@ -528,15 +552,19 @@ bool Profiler::cancel(std::string &error)
 {
     std::string stop_error;
     if (stopSampling(stop_error)) {
+        std::string resume_error;
+        resumePersistentAllocationCounting(resume_error);
         error.clear();
         discardRecoveryJournal();
         return true;
     }
 
     // A backend failure invalidates the data; if stopSampling completed native cleanup,
-    // cancel is still successful. Persistent count-only may already have restarted
-    // and reset the allocation backend's per-session failure state at this point.
+    // cancel is still successful. Resume persistent count-only because there will be no
+    // export phase to do it for us.
     if (!running_.load()) {
+        std::string resume_error;
+        resumePersistentAllocationCounting(resume_error);
         error.clear();
         discardRecoveryJournal();
         return true;
