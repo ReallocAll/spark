@@ -1,0 +1,156 @@
+name: Fix Python attribution race once
+
+on:
+  push:
+    branches:
+      - feat/python-function-attribution
+    paths:
+      - .github/workflows/fix-python-attribution-race-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: feat/python-function-attribution
+          fetch-depth: 0
+      - name: Patch callback diagnostics synchronization
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('src/platform/endstone/python_attribution.h')
+          text = path.read_text()
+          old = '''    static void statusThunk(int status, const char *message) noexcept
+              {
+                  EndstonePythonAttribution *backend = activeBackend();
+                  if (backend == nullptr) {
+                      return;
+                  }
+                  if (status > 0) {
+                      backend->monitoring_active_.store(true, std::memory_order_release);
+                      backend->unavailable_reason_.clear();
+                  }
+                  else if (status == 0) {
+                      backend->monitoring_active_.store(false, std::memory_order_release);
+                  }
+                  else {
+                      backend->monitoring_active_.store(false, std::memory_order_release);
+                      backend->unavailable_reason_ = message != nullptr ? message : "unknown PEP 669 initialization error";
+                  }
+              }
+
+              static void callbackFailureThunk(const char *message) noexcept
+              {
+                  EndstonePythonAttribution *backend = activeBackend();
+                  if (backend == nullptr) {
+                      return;
+                  }
+                  backend->callback_failures_.fetch_add(1, std::memory_order_relaxed);
+                  if (message != nullptr && backend->unavailable_reason_.empty()) {
+                      // Keep only the first failure for diagnostics; do not log from the hot path.
+                      std::scoped_lock lock(backend->registry_mutex_);
+                      if (backend->unavailable_reason_.empty()) {
+                          backend->unavailable_reason_ = message;
+                      }
+                  }
+              }
+          '''
+          # Indentation above is intentionally normalized before matching because the here-doc
+          # is nested in YAML. Build the exact source block independently.
+          old = '''    static void statusThunk(int status, const char *message) noexcept
+              {
+                  EndstonePythonAttribution *backend = activeBackend();
+                  if (backend == nullptr) {
+                      return;
+                  }
+                  if (status > 0) {
+                      backend->monitoring_active_.store(true, std::memory_order_release);
+                      backend->unavailable_reason_.clear();
+                  }
+                  else if (status == 0) {
+                      backend->monitoring_active_.store(false, std::memory_order_release);
+                  }
+                  else {
+                      backend->monitoring_active_.store(false, std::memory_order_release);
+                      backend->unavailable_reason_ = message != nullptr ? message : "unknown PEP 669 initialization error";
+                  }
+              }
+          '''.replace('              {', '    {').replace('                  ', '        ').replace('              }', '    }') + '''
+              static void callbackFailureThunk(const char *message) noexcept
+              {
+                  EndstonePythonAttribution *backend = activeBackend();
+                  if (backend == nullptr) {
+                      return;
+                  }
+                  backend->callback_failures_.fetch_add(1, std::memory_order_relaxed);
+                  if (message != nullptr && backend->unavailable_reason_.empty()) {
+                      // Keep only the first failure for diagnostics; do not log from the hot path.
+                      std::scoped_lock lock(backend->registry_mutex_);
+                      if (backend->unavailable_reason_.empty()) {
+                          backend->unavailable_reason_ = message;
+                      }
+                  }
+              }
+          '''.replace('              static', '    static').replace('              {', '    {').replace('                  ', '        ').replace('              }', '    }')
+          new = '''    static void statusThunk(int status, const char *message) noexcept
+              {
+                  EndstonePythonAttribution *backend = activeBackend();
+                  if (backend == nullptr) {
+                      return;
+                  }
+                  std::scoped_lock lock(backend->registry_mutex_);
+                  if (status > 0) {
+                      backend->monitoring_active_.store(true, std::memory_order_release);
+                      backend->unavailable_reason_.clear();
+                  }
+                  else if (status == 0) {
+                      backend->monitoring_active_.store(false, std::memory_order_release);
+                  }
+                  else {
+                      backend->monitoring_active_.store(false, std::memory_order_release);
+                      backend->unavailable_reason_ = message != nullptr ? message : "unknown PEP 669 initialization error";
+                  }
+              }
+
+              static void callbackFailureThunk(const char *message) noexcept
+              {
+                  (void)message;
+                  EndstonePythonAttribution *backend = activeBackend();
+                  if (backend != nullptr) {
+                      // Failure reporting is an exceptional event callback path. Keep it
+                      // allocation-free and lock-free; exportState reports the atomic count.
+                      backend->callback_failures_.fetch_add(1, std::memory_order_relaxed);
+                  }
+              }
+          '''.replace('              static', '    static').replace('              {', '    {').replace('                  ', '        ').replace('              }', '    }')
+          if old not in text:
+              raise SystemExit('expected callback block was not found')
+          path.write_text(text.replace(old, new, 1))
+          PY
+      - name: Install clang-format 20
+        shell: bash
+        run: |
+          set -euo pipefail
+          wget -qO /tmp/llvm.sh https://apt.llvm.org/llvm.sh
+          chmod +x /tmp/llvm.sh
+          sudo /tmp/llvm.sh 20
+          sudo apt-get install -y clang-format-20
+      - name: Format and commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          clang-format-20 -i src/platform/endstone/python_attribution.h
+          rm -f .github/workflows/format-python-attribution-once.yml
+          rm -f .github/workflows/fix-python-attribution-race-once.yml
+          git diff --check
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m 'fix: keep Python callback failure diagnostics lock-free'
+          git push origin HEAD:feat/python-function-attribution
