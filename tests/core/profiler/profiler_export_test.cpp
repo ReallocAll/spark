@@ -46,7 +46,10 @@ struct ProfilerTestAccess {
         return profiler.persistent_allocation_counting_active_.load(std::memory_order_acquire);
     }
 
-    static void requestPersistentAllocationBackendStop(Profiler &profiler) { profiler.allocation_sampler_.requestStop(); }
+    static void requestPersistentAllocationBackendStop(Profiler &profiler)
+    {
+        profiler.allocation_sampler_.requestStop();
+    }
 };
 
 }  // namespace spark
@@ -280,9 +283,8 @@ bool verifyPersistentAllocationExportOrdering()
     const std::uint64_t bytes_after_stop = profiler.sampledAllocationBytes();
     if (spark::ProfilerTestAccess::persistentAllocationCountingActive(profiler) || samples_after_stop == 0 ||
         bytes_after_stop == 0 || samples_after_stop < samples_before_stop || bytes_after_stop < bytes_before_stop) {
-        std::fprintf(stderr,
-                     "persistent export: completed profile was lost before export "
-                     "(samples=%llu/%llu bytes=%llu/%llu active=%d)\n",
+        std::fprintf(stderr, "persistent export: completed profile was lost before export "
+                             "(samples=%llu/%llu bytes=%llu/%llu active=%d)\n",
                      static_cast<unsigned long long>(samples_after_stop),
                      static_cast<unsigned long long>(samples_before_stop),
                      static_cast<unsigned long long>(bytes_after_stop),
@@ -307,7 +309,8 @@ bool verifyPersistentAllocationExportOrdering()
     const std::string profile = profiler.exportData({});
     if (profile.empty() || !serializedAllocationTreeNonEmpty(profile) || profiler.sampleCount() != samples_after_stop ||
         profiler.sampledAllocationBytes() != bytes_after_stop) {
-        std::fprintf(stderr, "persistent export: serialized SamplerData did not preserve a non-empty allocation tree\n");
+        std::fprintf(stderr,
+                     "persistent export: serialized SamplerData did not preserve a non-empty allocation tree\n");
         return false;
     }
     if (!profiler.resumePersistentAllocationCounting(error) ||
