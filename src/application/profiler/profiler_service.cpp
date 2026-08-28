@@ -331,6 +331,7 @@ void ProfilerService::onTick(double mspt)
         if (now >= next_background_retry_ms_) {
             if (startBackgroundSession()) {
                 background_started_ = true;
+                background_retry_delay_s_ = 0;
             }
             else {
                 // Exponential backoff: 5s -> 15s -> 30s -> 60s (cap).
