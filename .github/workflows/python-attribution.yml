@@ -44,6 +44,19 @@ jobs:
           print(f'SPARK_TEST_LIBPYTHON={path}')
           PY
 
+      - name: Build shadow stack stress test
+        shell: bash
+        run: |
+          g++ -std=c++20 -O2 -Wall -Wextra -Wpedantic -Werror \
+            -Isrc \
+            tests/native/python/python_shadow_stack_test.cpp \
+            -pthread \
+            -o python-shadow-stack-test
+
+      - name: Run shadow stack stress test
+        shell: bash
+        run: ./python-shadow-stack-test
+
       - name: Build production bridge runtime test
         shell: bash
         run: |
