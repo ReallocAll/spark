@@ -1,0 +1,42 @@
+name: Fix Python worker qualname assertion
+
+on:
+  push:
+    branches:
+      - feat/python-function-attribution
+    paths:
+      - .github/workflows/agent-fix-worker-qualname.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/python-function-attribution
+      - name: Fix runtime assertion and remove debug output
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('tests/native/python/python_attribution_runtime_test.cpp')
+          text = p.read_text()
+          start = text.index('    const bool worker_stack_seen = anySnapshotContains')
+          end_marker = '    ok &= expect(worker_stack_seen, "worker Python thread stack was not observed");\n'
+          end = text.index(end_marker, start) + len(end_marker)
+          replacement = '''    ok &= expect(anySnapshotContains(\n                     state, {"worker_thread_hotspot", "worker_thread_hotspot.<locals>.worker_leaf"}),\n                 "worker Python thread stack was not observed");\n'''
+          text = text[:start] + replacement + text[end:]
+          p.write_text(text)
+          PY
+          git diff --check
+      - name: Commit fix
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add tests/native/python/python_attribution_runtime_test.cpp
+          git commit -m "test: match Python worker qualified name"
+          git push origin HEAD:feat/python-function-attribution
