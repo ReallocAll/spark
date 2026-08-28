@@ -468,7 +468,7 @@ bool Profiler::resumePersistentAllocationCounting(std::string &error)
         !allocation_sampler_.running()) {
         std::string cleanup_error;
         if (!allocation_sampler_.stop(cleanup_error)) {
-            error = std::move(cleanup_error;
+            error = std::move(cleanup_error);
             return false;
         }
         stopRecoveryWriter();
