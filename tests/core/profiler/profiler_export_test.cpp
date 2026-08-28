@@ -249,6 +249,26 @@ bool verifyPersistentAllocationExportOrdering()
         return false;
     }
 
+    const std::uint64_t persistent_before_direct_recovery = profiler.persistentAllocationBytes();
+    if (!exerciseNativeAllocations() || !waitForCondition(
+                                            [&] {
+                                                return profiler.persistentAllocationBytes() >
+                                                       persistent_before_direct_recovery;
+                                            },
+                                            2s)) {
+        std::fprintf(stderr, "persistent export: initial count-only statistics did not advance\n");
+        return false;
+    }
+    const std::uint64_t persistent_at_direct_stop = profiler.persistentAllocationBytes();
+    spark::ProfilerTestAccess::requestPersistentAllocationBackendStop(profiler);
+    if (!profiler.resumePersistentAllocationCounting(error) ||
+        !spark::ProfilerTestAccess::persistentAllocationCountingActive(profiler) ||
+        !spark::ProfilerTestAccess::allocationSamplerRunning(profiler) ||
+        profiler.persistentAllocationBytes() < persistent_at_direct_stop) {
+        std::fprintf(stderr, "persistent export: direct stopped count-only recovery failed: %s\n", error.c_str());
+        return false;
+    }
+
     spark::ProfilerOptions options;
     options.alloc = true;
     options.allocation_interval_bytes = 1;
@@ -320,15 +340,28 @@ bool verifyPersistentAllocationExportOrdering()
         return false;
     }
 
+    const std::uint64_t persistent_before_backend_stop = profiler.persistentAllocationBytes();
+    if (!exerciseNativeAllocations() || !waitForCondition(
+                                            [&] {
+                                                return profiler.persistentAllocationBytes() >
+                                                       persistent_before_backend_stop;
+                                            },
+                                            2s)) {
+        std::fprintf(stderr, "persistent export: pre-stop count-only statistics did not advance\n");
+        return false;
+    }
+    const std::uint64_t persistent_at_backend_stop = profiler.persistentAllocationBytes();
     spark::ProfilerTestAccess::requestPersistentAllocationBackendStop(profiler);
     profiler.onTick(50.0);
     if (!profiler.persistentAllocationCountingEnabled() ||
-        spark::ProfilerTestAccess::persistentAllocationCountingActive(profiler)) {
-        std::fprintf(stderr, "persistent export: transient count-only backend stop disabled configured metrics\n");
+        spark::ProfilerTestAccess::persistentAllocationCountingActive(profiler) ||
+        profiler.persistentAllocationBytes() < persistent_at_backend_stop) {
+        std::fprintf(stderr, "persistent export: transient count-only backend stop lost configured metrics/bytes\n");
         return false;
     }
     profiler.onTick(50.0);
-    if (!spark::ProfilerTestAccess::persistentAllocationCountingActive(profiler)) {
+    if (!spark::ProfilerTestAccess::persistentAllocationCountingActive(profiler) ||
+        !spark::ProfilerTestAccess::allocationSamplerRunning(profiler)) {
         std::fprintf(stderr, "persistent export: idle tick did not restart stopped count-only backend\n");
         return false;
     }
