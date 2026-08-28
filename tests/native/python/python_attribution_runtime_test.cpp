@@ -263,9 +263,9 @@ assert _thread_done.is_set()
 
 _plugin_root = os.path.join(os.getcwd(), 'plugins', '.local', 'lib', 'python-test', 'site-packages')
 _plugin_file = os.path.join(_plugin_root, 'endstone_hotspot', 'main.py')
-_plugin = types.ModuleType('endstone_hotspot.main')
+_plugin = types.ModuleType('endstone_spark_python_hotspot_test.main')
 _plugin.__file__ = _plugin_file
-sys.modules['endstone_hotspot.main'] = _plugin
+sys.modules['endstone_spark_python_hotspot_test.main'] = _plugin
 exec(compile('def plugin_handler():\n    fake_dep.external_leaf()\n', _plugin_file, 'exec'), _plugin.__dict__)
 
 _purelib = sysconfig.get_paths().get('purelib') or sysconfig.get_paths().get('platlib')
@@ -324,7 +324,7 @@ json.dumps({'spark': [1, 2, 3], 'nested': {'ok': True}})
     bool stdlib_code = false;
     for (const PythonCodeMetadata &metadata : state.codes) {
         if (metadata.qualname == "plugin_handler") {
-            plugin_code = metadata.category == spark::PythonCodeCategory::Plugin && metadata.plugin_source == "hotspot" &&
+            plugin_code = metadata.category == spark::PythonCodeCategory::Plugin && metadata.plugin_source == "spark-python-hotspot-test" &&
                           metadata.filename.find("plugins") != std::string::npos;
         }
         if (metadata.qualname == "external_leaf") {

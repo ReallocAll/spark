@@ -305,6 +305,7 @@ private:
     {
         static constexpr std::string_view kSource = R"PY(
 import ctypes
+import importlib.metadata
 import os
 import sys
 import sysconfig
@@ -329,7 +330,16 @@ _FAILURE = ctypes.PYFUNCTYPE(None, ctypes.c_char_p)(FAILURE_ADDR)
 _cache = {}
 _module_files = {}
 _tool_id = None
+_thread_state = threading.local()
 _plugin_root = os.path.normcase(os.path.abspath(os.path.join('plugins', '.local')))
+_plugin_sources = {}
+try:
+    for _entry_point in importlib.metadata.entry_points(group='endstone'):
+        _module = _entry_point.value.partition(':')[0].split('.', 1)[0]
+        if _module:
+            _plugin_sources.setdefault(_module, _entry_point.name)
+except BaseException:
+    pass
 _paths = sysconfig.get_paths()
 _stdlib_root = os.path.normcase(os.path.abspath(_paths.get('stdlib', ''))) if _paths.get('stdlib') else ''
 _purelib_root = os.path.normcase(os.path.abspath(_paths.get('purelib', ''))) if _paths.get('purelib') else ''
@@ -374,7 +384,8 @@ def _module_for(filename):
 def _category(filename, module):
     if _under(filename, _plugin_root):
         top = module.split('.', 1)[0]
-        source = top[9:] if top.startswith('endstone_') else top
+        fallback = top[9:] if top.startswith('endstone_') else top
+        source = _plugin_sources.get(top, fallback.replace('_', '-'))
         return 0, source
     if module == 'endstone' or module.startswith('endstone.'):
         return 3, ''
@@ -406,6 +417,15 @@ def _code_id(code):
 
 def _safe_event(kind, code):
     try:
+        if not getattr(_thread_state, 'bootstrapped', False):
+            current = sys._current_frames().get(threading.get_ident())
+            chain = _bootstrap_frame(threading.get_native_id(), current) if current is not None else []
+            _thread_state.bootstrapped = True
+            # PY_START/PY_RESUME/PY_THROW run with the entered frame active.
+            # If the first event on a newly-created thread is already present
+            # in the public frame chain, bootstrap has accounted for it.
+            if kind <= 2 and code in chain:
+                return
         _EVENT(kind, _code_id(code))
     except BaseException as exc:
         try:
@@ -438,6 +458,23 @@ def _py_unwind(code, instruction_offset, exception):
     _safe_event(5, code)
 
 
+def _bootstrap_frame(native_id, frame):
+    chain = []
+    cursor = frame
+    while cursor is not None:
+        module_name = cursor.f_globals.get('__name__', '')
+        code = cursor.f_code
+        if module_name != '_endstone_spark_monitor' and not (
+            code.co_name == '<module>' and code.co_filename == '<string>'
+        ):
+            chain.append(code)
+        cursor = cursor.f_back
+    _BOOT_RESET(int(native_id))
+    for code in reversed(chain):
+        _BOOT_PUSH(int(native_id), _code_id(code))
+    return chain
+
+
 def _bootstrap():
     _refresh_modules()
     native_by_ident = {
@@ -445,23 +482,14 @@ def _bootstrap():
         for thread in threading.enumerate()
         if thread.ident is not None and getattr(thread, 'native_id', None) is not None
     }
+    current_ident = threading.get_ident()
     for ident, frame in sys._current_frames().items():
         native_id = native_by_ident.get(ident)
         if native_id is None:
             continue
-        chain = []
-        cursor = frame
-        while cursor is not None:
-            module_name = cursor.f_globals.get('__name__', '')
-            code = cursor.f_code
-            if module_name != '_endstone_spark_monitor' and not (
-                code.co_name == '<module>' and code.co_filename == '<string>'
-            ):
-                chain.append(code)
-            cursor = cursor.f_back
-        _BOOT_RESET(int(native_id))
-        for code in reversed(chain):
-            _BOOT_PUSH(int(native_id), _code_id(code))
+        _bootstrap_frame(native_id, frame)
+        if ident == current_ident:
+            _thread_state.bootstrapped = True
 
 
 def start():
