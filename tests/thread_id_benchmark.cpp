@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <thread>
 #include <vector>
 
@@ -92,11 +93,23 @@ void printCase(const char *name, std::size_t threads, std::size_t iterations_per
     std::printf("%s,%zu,%zu,%.3f\n", name, threads, iterations_per_thread, ns_per_call);
 }
 
+std::size_t configuredIterations() noexcept
+{
+    constexpr std::size_t kDefaultIterations = 2000000;
+    const char *value = std::getenv("SPARK_THREAD_ID_BENCH_ITERATIONS");
+    if (value == nullptr || value[0] == '\0') {
+        return kDefaultIterations;
+    }
+    char *end = nullptr;
+    const unsigned long long parsed = std::strtoull(value, &end, 10);
+    return end != value && *end == '\0' && parsed != 0 ? static_cast<std::size_t>(parsed) : kDefaultIterations;
+}
+
 }  // namespace
 
 int main()
 {
-    constexpr std::size_t kIterationsPerThread = 2000000;
+    const std::size_t iterations_per_thread = configuredIterations();
 
     // Warm both paths before measuring so TLS initialization is not charged to
     // the steady-state callback fast path.
@@ -104,9 +117,9 @@ int main()
     (void)warmup;
 
     std::printf("case,threads,iterations_per_thread,median_ns_per_call\n");
-    printCase("direct", 1, kIterationsPerThread, medianNsPerCall(directThreadId, 1, kIterationsPerThread));
-    printCase("cached", 1, kIterationsPerThread, medianNsPerCall(cachedThreadId, 1, kIterationsPerThread));
-    printCase("direct", 4, kIterationsPerThread, medianNsPerCall(directThreadId, 4, kIterationsPerThread));
-    printCase("cached", 4, kIterationsPerThread, medianNsPerCall(cachedThreadId, 4, kIterationsPerThread));
+    printCase("direct", 1, iterations_per_thread, medianNsPerCall(directThreadId, 1, iterations_per_thread));
+    printCase("cached", 1, iterations_per_thread, medianNsPerCall(cachedThreadId, 1, iterations_per_thread));
+    printCase("direct", 4, iterations_per_thread, medianNsPerCall(directThreadId, 4, iterations_per_thread));
+    printCase("cached", 4, iterations_per_thread, medianNsPerCall(cachedThreadId, 4, iterations_per_thread));
     return 0;
 }
