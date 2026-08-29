@@ -20,57 +20,62 @@ jobs:
           ref: perf/self-overhead
 
       - name: Apply focused callback fast-path change
-        shell: python
+        shell: bash
         run: |
+          set -euo pipefail
+          python - <<'PY'
           from pathlib import Path
 
           path = Path("src/platform/endstone/python_attribution.h")
           text = path.read_text(encoding="utf-8")
           old = """    static void dispatchDirectEvent(PythonExecutionEvent event, PyObject *code) noexcept
-    {
-        EndstonePythonAttribution *backend = activeBackend();
-        if (backend == nullptr || code == nullptr) {
-            return;
-        }
-        const PythonCodeId code_id = backend->codeIdForObject(code);
-        if (code_id == kInvalidPythonCodeId) {
-            backend->callback_failures_.fetch_add(1, std::memory_order_relaxed);
-            return;
-        }
-        backend->event_counts_[static_cast<std::size_t>(event)].fetch_add(1, std::memory_order_relaxed);
-        backend->shadow_.onEvent(currentNativeThreadId(), event, code_id);
-    }
-"""
+          {
+              EndstonePythonAttribution *backend = activeBackend();
+              if (backend == nullptr || code == nullptr) {
+                  return;
+              }
+              const PythonCodeId code_id = backend->codeIdForObject(code);
+              if (code_id == kInvalidPythonCodeId) {
+                  backend->callback_failures_.fetch_add(1, std::memory_order_relaxed);
+                  return;
+              }
+              backend->event_counts_[static_cast<std::size_t>(event)].fetch_add(1, std::memory_order_relaxed);
+              backend->shadow_.onEvent(currentNativeThreadId(), event, code_id);
+          }
+          """
           new = """    static std::uint64_t callbackNativeThreadId() noexcept
-    {
-        // PEP 669 callbacks always execute on the Python thread they describe.
-        // Native thread IDs are stable for a thread's lifetime, so resolve the
-        // OS TID once per callback thread instead of issuing gettid for every
-        // Python execution event on Linux.
-        thread_local const std::uint64_t native_tid = currentNativeThreadId();
-        return native_tid;
-    }
+          {
+              // PEP 669 callbacks always execute on the Python thread they describe.
+              // Native thread IDs are stable for a thread's lifetime, so resolve the
+              // OS TID once per callback thread instead of issuing gettid for every
+              // Python execution event on Linux.
+              thread_local const std::uint64_t native_tid = currentNativeThreadId();
+              return native_tid;
+          }
 
-    static void dispatchDirectEvent(PythonExecutionEvent event, PyObject *code) noexcept
-    {
-        EndstonePythonAttribution *backend = activeBackend();
-        if (backend == nullptr || code == nullptr) {
-            return;
-        }
-        const PythonCodeId code_id = backend->codeIdForObject(code);
-        if (code_id == kInvalidPythonCodeId) {
-            backend->callback_failures_.fetch_add(1, std::memory_order_relaxed);
-            return;
-        }
-        backend->event_counts_[static_cast<std::size_t>(event)].fetch_add(1, std::memory_order_relaxed);
-        backend->shadow_.onEvent(callbackNativeThreadId(), event, code_id);
-    }
-"""
-          if old not in text:
-              raise SystemExit("target callback block not found exactly")
+              static void dispatchDirectEvent(PythonExecutionEvent event, PyObject *code) noexcept
+          {
+              EndstonePythonAttribution *backend = activeBackend();
+              if (backend == nullptr || code == nullptr) {
+                  return;
+              }
+              const PythonCodeId code_id = backend->codeIdForObject(code);
+              if (code_id == kInvalidPythonCodeId) {
+                  backend->callback_failures_.fetch_add(1, std::memory_order_relaxed);
+                  return;
+              }
+              backend->event_counts_[static_cast<std::size_t>(event)].fetch_add(1, std::memory_order_relaxed);
+              backend->shadow_.onEvent(callbackNativeThreadId(), event, code_id);
+          }
+          """
           if text.count(old) != 1:
               raise SystemExit(f"expected one callback block, found {text.count(old)}")
           path.write_text(text.replace(old, new), encoding="utf-8")
+          PY
+
+      - name: Format touched source
+        shell: bash
+        run: clang-format -i src/platform/endstone/python_attribution.h
 
       - name: Verify diff is focused
         shell: bash
