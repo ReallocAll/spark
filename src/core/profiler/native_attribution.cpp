@@ -79,6 +79,16 @@ constexpr std::array KPythonAttributionObserverMethods{
     std::string_view("spark::endstone_adapter::EndstonePythonAttribution::pyReturnThunk"),
     std::string_view("spark::endstone_adapter::EndstonePythonAttribution::pyYieldThunk"),
     std::string_view("spark::endstone_adapter::EndstonePythonAttribution::pyUnwindThunk"),
+    std::string_view("spark::endstone_adapter::EndstonePythonAttribution::pyStartNativeCallback"),
+    std::string_view("spark::endstone_adapter::EndstonePythonAttribution::pyResumeNativeCallback"),
+    std::string_view("spark::endstone_adapter::EndstonePythonAttribution::pyThrowNativeCallback"),
+    std::string_view("spark::endstone_adapter::EndstonePythonAttribution::pyReturnNativeCallback"),
+    std::string_view("spark::endstone_adapter::EndstonePythonAttribution::pyYieldNativeCallback"),
+    std::string_view("spark::endstone_adapter::EndstonePythonAttribution::pyUnwindNativeCallback"),
+    // The tiny per-event wrappers may tail-call this shared helper. Treat the
+    // helper itself as an observer boundary so optimized builds cannot expose
+    // Spark's own monitoring branch when the wrapper frame is elided.
+    std::string_view("spark::endstone_adapter::EndstonePythonAttribution::nativeEventCallback"),
 };
 
 constexpr std::array KPythonAttributionBridgeMethods{
@@ -221,9 +231,8 @@ int findSelfExecutableRange(dl_phdr_info *info, std::size_t, void *opaque)
         }
         context.self_exec_begin =
             (std::min)(context.self_exec_begin, context.self_base + static_cast<std::uintptr_t>(header.p_vaddr));
-        context.self_exec_end =
-            (std::max)(context.self_exec_end,
-                       context.self_base + static_cast<std::uintptr_t>(header.p_vaddr + header.p_memsz));
+        context.self_exec_end = (std::max)(
+            context.self_exec_end, context.self_base + static_cast<std::uintptr_t>(header.p_vaddr + header.p_memsz));
     }
     return 1;
 }

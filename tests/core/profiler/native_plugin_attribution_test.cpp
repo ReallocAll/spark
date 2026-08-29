@@ -315,6 +315,8 @@ int main()
     const spark::FrameKey observer_ctypes = frame(5, 0x500000, 0x200);
     const spark::FrameKey observer_ffi = frame(5, 0x500000, 0x300);
     const spark::FrameKey observer_thunk = frame(5, 0x500000, 0x400);
+    const spark::FrameKey observer_native_wrapper = frame(5, 0x500000, 0x410);
+    const spark::FrameKey observer_native_shared = frame(5, 0x500000, 0x420);
     const spark::FrameKey user_ctypes_parent = frame(5, 0x500000, 0x500);
     const spark::FrameKey user_ctypes = frame(5, 0x500000, 0x600);
     const spark::FrameKey user_ffi = frame(5, 0x500000, 0x700);
@@ -328,6 +330,16 @@ int main()
         spark::ResolvedFrame{.class_name = "spark",
                              .method_name =
                                  "spark::endstone_adapter::EndstonePythonAttribution::pyStartThunk(_object*, int)"});
+    resolved.emplace(
+        observer_native_wrapper,
+        spark::ResolvedFrame{
+            .class_name = "spark",
+            .method_name =
+                "spark::endstone_adapter::EndstonePythonAttribution::pyStartNativeCallback(_object*, _object*)"});
+    resolved.emplace(observer_native_shared,
+                     spark::ResolvedFrame{.class_name = "spark",
+                                          .method_name = "spark::endstone_adapter::EndstonePythonAttribution::"
+                                                         "nativeEventCallback(spark::PythonExecutionEvent, _object*)"});
     resolved.emplace(user_ctypes_parent,
                      spark::ResolvedFrame{.class_name = "plugin-a.dll", .method_name = "userCtypesCaller"});
     resolved.emplace(user_ctypes, spark::ResolvedFrame{.class_name = "_ctypes", .method_name = "_ctypes_callproc"});
@@ -342,6 +354,8 @@ int main()
     observer_tree.log({observer_ctypes, observer_parent, root_frame}, 3, 2);
     observer_tree.log({observer_ffi, observer_ctypes, observer_parent, root_frame}, 3, 3);
     observer_tree.log({observer_thunk, observer_ffi, observer_ctypes, observer_parent, root_frame}, 3, 7);
+    observer_tree.log({observer_native_wrapper, observer_parent, root_frame}, 3, 5);
+    observer_tree.log({observer_native_shared, observer_parent, root_frame}, 3, 6);
     observer_tree.log({user_native, user_ffi, user_ctypes, user_ctypes_parent, root_frame}, 3, 11);
     observer_tree.log({lookalike_thunk, user_ctypes_parent, root_frame}, 3, 13);
 
@@ -349,6 +363,8 @@ int main()
     assert(spark::filterExecutionTree(observer_filtered, observer_tree, resolved, instrumentation_ranges));
     const auto observer_keys = spark::collectFrameKeys(observer_filtered);
     assert(std::ranges::find(observer_keys, observer_thunk) == observer_keys.end());
+    assert(std::ranges::find(observer_keys, observer_native_wrapper) == observer_keys.end());
+    assert(std::ranges::find(observer_keys, observer_native_shared) == observer_keys.end());
     assert(std::ranges::find(observer_keys, observer_ffi) == observer_keys.end());
     assert(std::ranges::find(observer_keys, observer_ctypes) == observer_keys.end());
     assert(std::ranges::find(observer_keys, observer_parent) == observer_keys.end());
