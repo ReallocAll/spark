@@ -1,0 +1,58 @@
+name: Apply native PEP 669 callback bridge prototype v3
+
+on:
+  push:
+    branches:
+      - perf/python-native-callback-bridge
+    paths:
+      - ".github/workflows/apply-python-native-callback-bridge-v3.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout prototype branch
+        uses: actions/checkout@v7
+        with:
+          ref: perf/python-native-callback-bridge
+
+      - name: Apply prototype
+        run: python .github/scripts/apply_python_native_callback_bridge.py
+
+      - name: Format touched code
+        run: clang-format -i src/platform/endstone/python_attribution.h tests/native/python/python_attribution_runtime_test.cpp
+
+      - name: Compile standalone runtime bridge test
+        shell: bash
+        run: |
+          set -euo pipefail
+          g++ -std=c++20 -O2 -Wall -Wextra -Wpedantic -Werror \
+            -Isrc \
+            tests/native/python/python_attribution_runtime_test.cpp \
+            src/native/sampler/thread_info.cpp \
+            -ldl -pthread \
+            -o /tmp/python-attribution-runtime-test
+
+      - name: Verify focused prototype diff
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          mapfile -t changed < <(git diff --name-only)
+          printf '%s\n' "${changed[@]}"
+          test "${#changed[@]}" -eq 2
+          test "${changed[0]}" = "src/platform/endstone/python_attribution.h"
+          test "${changed[1]}" = "tests/native/python/python_attribution_runtime_test.cpp"
+
+      - name: Commit prototype
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/platform/endstone/python_attribution.h tests/native/python/python_attribution_runtime_test.cpp
+          git commit -m "perf: bypass ctypes for PEP 669 event callbacks"
+          git push origin HEAD:perf/python-native-callback-bridge
