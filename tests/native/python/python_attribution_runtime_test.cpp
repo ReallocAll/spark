@@ -185,7 +185,10 @@ import sys
 import sysconfig
 import threading
 import types
+import _endstone_spark_monitor as _spark_monitor
 
+assert type(_spark_monitor._PY_START).__name__ == 'builtin_function_or_method'
+assert type(_spark_monitor._PY_RETURN).__name__ == 'builtin_function_or_method'
 _SNAP = ctypes.PYFUNCTYPE(None)(SNAPSHOT_ADDRESS)
 
 def c():

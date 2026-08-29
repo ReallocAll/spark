@@ -199,6 +199,22 @@ private:
     using LongAsUnsignedLongLongFn = unsigned long long (*)(PyObject *);
     using DecRefFn = void (*)(PyObject *);
     using ErrClearFn = void (*)();
+    using PyCFunction = PyObject *(*)(PyObject *, PyObject *);
+
+    // PyMethodDef and METH_VARARGS are public Stable-ABI surface. Keep
+    // the public layout locally so Spark can still resolve libpython at runtime.
+    struct PyMethodDef {
+        const char *name;
+        PyCFunction method;
+        int flags;
+        const char *doc;
+    };
+
+    using CFunctionNewExFn = PyObject *(*)(PyMethodDef *, PyObject *, PyObject *);
+    using ImportAddModuleFn = PyObject *(*)(const char *);
+    using ObjectSetAttrStringFn = int (*)(PyObject *, const char *, PyObject *);
+    using TupleGetItemFn = PyObject *(*)(PyObject *, std::intptr_t);
+    using IncRefFn = void (*)(PyObject *);
 
     struct PythonApi {
         GetVersionFn get_version = nullptr;
@@ -208,6 +224,11 @@ private:
         IsInitializedFn is_initialized = nullptr;
         ObjectCallOneArgFn object_call_one_arg = nullptr;
         LongAsUnsignedLongLongFn long_as_unsigned_long_long = nullptr;
+        CFunctionNewExFn cfunction_new_ex = nullptr;
+        ImportAddModuleFn import_add_module = nullptr;
+        ObjectSetAttrStringFn object_set_attr_string = nullptr;
+        TupleGetItemFn tuple_get_item = nullptr;
+        IncRefFn inc_ref = nullptr;
         DecRefFn dec_ref = nullptr;
         ErrClearFn err_clear = nullptr;
     };
@@ -279,11 +300,19 @@ private:
         api_.object_call_one_arg = reinterpret_cast<ObjectCallOneArgFn>(symbol("PyObject_CallOneArg"));
         api_.long_as_unsigned_long_long =
             reinterpret_cast<LongAsUnsignedLongLongFn>(symbol("PyLong_AsUnsignedLongLong"));
+        api_.cfunction_new_ex = reinterpret_cast<CFunctionNewExFn>(symbol("PyCFunction_NewEx"));
+        api_.import_add_module = reinterpret_cast<ImportAddModuleFn>(symbol("PyImport_AddModule"));
+        api_.object_set_attr_string = reinterpret_cast<ObjectSetAttrStringFn>(symbol("PyObject_SetAttrString"));
+        api_.tuple_get_item = reinterpret_cast<TupleGetItemFn>(symbol("PyTuple_GetItem"));
+        api_.inc_ref = reinterpret_cast<IncRefFn>(symbol("Py_IncRef"));
         api_.dec_ref = reinterpret_cast<DecRefFn>(symbol("Py_DecRef"));
         api_.err_clear = reinterpret_cast<ErrClearFn>(symbol("PyErr_Clear"));
         return api_.get_version != nullptr && api_.gil_ensure != nullptr && api_.gil_release != nullptr &&
                api_.run_simple_string != nullptr && api_.object_call_one_arg != nullptr &&
-               api_.long_as_unsigned_long_long != nullptr && api_.dec_ref != nullptr && api_.err_clear != nullptr;
+               api_.long_as_unsigned_long_long != nullptr && api_.cfunction_new_ex != nullptr &&
+               api_.import_add_module != nullptr && api_.object_set_attr_string != nullptr &&
+               api_.tuple_get_item != nullptr && api_.inc_ref != nullptr && api_.dec_ref != nullptr &&
+               api_.err_clear != nullptr;
     }
 
     void resetSessionState() noexcept
@@ -321,12 +350,8 @@ private:
         script << "_m = types.ModuleType('_endstone_spark_monitor')\n";
         script << "_m.REGISTER_ADDR = " << reinterpret_cast<std::uintptr_t>(&registerThunk) << "\n";
         script << "_m.SET_CODE_HELPER_ADDR = " << reinterpret_cast<std::uintptr_t>(&setCodeIdHelperThunk) << "\n";
-        script << "_m.PY_START_ADDR = " << reinterpret_cast<std::uintptr_t>(&pyStartThunk) << "\n";
-        script << "_m.PY_RESUME_ADDR = " << reinterpret_cast<std::uintptr_t>(&pyResumeThunk) << "\n";
-        script << "_m.PY_THROW_ADDR = " << reinterpret_cast<std::uintptr_t>(&pyThrowThunk) << "\n";
-        script << "_m.PY_RETURN_ADDR = " << reinterpret_cast<std::uintptr_t>(&pyReturnThunk) << "\n";
-        script << "_m.PY_YIELD_ADDR = " << reinterpret_cast<std::uintptr_t>(&pyYieldThunk) << "\n";
-        script << "_m.PY_UNWIND_ADDR = " << reinterpret_cast<std::uintptr_t>(&pyUnwindThunk) << "\n";
+        script << "_m.INSTALL_NATIVE_CALLBACKS_ADDR = "
+               << reinterpret_cast<std::uintptr_t>(&installNativeCallbacksThunk) << "\n";
         script << "_m.BOOT_RESET_ADDR = " << reinterpret_cast<std::uintptr_t>(&bootstrapResetThunk) << "\n";
         script << "_m.BOOT_PUSH_ADDR = " << reinterpret_cast<std::uintptr_t>(&bootstrapPushThunk) << "\n";
         script << "_m.STATUS_ADDR = " << reinterpret_cast<std::uintptr_t>(&statusThunk) << "\n";
@@ -358,12 +383,7 @@ _REGISTER = ctypes.PYFUNCTYPE(
     ctypes.c_char_p,
 )(REGISTER_ADDR)
 _SET_CODE_HELPER = ctypes.PYFUNCTYPE(None, ctypes.py_object)(SET_CODE_HELPER_ADDR)
-_PY_START = ctypes.PYFUNCTYPE(None, ctypes.py_object, ctypes.c_int)(PY_START_ADDR)
-_PY_RESUME = ctypes.PYFUNCTYPE(None, ctypes.py_object, ctypes.c_int)(PY_RESUME_ADDR)
-_PY_THROW = ctypes.PYFUNCTYPE(None, ctypes.py_object, ctypes.c_int, ctypes.py_object)(PY_THROW_ADDR)
-_PY_RETURN = ctypes.PYFUNCTYPE(None, ctypes.py_object, ctypes.c_int, ctypes.py_object)(PY_RETURN_ADDR)
-_PY_YIELD = ctypes.PYFUNCTYPE(None, ctypes.py_object, ctypes.c_int, ctypes.py_object)(PY_YIELD_ADDR)
-_PY_UNWIND = ctypes.PYFUNCTYPE(None, ctypes.py_object, ctypes.c_int, ctypes.py_object)(PY_UNWIND_ADDR)
+_INSTALL_NATIVE_CALLBACKS = ctypes.PYFUNCTYPE(ctypes.c_int)(INSTALL_NATIVE_CALLBACKS_ADDR)
 _BOOT_RESET = ctypes.PYFUNCTYPE(None, ctypes.c_uint64)(BOOT_RESET_ADDR)
 _BOOT_PUSH = ctypes.PYFUNCTYPE(None, ctypes.c_uint64, ctypes.c_uint64)(BOOT_PUSH_ADDR)
 _STATUS = ctypes.PYFUNCTYPE(None, ctypes.c_int, ctypes.c_char_p)(STATUS_ADDR)
@@ -495,6 +515,9 @@ def start():
     if monitoring is None:
         _STATUS(-1, b'sys.monitoring is unavailable')
         return
+    if _INSTALL_NATIVE_CALLBACKS() != 0:
+        _STATUS(-1, b'failed to install native PEP 669 callbacks')
+        return
     for candidate in (monitoring.PROFILER_ID, 3, 4):
         try:
             if monitoring.get_tool(candidate) is None:
@@ -588,6 +611,98 @@ def stop():
         if (backend != nullptr) {
             backend->code_id_helper_ = helper;
         }
+    }
+
+    static int installNativeCallbacksThunk() noexcept
+    {
+        EndstonePythonAttribution *backend = activeBackend();
+        return backend != nullptr ? backend->installNativeCallbacks() : -1;
+    }
+
+    static PyObject *nativeEventCallback(PythonExecutionEvent event, PyObject *args) noexcept
+    {
+        EndstonePythonAttribution *backend = activeBackend();
+        if (backend == nullptr || args == nullptr || backend->api_.tuple_get_item == nullptr ||
+            backend->api_.inc_ref == nullptr) {
+            return nullptr;
+        }
+        PyObject *code = backend->api_.tuple_get_item(args, 0);
+        if (code == nullptr) {
+            backend->callback_failures_.fetch_add(1, std::memory_order_relaxed);
+            return nullptr;
+        }
+        dispatchDirectEvent(event, code);
+        // sys.monitoring only treats the dedicated DISABLE sentinel specially.
+        // A new reference to an already-provided argument avoids allocating a result.
+        backend->api_.inc_ref(code);
+        return code;
+    }
+
+    static PyObject *pyStartNativeCallback(PyObject *, PyObject *args) noexcept
+    {
+        return nativeEventCallback(PythonExecutionEvent::Start, args);
+    }
+    static PyObject *pyResumeNativeCallback(PyObject *, PyObject *args) noexcept
+    {
+        return nativeEventCallback(PythonExecutionEvent::Resume, args);
+    }
+    static PyObject *pyThrowNativeCallback(PyObject *, PyObject *args) noexcept
+    {
+        return nativeEventCallback(PythonExecutionEvent::Throw, args);
+    }
+    static PyObject *pyReturnNativeCallback(PyObject *, PyObject *args) noexcept
+    {
+        return nativeEventCallback(PythonExecutionEvent::Return, args);
+    }
+    static PyObject *pyYieldNativeCallback(PyObject *, PyObject *args) noexcept
+    {
+        return nativeEventCallback(PythonExecutionEvent::Yield, args);
+    }
+    static PyObject *pyUnwindNativeCallback(PyObject *, PyObject *args) noexcept
+    {
+        return nativeEventCallback(PythonExecutionEvent::Unwind, args);
+    }
+
+    int installNativeCallbacks() noexcept
+    {
+        if (api_.cfunction_new_ex == nullptr || api_.import_add_module == nullptr ||
+            api_.object_set_attr_string == nullptr || api_.dec_ref == nullptr || api_.err_clear == nullptr) {
+            return -1;
+        }
+
+        PyObject *module = api_.import_add_module("_endstone_spark_monitor");
+        if (module == nullptr) {
+            api_.err_clear();
+            return -1;
+        }
+
+        static constexpr int kMethVarargs = 0x0001;
+        static PyMethodDef methods[] = {
+            {"_spark_py_start", &pyStartNativeCallback, kMethVarargs, nullptr},
+            {"_spark_py_resume", &pyResumeNativeCallback, kMethVarargs, nullptr},
+            {"_spark_py_throw", &pyThrowNativeCallback, kMethVarargs, nullptr},
+            {"_spark_py_return", &pyReturnNativeCallback, kMethVarargs, nullptr},
+            {"_spark_py_yield", &pyYieldNativeCallback, kMethVarargs, nullptr},
+            {"_spark_py_unwind", &pyUnwindNativeCallback, kMethVarargs, nullptr},
+        };
+        static constexpr std::array<const char *, 6> names = {
+            "_PY_START", "_PY_RESUME", "_PY_THROW", "_PY_RETURN", "_PY_YIELD", "_PY_UNWIND",
+        };
+
+        for (std::size_t i = 0; i < names.size(); ++i) {
+            PyObject *callback = api_.cfunction_new_ex(&methods[i], nullptr, nullptr);
+            if (callback == nullptr) {
+                api_.err_clear();
+                return -1;
+            }
+            const int result = api_.object_set_attr_string(module, names[i], callback);
+            api_.dec_ref(callback);
+            if (result != 0) {
+                api_.err_clear();
+                return -1;
+            }
+        }
+        return 0;
     }
 
     static void pyStartThunk(PyObject *code, int) noexcept { dispatchDirectEvent(PythonExecutionEvent::Start, code); }
