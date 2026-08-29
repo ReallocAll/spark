@@ -82,12 +82,9 @@ constexpr std::array KPythonAttributionObserverMethods{
 };
 
 constexpr std::array KPythonAttributionBridgeMethods{
-    std::string_view("_ctypes_callproc"),
-    std::string_view("_call_function_pointer"),
-    std::string_view("ffi_call"),
-    std::string_view("ffi_call_int"),
-    std::string_view("ffi_call_unix64"),
-    std::string_view("ffi_call_win64"),
+    std::string_view("_ctypes_callproc"), std::string_view("_call_function_pointer"),
+    std::string_view("ffi_call"),         std::string_view("ffi_call_int"),
+    std::string_view("ffi_call_unix64"),  std::string_view("ffi_call_win64"),
 };
 
 bool matchesFunction(std::string_view method_name, std::string_view known_method) noexcept

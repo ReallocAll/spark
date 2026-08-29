@@ -323,21 +323,20 @@ int main()
     resolved.emplace(observer_parent, spark::ResolvedFrame{.class_name = "python", .method_name = "observerParent"});
     resolved.emplace(observer_ctypes, spark::ResolvedFrame{.class_name = "_ctypes", .method_name = "_ctypes_callproc"});
     resolved.emplace(observer_ffi, spark::ResolvedFrame{.class_name = "libffi", .method_name = "ffi_call_int"});
-    resolved.emplace(observer_thunk,
-                     spark::ResolvedFrame{
-                         .class_name = "spark",
-                         .method_name =
-                             "spark::endstone_adapter::EndstonePythonAttribution::pyStartThunk(_object*, int)"});
+    resolved.emplace(
+        observer_thunk,
+        spark::ResolvedFrame{.class_name = "spark",
+                             .method_name =
+                                 "spark::endstone_adapter::EndstonePythonAttribution::pyStartThunk(_object*, int)"});
     resolved.emplace(user_ctypes_parent,
                      spark::ResolvedFrame{.class_name = "plugin-a.dll", .method_name = "userCtypesCaller"});
     resolved.emplace(user_ctypes, spark::ResolvedFrame{.class_name = "_ctypes", .method_name = "_ctypes_callproc"});
     resolved.emplace(user_ffi, spark::ResolvedFrame{.class_name = "libffi", .method_name = "ffi_call"});
     resolved.emplace(user_native, spark::ResolvedFrame{.class_name = "user-native.so", .method_name = "doWork"});
-    resolved.emplace(lookalike_thunk,
-                     spark::ResolvedFrame{
-                         .class_name = "plugin-a.dll",
-                         .method_name =
-                             "plugin::EndstonePythonAttribution::pyStartThunk(_object*, int)"});
+    resolved.emplace(
+        lookalike_thunk,
+        spark::ResolvedFrame{.class_name = "plugin-a.dll",
+                             .method_name = "plugin::EndstonePythonAttribution::pyStartThunk(_object*, int)"});
 
     spark::CallTree observer_tree;
     observer_tree.log({observer_ctypes, observer_parent, root_frame}, 3, 2);
