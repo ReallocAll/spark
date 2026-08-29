@@ -50,7 +50,8 @@ jobs:
           for rep in $(seq 1 9); do
             ./thread_id_benchmark | tee "perf-evidence/thread-id/rep-${rep}.csv"
           done
-          strace -f -c -e trace=gettid ./thread_id_benchmark \
+          SPARK_THREAD_ID_BENCH_ITERATIONS=1000 \
+            strace -f -c -e trace=gettid ./thread_id_benchmark \
             > perf-evidence/thread-id/strace.stdout \
             2> perf-evidence/thread-id/strace.txt
           python - <<'PY' | tee perf-evidence/thread-id/summary.txt
