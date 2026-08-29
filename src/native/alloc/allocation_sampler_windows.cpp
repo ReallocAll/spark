@@ -2354,7 +2354,7 @@ struct AllocationSampler::Impl {
             return false;
         }
         if (config.live_only && lifecycle_dropped.load(std::memory_order_relaxed) != 0) {
-            error = "allocation lifecycle tracking capacity was exhausted; retained profile discarded";
+            error = "allocation lifecycle tracking was incomplete; retained profile discarded";
             return false;
         }
         return true;

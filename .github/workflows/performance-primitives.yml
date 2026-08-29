@@ -116,10 +116,34 @@ jobs:
           import statistics
 
           grouped = {}
+          diagnostics = {}
+          required_columns = {
+              'stop_outcome', 'freed_samples', 'live_samples', 'peak_live_samples',
+              'live_index_capacity', 'lifecycle_dropped', 'contention_dropped',
+              'dropped_samples', 'dropped_events', 'dropped_tick_events',
+              'thread_state_drops', 'thread_identity_cache_drops',
+              'profile_storage_sample_drops', 'profile_storage_exhausted',
+              'pending_sample_drops', 'data_incomplete',
+          }
           for path in pathlib.Path('perf-evidence/allocation').glob('rep-*.csv'):
-              for row in csv.DictReader(path.open()):
+              rows = list(csv.DictReader(path.open()))
+              for row in rows:
+                  missing = required_columns.difference(row)
+                  if missing:
+                      raise RuntimeError(f'{path}: missing allocation diagnostics: {sorted(missing)}')
                   key = (row['case'], int(row['threads']))
                   grouped.setdefault(key, []).append(float(row['ns_per_op']))
+                  diagnostics.setdefault(key, []).append(row)
+          expected_keys = {
+              ('unprofiled', 1), ('unprofiled', 4), ('count-only', 1), ('count-only', 4),
+              ('disabled-hooks', 1), ('disabled-hooks', 4), ('normal-default', 1),
+              ('normal-default', 4), ('normal-4k', 1), ('normal-4k', 4), ('live-4k', 1),
+              ('live-4k', 4), ('saturated', 4),
+          }
+          if set(grouped) != expected_keys:
+              raise RuntimeError(f'unexpected allocation benchmark cases: {sorted(grouped)}')
+          if any(len(values) != 7 for values in grouped.values()):
+              raise RuntimeError('allocation benchmark did not produce seven complete repetitions')
           print('case,threads,runs,mean_ns_per_op,median_ns_per_op,stdev_ns,cv_percent,min_ns,max_ns')
           for key in sorted(grouped):
               values = grouped[key]
@@ -133,6 +157,13 @@ jobs:
               disabled = statistics.median(grouped[('disabled-hooks', threads)])
               count = statistics.median(grouped[('count-only', threads)])
               print(f'threads={threads}: unprofiled={raw:.3f} ns disabled-hooks={disabled:.3f} ns count-only={count:.3f} ns count-only-tax={(count-raw)/raw*100.0:.2f}%')
+          print('case,threads,stop_outcomes,median_lifecycle_dropped,median_contention_dropped')
+          for key in sorted(diagnostics):
+              rows = diagnostics[key]
+              outcomes = '|'.join(sorted({row['stop_outcome'] for row in rows}))
+              lifecycle = statistics.median(int(row['lifecycle_dropped']) for row in rows)
+              contention = statistics.median(int(row['contention_dropped']) for row in rows)
+              print(f'{key[0]},{key[1]},{outcomes},{lifecycle:.0f},{contention:.0f}')
           PY
 
       - name: Add summary
