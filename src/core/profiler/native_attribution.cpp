@@ -231,8 +231,9 @@ int findSelfExecutableRange(dl_phdr_info *info, std::size_t, void *opaque)
         }
         context.self_exec_begin =
             (std::min)(context.self_exec_begin, context.self_base + static_cast<std::uintptr_t>(header.p_vaddr));
-        context.self_exec_end = (std::max)(
-            context.self_exec_end, context.self_base + static_cast<std::uintptr_t>(header.p_vaddr + header.p_memsz));
+        context.self_exec_end =
+            (std::max)(context.self_exec_end,
+                       context.self_base + static_cast<std::uintptr_t>(header.p_vaddr + header.p_memsz));
     }
     return 1;
 }
