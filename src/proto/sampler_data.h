@@ -19,6 +19,25 @@
 
 namespace spark {
 
+inline std::string canonicalPluginKey(std::string_view name)
+{
+    std::string key;
+    key.reserve(name.size());
+    for (char ch : name) {
+        if (ch == '-' || ch == '_' || ch == '.') {
+            if (key.empty() || key.back() != '-') {
+                key.push_back('-');
+            }
+            continue;
+        }
+        if (ch >= 'A' && ch <= 'Z') {
+            ch = static_cast<char>(ch + ('a' - 'A'));
+        }
+        key.push_back(ch);
+    }
+    return key;
+}
+
 struct ThreadTreeView {
     std::string_view name;
     const CallTree *tree = nullptr;
@@ -81,10 +100,26 @@ struct ProfileMetadata {
             }
             const std::string class_name = pythonFrameClassName(code);
             const auto [it, inserted] = class_sources.emplace(class_name, code.plugin_source);
-            if (!inserted && it->second != code.plugin_source) {
+            if (!inserted && canonicalPluginKey(it->second) != canonicalPluginKey(code.plugin_source)) {
                 class_sources.erase(it);
             }
         }
+    }
+
+    std::string resolvedPluginSourceId(std::string_view source_id) const
+    {
+        const std::string canonical = canonicalPluginKey(source_id);
+        const PluginInfo *match = nullptr;
+        for (const PluginInfo &plugin : plugins) {
+            if (canonicalPluginKey(plugin.name) != canonical) {
+                continue;
+            }
+            if (match != nullptr && match->name != plugin.name) {
+                return std::string(source_id);
+            }
+            match = &plugin;
+        }
+        return match != nullptr ? match->name : std::string(source_id);
     }
 
     std::int64_t start_time_ms = 0;

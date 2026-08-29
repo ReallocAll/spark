@@ -167,6 +167,11 @@ spark::FrameKey frame(std::uint32_t module, std::uintptr_t base, std::uint64_t r
 
 int main()
 {
+    assert(spark::canonicalPluginKey("Foo-Bar") == "foo-bar");
+    assert(spark::canonicalPluginKey("FOO_bar") == "foo-bar");
+    assert(spark::canonicalPluginKey("foo.bar") == "foo-bar");
+    assert(spark::canonicalPluginKey("Foo--__..Bar") == "foo-bar");
+
     assert(spark::isNativeAllocationInstrumentation("spark::AllocationSampler::Impl::hookMalloc(unsigned long)"));
     assert(spark::isNativeAllocationInstrumentation("spark::AllocationSampler::Impl::hookHeapAlloc"));
     assert(spark::isNativeAllocationInstrumentation("spark::AllocationSampler::Impl::hookMalloc"));
@@ -285,6 +290,72 @@ int main()
         assert(node.method_name != resolved.at(instrumentation).method_name);
         assert(node.rva != instrumentation.rva);
     }
+
+    spark::ProfileMetadata identity_metadata;
+    identity_metadata.plugins = {
+        {.name = "Spark_Python_Xxx", .version = "1.0", .author = "test", .description = "identity"},
+    };
+    identity_metadata.class_sources = {
+        {"[Python] foo_dash", "spark-python-xxx"},
+        {"[Python] foo_underscore", "SPARK_PYTHON_XXX"},
+        {"[Python] foo_dot", "spark.python.xxx"},
+    };
+    assert(identity_metadata.resolvedPluginSourceId("spark-python-xxx") == "Spark_Python_Xxx");
+    assert(identity_metadata.resolvedPluginSourceId("SPARK.PYTHON.XXX") == "Spark_Python_Xxx");
+    const std::string identity_payload = spark::buildSamplerData(identity_metadata, spark::CallTree{}, {});
+    const std::map<std::string, std::string> expected_identity_sources{
+        {"[Python] foo_dash", "Spark_Python_Xxx"},
+        {"[Python] foo_dot", "Spark_Python_Xxx"},
+        {"[Python] foo_underscore", "Spark_Python_Xxx"},
+    };
+    assert(classSources(identity_payload) == expected_identity_sources);
+    assert(identity_metadata.class_sources.at("[Python] foo_dash") == "spark-python-xxx");
+
+    const spark::FrameKey observer_parent = frame(5, 0x500000, 0x100);
+    const spark::FrameKey observer_ctypes = frame(5, 0x500000, 0x200);
+    const spark::FrameKey observer_ffi = frame(5, 0x500000, 0x300);
+    const spark::FrameKey observer_thunk = frame(5, 0x500000, 0x400);
+    const spark::FrameKey user_ctypes_parent = frame(5, 0x500000, 0x500);
+    const spark::FrameKey user_ctypes = frame(5, 0x500000, 0x600);
+    const spark::FrameKey user_ffi = frame(5, 0x500000, 0x700);
+    const spark::FrameKey user_native = frame(5, 0x500000, 0x800);
+    const spark::FrameKey lookalike_thunk = frame(5, 0x500000, 0x900);
+    resolved.emplace(observer_parent, spark::ResolvedFrame{.class_name = "python", .method_name = "observerParent"});
+    resolved.emplace(observer_ctypes, spark::ResolvedFrame{.class_name = "_ctypes", .method_name = "_ctypes_callproc"});
+    resolved.emplace(observer_ffi, spark::ResolvedFrame{.class_name = "libffi", .method_name = "ffi_call_int"});
+    resolved.emplace(
+        observer_thunk,
+        spark::ResolvedFrame{.class_name = "spark",
+                             .method_name =
+                                 "spark::endstone_adapter::EndstonePythonAttribution::pyStartThunk(_object*, int)"});
+    resolved.emplace(user_ctypes_parent,
+                     spark::ResolvedFrame{.class_name = "plugin-a.dll", .method_name = "userCtypesCaller"});
+    resolved.emplace(user_ctypes, spark::ResolvedFrame{.class_name = "_ctypes", .method_name = "_ctypes_callproc"});
+    resolved.emplace(user_ffi, spark::ResolvedFrame{.class_name = "libffi", .method_name = "ffi_call"});
+    resolved.emplace(user_native, spark::ResolvedFrame{.class_name = "user-native.so", .method_name = "doWork"});
+    resolved.emplace(
+        lookalike_thunk,
+        spark::ResolvedFrame{.class_name = "plugin-a.dll",
+                             .method_name = "plugin::EndstonePythonAttribution::pyStartThunk(_object*, int)"});
+
+    spark::CallTree observer_tree;
+    observer_tree.log({observer_ctypes, observer_parent, root_frame}, 3, 2);
+    observer_tree.log({observer_ffi, observer_ctypes, observer_parent, root_frame}, 3, 3);
+    observer_tree.log({observer_thunk, observer_ffi, observer_ctypes, observer_parent, root_frame}, 3, 7);
+    observer_tree.log({user_native, user_ffi, user_ctypes, user_ctypes_parent, root_frame}, 3, 11);
+    observer_tree.log({lookalike_thunk, user_ctypes_parent, root_frame}, 3, 13);
+
+    spark::CallTree observer_filtered;
+    assert(spark::filterExecutionTree(observer_filtered, observer_tree, resolved, instrumentation_ranges));
+    const auto observer_keys = spark::collectFrameKeys(observer_filtered);
+    assert(std::ranges::find(observer_keys, observer_thunk) == observer_keys.end());
+    assert(std::ranges::find(observer_keys, observer_ffi) == observer_keys.end());
+    assert(std::ranges::find(observer_keys, observer_ctypes) == observer_keys.end());
+    assert(std::ranges::find(observer_keys, observer_parent) == observer_keys.end());
+    assert(std::ranges::find(observer_keys, user_ctypes) != observer_keys.end());
+    assert(std::ranges::find(observer_keys, user_ffi) != observer_keys.end());
+    assert(std::ranges::find(observer_keys, user_native) != observer_keys.end());
+    assert(std::ranges::find(observer_keys, lookalike_thunk) != observer_keys.end());
 
     spark::CallTree malformed;
     malformed.root().times.emplace(1, 1);
