@@ -112,7 +112,8 @@ int main()
     const std::size_t iterations_per_thread = configuredIterations();
 
     // Warm both paths before measuring so TLS initialization is not charged to
-    // the steady-state callback fast path.
+    // the steady-state callback fast path. The environment override exists only
+    // to keep syscall tracing bounded; normal timing runs use the full workload.
     volatile std::uint64_t warmup = directThreadId() + cachedThreadId();
     (void)warmup;
 
