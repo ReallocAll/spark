@@ -74,6 +74,12 @@ public:
     [[nodiscard]] bool allocationRateMetricsActive() const { return profiler_.persistentAllocationCountingEnabled(); }
     [[nodiscard]] std::uint64_t persistentAllocationBytes() const { return profiler_.persistentAllocationBytes(); }
 
+    void setPythonStackProvider(PythonStackProvider *provider) noexcept { profiler_.setPythonStackProvider(provider); }
+    [[nodiscard]] bool executionProfiling() const
+    {
+        return profiler_.running() && profiler_.mode() == ProfileMode::Execution;
+    }
+
     // Sets a callback that returns the current ping samples for export.
     void setPingSamplesProvider(std::function<std::vector<int>()> provider)
     {

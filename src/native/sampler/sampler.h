@@ -16,6 +16,7 @@
 
 #include <moodycamel/concurrentqueue.h>
 
+#include "native/python/python_attribution.h"
 #include "native/sampler/call_tree.h"
 #include "native/sampler/heartbeat.h"
 #include "native/sampler/recovery_sink.h"
@@ -73,6 +74,17 @@ public:
     {
         target_tid_.store(tid);
         target_name_ = std::move(name);
+    }
+
+    // The provider owns only fixed atomic shadow stacks on the sampling path.
+    // The sampler never calls into CPython and never acquires the GIL.
+    void setPythonStackProvider(PythonStackProvider *provider) noexcept
+    {
+        python_stack_provider_.store(provider, std::memory_order_release);
+    }
+    PythonStackProvider *pythonStackProvider() const noexcept
+    {
+        return python_stack_provider_.load(std::memory_order_acquire);
     }
 
     // Sets the recovery sink for crash-safe journaling. Must be called before start().
@@ -173,6 +185,7 @@ private:
     std::atomic<std::uint64_t> aggregator_tid_{0};
     std::atomic<bool> worker_failed_{false};
     std::atomic<std::uint64_t> service_start_count_{0};
+    std::atomic<PythonStackProvider *> python_stack_provider_{nullptr};
     std::string target_name_ = "Server thread";
 
     std::thread sampler_thread_;

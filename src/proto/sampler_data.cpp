@@ -69,20 +69,43 @@ int emitNode(const CallTree::Node *node, const std::vector<std::int32_t> &window
 
     std::string bytes;
     ProtoWriter w(bytes);
-    auto it = resolved.find(node->key);
-    if (it != resolved.end()) {
-        w.string(3, it->second.class_name);
-        w.string(4, it->second.method_name);
-        if (it->second.line >= 0) {
-            w.int32(6, it->second.line);
+    if (isPythonFrame(node->key)) {
+        const auto python = meta.python_codes.find(node->key.rva);
+        if (python != meta.python_codes.end()) {
+            const PythonCodeMetadata &code = python->second;
+            w.string(3, pythonFrameClassName(code));
+            w.string(4, code.qualname.empty() ? code.function_name : code.qualname);
+            if (code.first_line >= 0) {
+                w.int32(6, code.first_line);
+            }
+            if (!code.filename.empty()) {
+                w.string(7, code.filename);
+            }
         }
-        if (!it->second.method_desc.empty()) {
-            w.string(7, it->second.method_desc);
+        else {
+            if (PythonStackProvider *provider = globalPythonStackProvider(); provider != nullptr) {
+                provider->recordUnknownCodeId();
+            }
+            w.string(3, "[Python] <unknown>");
+            w.string(4, "CodeId " + std::to_string(node->key.rva));
         }
-        // Private extension fields: preserve sampled PC and unwind root for offline evaluation.
-        w.varint(1001, node->key.rva);
-        if (it->second.guessed_function_rva != 0) {
-            w.varint(1002, it->second.guessed_function_rva);
+    }
+    else {
+        auto it = resolved.find(node->key);
+        if (it != resolved.end()) {
+            w.string(3, it->second.class_name);
+            w.string(4, it->second.method_name);
+            if (it->second.line >= 0) {
+                w.int32(6, it->second.line);
+            }
+            if (!it->second.method_desc.empty()) {
+                w.string(7, it->second.method_desc);
+            }
+            // Private extension fields: preserve sampled PC and unwind root for offline evaluation.
+            w.varint(1001, node->key.rva);
+            if (it->second.guessed_function_rva != 0) {
+                w.varint(1002, it->second.guessed_function_rva);
+            }
         }
     }
     w.packedDouble(8, alignValues(node->times, windows, meta));

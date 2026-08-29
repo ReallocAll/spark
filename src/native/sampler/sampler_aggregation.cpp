@@ -111,7 +111,12 @@ bool Sampler::acceptSample(const Sample &sample)
         if (journaled_threads_.insert(normalized.thread_id).second) {
             recovery_sink_->journalThreadDef(normalized.thread_id, sample.thread_id, normalized.thread_name);
         }
-        recovery_sink_->journalSample(normalized);
+        // Python CodeIds are valid only for the lifetime of this interpreter/session
+        // and intentionally have no ModuleDef in the stable recovery format. Preserve
+        // crash recovery as native-only instead of writing unreplayable synthetic IDs.
+        Sample recovery_sample = normalized;
+        std::erase_if(recovery_sample.frames, [](const FrameKey &frame) { return isPythonFrame(frame); });
+        recovery_sink_->journalSample(recovery_sample);
     }
     if (profile_nodes_remaining_ == 0 || profile_time_entries_remaining_ == 0) {
         profile_storage_exhausted_.store(true, std::memory_order_relaxed);

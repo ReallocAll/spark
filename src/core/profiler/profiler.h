@@ -109,6 +109,9 @@ public:
     }
     [[nodiscard]] std::uint64_t persistentAllocationBytes() const;
 
+    void setPythonStackProvider(PythonStackProvider *provider) noexcept { sampler_.setPythonStackProvider(provider); }
+    PythonStackProvider *pythonStackProvider() const noexcept { return sampler_.pythonStackProvider(); }
+
     // Returns false and sets `error` if sampling can't start.
     bool start(const ProfilerOptions &options, std::uint64_t main_tid, std::string &error);
     void onTick(double mspt_ms);
