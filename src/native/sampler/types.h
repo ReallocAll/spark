@@ -9,6 +9,7 @@
 namespace spark {
 
 using ModuleId = std::uint32_t;
+inline constexpr ModuleId kSyntheticPythonFrameModule = 0xfffffffeu;
 inline constexpr ModuleId kInvalidModule = 0xffffffffu;
 
 // Sentinel path used by bounded ModuleTable for modules that exceed the cap.
@@ -22,7 +23,8 @@ struct RecoveryModuleDefinition {
 
 // A stack frame identified by its module and module-relative address (RVA). This
 // is stable across the run and is all we need to aggregate; symbol resolution is
-// deferred to export time.
+// deferred to export time. kSyntheticPythonFrameModule is reserved for transient
+// Python CodeId frames and is never written to crash-recovery journals.
 struct FrameKey {
     ModuleId module = kInvalidModule;
     std::uint64_t rva = 0;
@@ -68,7 +70,14 @@ public:
         return static_cast<ModuleId>(paths_.size() - 1);
     }
 
-    const std::string &path(ModuleId id) const { return paths_.at(id); }
+    const std::string &path(ModuleId id) const
+    {
+        if (id < paths_.size()) {
+            return paths_[id];
+        }
+        static const std::string synthetic_or_unknown = "<synthetic frame>";
+        return synthetic_or_unknown;
+    }
 
     std::size_t size() const { return paths_.size(); }
 
