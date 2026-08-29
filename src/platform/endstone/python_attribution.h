@@ -609,6 +609,16 @@ def stop():
         dispatchDirectEvent(PythonExecutionEvent::Unwind, code);
     }
 
+    static std::uint64_t callbackNativeThreadId() noexcept
+    {
+        // PEP 669 callbacks always execute on the Python thread they describe.
+        // Native thread IDs are stable for a thread's lifetime, so resolve the
+        // OS TID once per callback thread instead of issuing gettid for every
+        // Python execution event on Linux.
+        thread_local const std::uint64_t native_tid = currentNativeThreadId();
+        return native_tid;
+    }
+
     static void dispatchDirectEvent(PythonExecutionEvent event, PyObject *code) noexcept
     {
         EndstonePythonAttribution *backend = activeBackend();
@@ -621,7 +631,7 @@ def stop():
             return;
         }
         backend->event_counts_[static_cast<std::size_t>(event)].fetch_add(1, std::memory_order_relaxed);
-        backend->shadow_.onEvent(currentNativeThreadId(), event, code_id);
+        backend->shadow_.onEvent(callbackNativeThreadId(), event, code_id);
     }
 
     PythonCodeId codeIdForObject(PyObject *code) noexcept
