@@ -94,17 +94,9 @@ std::optional<std::string> platformThreadName(std::uint64_t id)
 std::uint64_t currentNativeThreadId()
 {
 #ifdef _WIN32
-    // The native thread id is immutable for the lifetime of a thread. Cache it
-    // per thread so high-frequency attribution callbacks do not repeatedly
-    // cross the platform API boundary.
-    thread_local const std::uint64_t id = static_cast<std::uint64_t>(::GetCurrentThreadId());
-    return id;
+    return static_cast<std::uint64_t>(::GetCurrentThreadId());
 #elif defined(__linux__)
-    // gettid is a real syscall on Linux. PEP 669 can invoke this helper tens of
-    // thousands of times per second, while the value itself cannot change for
-    // a living thread, so pay the syscall only once per thread lifetime.
-    thread_local const std::uint64_t id = static_cast<std::uint64_t>(::syscall(SYS_gettid));
-    return id;
+    return static_cast<std::uint64_t>(::syscall(SYS_gettid));
 #else
     return 0;
 #endif
