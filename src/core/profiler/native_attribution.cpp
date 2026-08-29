@@ -72,6 +72,50 @@ constexpr std::array KSignaturelessMethods{
     std::string_view("spark::AllocationSampler::Impl::hookHeapFree"),
 };
 
+constexpr std::array KPythonAttributionObserverMethods{
+    std::string_view("spark::endstone_adapter::EndstonePythonAttribution::pyStartThunk"),
+    std::string_view("spark::endstone_adapter::EndstonePythonAttribution::pyResumeThunk"),
+    std::string_view("spark::endstone_adapter::EndstonePythonAttribution::pyThrowThunk"),
+    std::string_view("spark::endstone_adapter::EndstonePythonAttribution::pyReturnThunk"),
+    std::string_view("spark::endstone_adapter::EndstonePythonAttribution::pyYieldThunk"),
+    std::string_view("spark::endstone_adapter::EndstonePythonAttribution::pyUnwindThunk"),
+};
+
+constexpr std::array KPythonAttributionBridgeMethods{
+    std::string_view("_ctypes_callproc"),
+    std::string_view("_call_function_pointer"),
+    std::string_view("ffi_call"),
+    std::string_view("ffi_call_int"),
+    std::string_view("ffi_call_unix64"),
+    std::string_view("ffi_call_win64"),
+};
+
+bool matchesFunction(std::string_view method_name, std::string_view known_method) noexcept
+{
+    return method_name == known_method ||
+           (method_name.size() > known_method.size() && method_name.starts_with(known_method) &&
+            method_name[known_method.size()] == '(');
+}
+
+template <std::size_t N>
+bool matchesFunction(std::string_view method_name, const std::array<std::string_view, N> &known_methods) noexcept
+{
+    return std::ranges::any_of(known_methods, [method_name](std::string_view known_method) {
+        return matchesFunction(method_name, known_method);
+    });
+}
+
+bool isPythonAttributionObserver(std::string_view method_name) noexcept
+{
+    return matchesFunction(method_name, KPythonAttributionObserverMethods);
+}
+
+bool isPythonAttributionBridge(const FrameKey &key, const ResolvedFrameMap &resolved) noexcept
+{
+    const auto frame = resolved.find(key);
+    return frame != resolved.end() && matchesFunction(frame->second.method_name, KPythonAttributionBridgeMethods);
+}
+
 bool isHexDigit(char value) noexcept
 {
     return (value >= '0' && value <= '9') || (value >= 'a' && value <= 'f') || (value >= 'A' && value <= 'F');
@@ -513,6 +557,7 @@ std::vector<NativeInstrumentationRange> discoverAllocationInstrumentationRanges(
 enum class NodeResult {
     Retained,
     Dropped,
+    ObserverDropped,
     Malformed,
 };
 
@@ -528,32 +573,38 @@ bool addCounts(std::map<std::int32_t, std::uint64_t> &totals, const std::map<std
     return true;
 }
 
-bool isInstrumentation(const FrameKey &key, const ResolvedFrameMap &resolved,
-                       std::span<const NativeInstrumentationRange> instrumentation_ranges)
+NodeResult instrumentationResult(const FrameKey &key, const ResolvedFrameMap &resolved,
+                                 std::span<const NativeInstrumentationRange> instrumentation_ranges)
 {
     const auto frame = resolved.find(key);
+    if (frame != resolved.end() && isPythonAttributionObserver(frame->second.method_name)) {
+        return NodeResult::ObserverDropped;
+    }
+
     const bool exact_name = frame != resolved.end() && isNativeAllocationInstrumentation(frame->second.method_name);
     if (instrumentation_ranges.empty()) {
-        return exact_name;
+        return exact_name ? NodeResult::Dropped : NodeResult::Retained;
     }
     if (!isNativeAllocationInstrumentationAddress(key.raw_address, instrumentation_ranges)) {
-        return false;
+        return NodeResult::Retained;
     }
     if (frame == resolved.end() || frame->second.method_name.empty() || isUnresolvedMethod(frame->second.method_name)) {
-        return true;
+        return NodeResult::Dropped;
     }
-    return exact_name;
+    return exact_name ? NodeResult::Dropped : NodeResult::Retained;
 }
 
 // NOLINTNEXTLINE(misc-no-recursion)
 NodeResult copyFilteredNode(const CallTree::Node &source, CallTree::Node &destination, const ResolvedFrameMap &resolved,
                             std::span<const NativeInstrumentationRange> instrumentation_ranges)
 {
-    if (isInstrumentation(source.key, resolved, instrumentation_ranges)) {
-        return NodeResult::Dropped;
+    const NodeResult instrumentation = instrumentationResult(source.key, resolved, instrumentation_ranges);
+    if (instrumentation != NodeResult::Retained) {
+        return instrumentation;
     }
 
     destination.key = source.key;
+    bool observer_child_dropped = false;
     std::map<std::int32_t, std::uint64_t> original_child_totals;
     std::map<std::int32_t, std::uint64_t> retained_child_totals;
     for (const auto &[key, child] : source.children) {
@@ -567,12 +618,17 @@ NodeResult copyFilteredNode(const CallTree::Node &source, CallTree::Node &destin
             return result;
         }
         if (result != NodeResult::Retained) {
+            observer_child_dropped = observer_child_dropped || result == NodeResult::ObserverDropped;
             continue;
         }
         if (!addCounts(retained_child_totals, filtered_child->times)) {
             return NodeResult::Malformed;
         }
         destination.children.emplace(key, std::move(filtered_child));
+    }
+
+    if (observer_child_dropped && destination.children.empty() && isPythonAttributionBridge(source.key, resolved)) {
+        return NodeResult::ObserverDropped;
     }
 
     std::map<std::int32_t, bool> windows;
