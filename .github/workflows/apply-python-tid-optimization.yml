@@ -28,22 +28,13 @@ jobs:
 
           path = Path("src/platform/endstone/python_attribution.h")
           text = path.read_text(encoding="utf-8")
-          old = """    static void dispatchDirectEvent(PythonExecutionEvent event, PyObject *code) noexcept
-          {
-              EndstonePythonAttribution *backend = activeBackend();
-              if (backend == nullptr || code == nullptr) {
-                  return;
-              }
-              const PythonCodeId code_id = backend->codeIdForObject(code);
-              if (code_id == kInvalidPythonCodeId) {
-                  backend->callback_failures_.fetch_add(1, std::memory_order_relaxed);
-                  return;
-              }
-              backend->event_counts_[static_cast<std::size_t>(event)].fetch_add(1, std::memory_order_relaxed);
-              backend->shadow_.onEvent(currentNativeThreadId(), event, code_id);
-          }
-          """
-          new = """    static std::uint64_t callbackNativeThreadId() noexcept
+          dispatch = "    static void dispatchDirectEvent(PythonExecutionEvent event, PyObject *code) noexcept\n"
+          call = "        backend->shadow_.onEvent(currentNativeThreadId(), event, code_id);"
+          if text.count(dispatch) != 1:
+              raise SystemExit(f"expected one dispatch marker, found {text.count(dispatch)}")
+          if text.count(call) != 1:
+              raise SystemExit(f"expected one direct TID callback call, found {text.count(call)}")
+          helper = """    static std::uint64_t callbackNativeThreadId() noexcept
           {
               // PEP 669 callbacks always execute on the Python thread they describe.
               // Native thread IDs are stable for a thread's lifetime, so resolve the
@@ -53,24 +44,10 @@ jobs:
               return native_tid;
           }
 
-              static void dispatchDirectEvent(PythonExecutionEvent event, PyObject *code) noexcept
-          {
-              EndstonePythonAttribution *backend = activeBackend();
-              if (backend == nullptr || code == nullptr) {
-                  return;
-              }
-              const PythonCodeId code_id = backend->codeIdForObject(code);
-              if (code_id == kInvalidPythonCodeId) {
-                  backend->callback_failures_.fetch_add(1, std::memory_order_relaxed);
-                  return;
-              }
-              backend->event_counts_[static_cast<std::size_t>(event)].fetch_add(1, std::memory_order_relaxed);
-              backend->shadow_.onEvent(callbackNativeThreadId(), event, code_id);
-          }
           """
-          if text.count(old) != 1:
-              raise SystemExit(f"expected one callback block, found {text.count(old)}")
-          path.write_text(text.replace(old, new), encoding="utf-8")
+          text = text.replace(dispatch, helper + dispatch, 1)
+          text = text.replace(call, "        backend->shadow_.onEvent(callbackNativeThreadId(), event, code_id);", 1)
+          path.write_text(text, encoding="utf-8")
           PY
 
       - name: Format touched source
