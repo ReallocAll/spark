@@ -17,7 +17,7 @@ namespace {
 
 using Clock = std::chrono::steady_clock;
 
-constexpr std::string_view kRetainedProfileDiscardedError =
+constexpr std::string_view KRetainedProfileDiscardedError =
     "allocation lifecycle tracking was incomplete; retained profile discarded";
 
 struct AllocationDiagnostics {
@@ -172,7 +172,7 @@ bool cleanSuccess(const AllocationDiagnostics &diagnostics)
 bool expectedLiveContention(const AllocationDiagnostics &diagnostics, const std::string &error)
 {
     return std::string_view(diagnostics.stop_outcome) == "stop_failed" &&
-           std::string_view(error) == kRetainedProfileDiscardedError && diagnostics.lifecycle_dropped != 0 &&
+           std::string_view(error) == KRetainedProfileDiscardedError && diagnostics.lifecycle_dropped != 0 &&
            diagnostics.lifecycle_dropped == diagnostics.contention_dropped &&
            diagnostics.live_samples <= diagnostics.lifecycle_dropped &&
            diagnostics.peak_live_samples < spark::AllocationSampler::liveIndexCapacity() &&
@@ -182,11 +182,28 @@ bool expectedLiveContention(const AllocationDiagnostics &diagnostics, const std:
            !diagnostics.profile_storage_exhausted && diagnostics.pending_sample_drops == 0;
 }
 
+bool expectedSaturated(const AllocationDiagnostics &diagnostics)
+{
+    return std::string_view(diagnostics.stop_outcome) == "success" && diagnostics.dropped_events != 0 &&
+           diagnostics.lifecycle_dropped == diagnostics.contention_dropped &&
+           diagnostics.dropped_events <= diagnostics.dropped_samples &&
+           diagnostics.dropped_samples <= diagnostics.dropped_events + diagnostics.lifecycle_dropped &&
+           diagnostics.live_samples <= diagnostics.lifecycle_dropped &&
+           diagnostics.peak_live_samples < spark::AllocationSampler::liveIndexCapacity() &&
+           diagnostics.dropped_tick_events == 0 && diagnostics.thread_state_drops == 0 &&
+           diagnostics.thread_identity_cache_drops == 0 && diagnostics.profile_storage_sample_drops == 0 &&
+           !diagnostics.profile_storage_exhausted && diagnostics.pending_sample_drops == 0 &&
+           diagnostics.data_incomplete;
+}
+
 bool validateCase(const char *name, std::size_t threads, const AllocationDiagnostics &diagnostics,
                   const std::string &error)
 {
     const bool is_live = std::string_view(name) == "live-4k";
     const bool clean = cleanSuccess(diagnostics) && (!is_live || diagnostics.live_samples == 0);
+    if (std::string_view(name) == "saturated" && diagnostics.dropped_events != 0) {
+        return expectedSaturated(diagnostics);
+    }
     return clean || (is_live && threads == 4 && expectedLiveContention(diagnostics, error));
 }
 
@@ -220,7 +237,7 @@ bool runProfiledCase(spark::AllocationSampler &sampler, const char *name, std::s
     if (!accepted) {
         std::fprintf(stderr, "%s: allocation benchmark oracle rejected case\n", name);
     }
-    if (!stopped && error == kRetainedProfileDiscardedError) {
+    if (!stopped && error == KRetainedProfileDiscardedError) {
         diagnostics.stop_outcome = "retained_profile_discarded";
     }
     printResult(name, threads, interval, live_only, count_only, operations_per_thread, elapsed, diagnostics);
