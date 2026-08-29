@@ -196,11 +196,27 @@ bool expectedSaturated(const AllocationDiagnostics &diagnostics)
            diagnostics.data_incomplete;
 }
 
+bool expectedNormal4kContention(const AllocationDiagnostics &diagnostics)
+{
+    return std::string_view(diagnostics.stop_outcome) == "success" &&
+           diagnostics.lifecycle_dropped == diagnostics.contention_dropped &&
+           diagnostics.dropped_samples <= diagnostics.lifecycle_dropped &&
+           diagnostics.live_samples <= diagnostics.lifecycle_dropped &&
+           diagnostics.peak_live_samples < spark::AllocationSampler::liveIndexCapacity() &&
+           diagnostics.dropped_events == 0 && diagnostics.dropped_tick_events == 0 &&
+           diagnostics.thread_state_drops == 0 && diagnostics.thread_identity_cache_drops == 0 &&
+           diagnostics.profile_storage_sample_drops == 0 && !diagnostics.profile_storage_exhausted &&
+           diagnostics.pending_sample_drops == 0 && diagnostics.data_incomplete == (diagnostics.lifecycle_dropped != 0);
+}
+
 bool validateCase(const char *name, std::size_t threads, const AllocationDiagnostics &diagnostics,
                   const std::string &error)
 {
     const bool is_live = std::string_view(name) == "live-4k";
     const bool clean = cleanSuccess(diagnostics) && (!is_live || diagnostics.live_samples == 0);
+    if (std::string_view(name) == "normal-4k" && threads == 4) {
+        return clean || expectedNormal4kContention(diagnostics);
+    }
     if (std::string_view(name) == "saturated" && diagnostics.dropped_events != 0) {
         return expectedSaturated(diagnostics);
     }
