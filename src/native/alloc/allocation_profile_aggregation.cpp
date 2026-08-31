@@ -221,7 +221,7 @@ bool AllocationProfileAggregation::tickDecisionObserved(std::uint64_t tick_id) c
     if (tick_id < kMaxTickDecisions) {
         return tick_id < tick_decisions_.size() && tick_decisions_[static_cast<std::size_t>(tick_id)] != 0;
     }
-    return high_tick_decisions_.find(tick_id) != high_tick_decisions_.end();
+    return high_tick_decisions_.contains(tick_id);
 }
 
 void AllocationProfileAggregation::dropStalePendingThrough(std::uint64_t tick_id) noexcept
