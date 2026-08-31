@@ -1465,6 +1465,9 @@ struct AllocationSampler::Impl {
         while (ticks.dequeue(tick)) {
             aggregation.processTick(tick.tick_id, tick.mspt_ms);
         }
+        if (events.storage == nullptr) {
+            return;
+        }
         AllocationEvent event;
         while (events.dequeue(event)) {
             processEvent(event);
