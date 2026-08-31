@@ -376,7 +376,7 @@ void Profiler::onTick(double mspt_ms)
             }
         }
     }
-    if (!running_.load()) {
+    if (!running_.load() || sampling_stop_requested_.load(std::memory_order_acquire)) {
         return;
     }
     if (options_.only_ticks_over_ms > 0 && std::isfinite(mspt_ms) &&

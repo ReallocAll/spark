@@ -26,10 +26,13 @@ void AllocationProfileAggregation::reset(const AllocationSamplerConfig &config, 
     window_ticks_.clear();
     pending_buckets_.clear();
     tick_decisions_.clear();
+    high_tick_decisions_.clear();
     window_sample_counts_.clear();
     journaled_thread_roots_.fill(false);
     journaled_module_sentinel_ = false;
     pending_samples_ = 0;
+    tick_event_seen_ = false;
+    last_tick_event_id_ = 0;
     profile_nodes_remaining_ = kProfileNodeCapacity;
     profile_time_entries_remaining_ = kProfileTimeEntryCapacity;
     session_start_window_ = profiling_window::windowNow();
@@ -42,7 +45,7 @@ void AllocationProfileAggregation::reset(const AllocationSamplerConfig &config, 
     pending_drops_.store(0, std::memory_order_relaxed);
     pending_capacity_drops_.store(0, std::memory_order_relaxed);
     pending_stale_drops_.store(0, std::memory_order_relaxed);
-    pending_final_drops_.store(0, std::memory_order_relaxed);
+    terminal_in_flight_tick_samples_discarded_.store(0, std::memory_order_relaxed);
     module_overflow_frames_.store(0, std::memory_order_relaxed);
     history_samples_pruned_.store(0, std::memory_order_relaxed);
     history_bytes_pruned_.store(0, std::memory_order_relaxed);
@@ -87,7 +90,23 @@ bool AllocationProfileAggregation::processSample(Sample sample)
         return tick_decisions_[static_cast<std::size_t>(sample.tick_id)] == 2 && acceptSample(std::move(sample));
     }
     if (sample.tick_id >= kMaxTickDecisions) {
-        recordDrop(pending_stale_drops_);
+        const auto decision = high_tick_decisions_.find(sample.tick_id);
+        if (decision != high_tick_decisions_.end()) {
+            if (decision->second) {
+                return acceptSample(std::move(sample));
+            }
+            return false;
+        }
+        if (tick_event_seen_ && sample.tick_id <= last_tick_event_id_) {
+            recordDrop(pending_stale_drops_);
+            return false;
+        }
+        if (pending_samples_ >= kPendingSampleCapacity) {
+            recordDrop(pending_capacity_drops_);
+            return false;
+        }
+        pending_buckets_[sample.tick_id].push_back(std::move(sample));
+        ++pending_samples_;
         return false;
     }
     if (pending_samples_ >= kPendingSampleCapacity) {
@@ -151,7 +170,11 @@ bool AllocationProfileAggregation::tickAccepts(std::uint64_t tick_id) const noex
     if (config_.only_ticks_over_ms <= 0) {
         return true;
     }
-    return tick_id < tick_decisions_.size() && tick_decisions_[static_cast<std::size_t>(tick_id)] == 2;
+    if (tick_id < kMaxTickDecisions) {
+        return tick_id < tick_decisions_.size() && tick_decisions_[static_cast<std::size_t>(tick_id)] == 2;
+    }
+    const auto decision = high_tick_decisions_.find(tick_id);
+    return decision != high_tick_decisions_.end() && decision->second;
 }
 
 void AllocationProfileAggregation::processTick(std::uint64_t tick_id, double mspt_ms)
@@ -165,6 +188,17 @@ void AllocationProfileAggregation::processTick(std::uint64_t tick_id, double msp
     }
     if (recovery_sink_ != nullptr) {
         recovery_sink_->journalTickEvent(tick_id, mspt_ms);
+    }
+    if (config_.only_ticks_over_ms > 0 && tick_id >= kMaxTickDecisions) {
+        tick_event_seen_ = true;
+        last_tick_event_id_ = (std::max)(last_tick_event_id_, tick_id);
+        high_tick_decisions_[tick_id] = keep;
+        while (high_tick_decisions_.size() > kMaxTickDecisions) {
+            high_tick_decisions_.erase(high_tick_decisions_.begin());
+        }
+        flushPending(tick_id, keep);
+        dropStalePendingThrough(tick_id);
+        return;
     }
     flushPending(tick_id, keep);
 }
@@ -182,16 +216,73 @@ void AllocationProfileAggregation::recordTick(std::int32_t window, double mspt_m
     }
 }
 
+bool AllocationProfileAggregation::tickDecisionObserved(std::uint64_t tick_id) const noexcept
+{
+    if (tick_id < kMaxTickDecisions) {
+        return tick_id < tick_decisions_.size() && tick_decisions_[static_cast<std::size_t>(tick_id)] != 0;
+    }
+    return high_tick_decisions_.find(tick_id) != high_tick_decisions_.end();
+}
+
+void AllocationProfileAggregation::dropStalePendingThrough(std::uint64_t tick_id) noexcept
+{
+    for (auto it = pending_buckets_.begin(); it != pending_buckets_.end();) {
+        if (it->first < kMaxTickDecisions || it->first > tick_id) {
+            ++it;
+            continue;
+        }
+        const std::size_t count = it->second.size();
+        pending_stale_drops_.fetch_add(static_cast<std::uint64_t>(count), std::memory_order_relaxed);
+        pending_drops_.fetch_add(static_cast<std::uint64_t>(count), std::memory_order_relaxed);
+        dropped_samples_.fetch_add(static_cast<std::uint64_t>(count), std::memory_order_relaxed);
+        pending_samples_ -= count;
+        it = pending_buckets_.erase(it);
+    }
+}
+
+void AllocationProfileAggregation::classifyFinalTickSamples(std::uint64_t tick_id, std::uint64_t terminal_tick,
+                                                            std::size_t count) noexcept
+{
+    if (count == 0) {
+        return;
+    }
+    const bool decision_observed = tickDecisionObserved(tick_id);
+    if (tick_id == terminal_tick && !decision_observed) {
+        terminal_in_flight_tick_samples_discarded_.fetch_add(static_cast<std::uint64_t>(count),
+                                                             std::memory_order_relaxed);
+        return;
+    }
+    if (tick_id < terminal_tick && decision_observed) {
+        return;
+    }
+    if (tick_id >= kMaxTickDecisions) {
+        pending_stale_drops_.fetch_add(static_cast<std::uint64_t>(count), std::memory_order_relaxed);
+    }
+    pending_drops_.fetch_add(static_cast<std::uint64_t>(count), std::memory_order_relaxed);
+    dropped_samples_.fetch_add(static_cast<std::uint64_t>(count), std::memory_order_relaxed);
+}
+
+void AllocationProfileAggregation::finishPending(std::uint64_t terminal_tick)
+{
+    for (const auto &[tick_id, samples] : pending_buckets_) {
+        classifyFinalTickSamples(tick_id, terminal_tick, samples.size());
+    }
+    pending_samples_ = 0;
+    pending_buckets_.clear();
+    if (!config_.live_only) {
+        pruneHistory(profiling_window::windowNow(), true);
+    }
+}
+
 void AllocationProfileAggregation::finishPending()
 {
     if (pending_samples_ != 0) {
         const auto count = static_cast<std::uint64_t>(pending_samples_);
-        pending_final_drops_.fetch_add(count, std::memory_order_relaxed);
         pending_drops_.fetch_add(count, std::memory_order_relaxed);
         dropped_samples_.fetch_add(count, std::memory_order_relaxed);
         pending_samples_ = 0;
+        pending_buckets_.clear();
     }
-    pending_buckets_.clear();
     if (!config_.live_only) {
         pruneHistory(profiling_window::windowNow(), true);
     }
