@@ -336,7 +336,7 @@ std::string buildSamplerData(const ProfileMetadata &meta, const std::vector<Thre
         std::string entry;
         ProtoWriter ew(entry);
         ew.string(1, class_name);
-        ew.string(2, source_id);
+        ew.string(2, meta.resolvedPluginSourceId(source_id));
         w.message(3, entry);
     }
     w.packedInt32(6, windows);

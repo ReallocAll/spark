@@ -397,10 +397,15 @@ struct AllocationSampler::Impl {
     std::vector<AllocationHookCapability> hook_capabilities;
 
     std::mutex lifecycle_mutex;
+    std::mutex tick_mutex;
     std::timed_mutex aggregate_mutex;
     AllocationSamplerConfig config{};
     std::atomic<bool> tracking{false};
     std::atomic<bool> running{false};
+    std::atomic<bool> tick_admission_open{true};
+    std::atomic<bool> finalize_pending{false};
+    std::atomic<bool> pending_finalized{false};
+    std::atomic<std::uint64_t> terminal_tick{0};
     std::atomic<bool> aggregator_running{false};
     std::atomic<bool> aggregator_failed{false};
     std::array<char, 256> aggregator_failure{};
@@ -1425,6 +1430,7 @@ struct AllocationSampler::Impl {
     void finalizeLiveProfile()
     {
         const std::uint64_t stopped_ms = monotonicMs();
+        const std::uint64_t terminal = terminal_tick.load(std::memory_order_acquire);
         std::uint64_t total_age = 0;
         std::uint64_t maximum_age = 0;
         for (std::size_t i = 0; i < KLiveIndexCapacity; ++i) {
@@ -1436,6 +1442,7 @@ struct AllocationSampler::Impl {
             }
             const LiveAllocation &allocation = *entry_allocation;
             if (!aggregation.tickAccepts(allocation.tick_id)) {
+                aggregation.classifyFinalTickSamples(allocation.tick_id, terminal, 1);
                 continue;
             }
             Sample sample;
@@ -1458,9 +1465,31 @@ struct AllocationSampler::Impl {
         while (ticks.dequeue(tick)) {
             aggregation.processTick(tick.tick_id, tick.mspt_ms);
         }
+        if (events.storage == nullptr) {
+            return;
+        }
         AllocationEvent event;
         while (events.dequeue(event)) {
             processEvent(event);
+        }
+    }
+
+    void requestFinalization()
+    {
+        std::scoped_lock tick_lock(tick_mutex);
+        tick_admission_open.store(false, std::memory_order_release);
+        if (!finalize_pending.exchange(true, std::memory_order_acq_rel)) {
+            terminal_tick.store(current_tick.load(std::memory_order_relaxed), std::memory_order_release);
+        }
+    }
+
+    void finishAggregationIfNeeded()
+    {
+        std::scoped_lock lock(aggregate_mutex);
+        drainQueues();
+        if (finalize_pending.load(std::memory_order_acquire) && !pending_finalized.load(std::memory_order_acquire)) {
+            aggregation.finishPending(terminal_tick.load(std::memory_order_acquire));
+            pending_finalized.store(true, std::memory_order_release);
         }
     }
 
@@ -1489,7 +1518,10 @@ struct AllocationSampler::Impl {
         {
             std::scoped_lock lock(aggregate_mutex);
             drainQueues();
-            aggregation.finishPending();
+            if (finalize_pending.load(std::memory_order_acquire)) {
+                aggregation.finishPending(terminal_tick.load(std::memory_order_acquire));
+                pending_finalized.store(true, std::memory_order_release);
+            }
         }
     }
 
@@ -1588,6 +1620,7 @@ struct AllocationSampler::Impl {
 
     void markAggregatorFailure(const char *message) noexcept
     {
+        tick_admission_open.store(false, std::memory_order_release);
         tracking.store(false, std::memory_order_release);
         aggregator_running.store(false, std::memory_order_release);
         std::snprintf(aggregator_failure.data(), aggregator_failure.size(), "%s",
@@ -1636,6 +1669,10 @@ struct AllocationSampler::Impl {
             presence.store(0, std::memory_order_relaxed);
         }
         deferred_live.store(nullptr, std::memory_order_relaxed);
+        tick_admission_open.store(true, std::memory_order_relaxed);
+        finalize_pending.store(false, std::memory_order_relaxed);
+        pending_finalized.store(false, std::memory_order_relaxed);
+        terminal_tick.store(0, std::memory_order_relaxed);
         retained_age_ms_total.store(0, std::memory_order_relaxed);
         retained_age_ms_max.store(0, std::memory_order_relaxed);
         aggregator_failure.fill('\0');
@@ -1729,6 +1766,7 @@ struct AllocationSampler::Impl {
         if (!running.load(std::memory_order_acquire) && !aggregator_thread.joinable()) {
             return true;
         }
+        requestFinalization();
         tracking.store(false, std::memory_order_release);
         running.store(false, std::memory_order_release);
         if (!waitFor(tracking_calls, "tracked Linux allocation hooks", error)) {
@@ -1738,6 +1776,7 @@ struct AllocationSampler::Impl {
         if (aggregator_thread.joinable()) {
             aggregator_thread.join();
         }
+        finishAggregationIfNeeded();
         if (config.live_only && !aggregator_failed.load(std::memory_order_acquire)) {
             finalizeLiveProfile();
         }
@@ -1758,6 +1797,9 @@ struct AllocationSampler::Impl {
     {
         std::scoped_lock lock(lifecycle_mutex);
         error.clear();
+        if (running.load(std::memory_order_acquire) || aggregator_thread.joinable()) {
+            requestFinalization();
+        }
         tracking.store(false, std::memory_order_release);
         running.store(false, std::memory_order_release);
         if (!waitFor(tracking_calls, "tracked Linux allocation hooks", error)) {
@@ -1767,6 +1809,7 @@ struct AllocationSampler::Impl {
         if (aggregator_thread.joinable()) {
             aggregator_thread.join();
         }
+        finishAggregationIfNeeded();
         events.release();
         releaseLifecycleStorage();
 
@@ -1797,7 +1840,9 @@ struct AllocationSampler::Impl {
 
     void tick(double mspt_ms)
     {
-        if (!running.load(std::memory_order_acquire) || aggregator_failed.load(std::memory_order_acquire)) {
+        std::scoped_lock tick_lock(tick_mutex);
+        if (!tick_admission_open.load(std::memory_order_acquire) || !running.load(std::memory_order_acquire) ||
+            aggregator_failed.load(std::memory_order_acquire)) {
             return;
         }
         TrackingSuppressionGuard suppress(*this);
@@ -1862,6 +1907,7 @@ bool AllocationSampler::stop(std::string &error)
 
 void AllocationSampler::requestStop() noexcept
 {
+    impl_->tick_admission_open.store(false, std::memory_order_release);
     impl_->tracking.store(false, std::memory_order_release);
     impl_->running.store(false, std::memory_order_release);
 }
@@ -2083,6 +2129,11 @@ std::uint64_t AllocationSampler::pendingStaleDrops() const
 std::uint64_t AllocationSampler::pendingFinalDrops() const
 {
     return impl_->aggregation.pendingFinalDrops();
+}
+
+std::uint64_t AllocationSampler::terminalInFlightTickSamplesDiscarded() const
+{
+    return impl_->aggregation.terminalInFlightTickSamplesDiscarded();
 }
 
 std::uint64_t AllocationSampler::moduleOverflowFrames() const

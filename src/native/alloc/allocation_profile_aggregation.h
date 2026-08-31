@@ -49,6 +49,8 @@ public:
     bool tickAccepts(std::uint64_t tick_id) const noexcept;
     void processTick(std::uint64_t tick_id, double mspt_ms);
     void recordTick(std::int32_t window, double mspt_ms);
+    void classifyFinalTickSamples(std::uint64_t tick_id, std::uint64_t terminal_tick, std::size_t count) noexcept;
+    void finishPending(std::uint64_t terminal_tick);
     void finishPending();
 
     bool copyCumulativeSnapshot(AllocationSnapshot &snapshot, std::uint64_t number_of_ticks, std::string &error);
@@ -73,7 +75,12 @@ public:
         return pending_capacity_drops_.load(std::memory_order_relaxed);
     }
     std::uint64_t pendingStaleDrops() const noexcept { return pending_stale_drops_.load(std::memory_order_relaxed); }
-    std::uint64_t pendingFinalDrops() const noexcept { return pending_final_drops_.load(std::memory_order_relaxed); }
+    std::uint64_t terminalInFlightTickSamplesDiscarded() const noexcept
+    {
+        return terminal_in_flight_tick_samples_discarded_.load(std::memory_order_relaxed);
+    }
+    // Deprecated compatibility alias for terminalInFlightTickSamplesDiscarded().
+    std::uint64_t pendingFinalDrops() const noexcept { return terminalInFlightTickSamplesDiscarded(); }
     static constexpr std::size_t pendingSampleCapacity() noexcept { return kPendingSampleCapacity; }
     std::uint64_t moduleOverflowFrames() const noexcept
     {
@@ -107,6 +114,8 @@ private:
                              std::size_t &remaining_time_entries, std::uint64_t *sample_count,
                              std::uint64_t *sampled_bytes);
     void recordDrop(std::atomic<std::uint64_t> &counter) noexcept;
+    bool tickDecisionObserved(std::uint64_t tick_id) const noexcept;
+    void dropStalePendingThrough(std::uint64_t tick_id) noexcept;
     void flushPending(std::uint64_t tick_id, bool keep);
     void pruneHistory(std::int32_t current_window, bool force);
     void pruneTickHistory(std::int32_t current_window);
@@ -121,10 +130,13 @@ private:
     std::map<std::int32_t, WindowTickStats> window_ticks_;
     std::unordered_map<std::uint64_t, std::vector<Sample>> pending_buckets_;
     std::vector<std::uint8_t> tick_decisions_;
+    std::map<std::uint64_t, bool> high_tick_decisions_;
     std::map<std::int32_t, WindowSampleStats> window_sample_counts_;
     std::array<bool, kThreadRootCapacity> journaled_thread_roots_{};
     bool journaled_module_sentinel_ = false;
     std::size_t pending_samples_ = 0;
+    bool tick_event_seen_ = false;
+    std::uint64_t last_tick_event_id_ = 0;
     std::size_t profile_nodes_remaining_ = kProfileNodeCapacity;
     std::size_t profile_time_entries_remaining_ = kProfileTimeEntryCapacity;
     std::int32_t session_start_window_ = 0;
@@ -138,7 +150,7 @@ private:
     std::atomic<std::uint64_t> pending_drops_{0};
     std::atomic<std::uint64_t> pending_capacity_drops_{0};
     std::atomic<std::uint64_t> pending_stale_drops_{0};
-    std::atomic<std::uint64_t> pending_final_drops_{0};
+    std::atomic<std::uint64_t> terminal_in_flight_tick_samples_discarded_{0};
     std::atomic<std::uint64_t> module_overflow_frames_{0};
     std::atomic<std::uint64_t> history_samples_pruned_{0};
     std::atomic<std::uint64_t> history_bytes_pruned_{0};

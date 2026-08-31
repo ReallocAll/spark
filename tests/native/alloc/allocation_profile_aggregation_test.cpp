@@ -36,7 +36,8 @@ AllocationSamplerConfig config(bool live_only = false)
     return result;
 }
 
-Sample sample(std::uint64_t thread_id, std::int32_t window, std::uint64_t rva, std::uint64_t weight = 1)
+Sample sample(std::uint64_t thread_id, std::int32_t window, std::uint64_t rva, std::uint64_t weight = 1,
+              std::uint64_t tick_id = 0)
 {
     Sample result;
     result.thread_id = thread_id;
@@ -44,6 +45,7 @@ Sample sample(std::uint64_t thread_id, std::int32_t window, std::uint64_t rva, s
     result.thread_name = "thread";
     result.window = window;
     result.weight = weight;
+    result.tick_id = tick_id;
     result.frames.push_back(FrameKey{.module = 1, .rva = rva, .raw_address = rva});
     return result;
 }
@@ -142,15 +144,142 @@ void pendingDrops()
     configure(aggregation, cfg);
     const std::int32_t window = profiling_window::windowNow();
     for (std::uint64_t tick = 0; tick < AllocationProfileAggregation::kPendingSampleCapacity; ++tick) {
-        assert(!aggregation.processSample(sample(1, window, tick)));
+        assert(!aggregation.processSample(sample(1, window, tick, 1, 0)));
     }
-    assert(!aggregation.processSample(sample(1, window, 999999)));
+    assert(!aggregation.processSample(sample(1, window, 999999, 1, 1)));
     assert(aggregation.pendingCapacityDrops() == 1);
     assert(aggregation.pendingSampleDrops() == 1);
-    aggregation.finishPending();
-    assert(aggregation.pendingFinalDrops() == AllocationProfileAggregation::kPendingSampleCapacity);
+    aggregation.finishPending(2);
+    assert(aggregation.terminalInFlightTickSamplesDiscarded() == 0);
+    assert(aggregation.pendingFinalDrops() == 0);
     assert(aggregation.pendingSampleDrops() == AllocationProfileAggregation::kPendingSampleCapacity + 1);
     assert(aggregation.droppedSamples() == AllocationProfileAggregation::kPendingSampleCapacity + 1);
+
+    AllocationProfileAggregation legacy;
+    configure(legacy, cfg);
+    assert(!legacy.processSample(sample(1, window, 1, 1, 0)));
+    legacy.finishPending();
+    assert(legacy.terminalInFlightTickSamplesDiscarded() == 0);
+    assert(legacy.pendingFinalDrops() == 0);
+    assert(legacy.pendingSampleDrops() == 1);
+    assert(legacy.droppedSamples() == 1);
+}
+
+void terminalTickClassification()
+{
+    AllocationSamplerConfig cfg = config();
+    cfg.only_ticks_over_ms = 10;
+    const std::int32_t window = profiling_window::windowNow();
+
+    AllocationProfileAggregation current;
+    configure(current, cfg);
+    for (std::uint64_t rva = 1; rva <= 4; ++rva) {
+        assert(!current.processSample(sample(1, window, rva, 1, 7)));
+    }
+    current.finishPending(7);
+    assert(current.terminalInFlightTickSamplesDiscarded() == 4);
+    assert(current.pendingFinalDrops() == 4);
+    assert(current.pendingSampleDrops() == 0);
+    assert(current.droppedSamples() == 0);
+    assert(!current.dataIncomplete());
+    assert(current.tree().root().times.empty());
+    current.finishPending(7);
+    assert(current.terminalInFlightTickSamplesDiscarded() == 4);
+    assert(current.pendingFinalDrops() == 4);
+    assert(current.pendingSampleDrops() == 0);
+    assert(current.droppedSamples() == 0);
+
+    configure(current, cfg);
+    assert(current.terminalInFlightTickSamplesDiscarded() == 0);
+    assert(current.pendingFinalDrops() == 0);
+    assert(current.pendingSampleDrops() == 0);
+    assert(current.droppedSamples() == 0);
+    assert(!current.dataIncomplete());
+    assert(!current.processSample(sample(1, window, 8, 1, 9)));
+    current.finishPending(9);
+    assert(current.terminalInFlightTickSamplesDiscarded() == 1);
+    assert(current.pendingFinalDrops() == 1);
+    assert(current.pendingSampleDrops() == 0);
+    assert(current.droppedSamples() == 0);
+    assert(!current.dataIncomplete());
+
+    AllocationProfileAggregation mixed;
+    configure(mixed, cfg);
+    assert(!mixed.processSample(sample(1, window, 2, 1, 6)));
+    assert(!mixed.processSample(sample(1, window, 3, 1, 7)));
+    assert(!mixed.processSample(sample(1, window, 4, 1, 8)));
+    mixed.finishPending(7);
+    assert(mixed.terminalInFlightTickSamplesDiscarded() == 1);
+    assert(mixed.pendingFinalDrops() == 1);
+    assert(mixed.pendingSampleDrops() == 2);
+    assert(mixed.droppedSamples() == 2);
+    assert(mixed.dataIncomplete());
+    assert(mixed.tree().root().times.empty());
+
+    AllocationProfileAggregation completed;
+    configure(completed, cfg);
+    completed.processTick(0, 10.0);
+    completed.processTick(1, 10.1);
+    assert(!completed.processSample(sample(1, window, 5, 1, 0)));
+    assert(completed.processSample(sample(1, window, 6, 1, 1)));
+    completed.finishPending(2);
+    assert(completed.terminalInFlightTickSamplesDiscarded() == 0);
+    assert(completed.pendingSampleDrops() == 0);
+    assert(completed.droppedSamples() == 0);
+    assert(!completed.dataIncomplete());
+    assert(completed.sampleCount() == 1);
+    assert(completed.tree().root().times.size() == 1);
+
+    AllocationProfileAggregation long_running;
+    configure(long_running, cfg);
+    constexpr std::uint64_t terminal_tick = AllocationProfileAggregation::kMaxTickDecisions + 1;
+    assert(!long_running.processSample(sample(1, window, 7, 1, terminal_tick)));
+    long_running.finishPending(terminal_tick);
+    assert(long_running.terminalInFlightTickSamplesDiscarded() == 1);
+    assert(long_running.pendingSampleDrops() == 0);
+    assert(long_running.droppedSamples() == 0);
+    assert(!long_running.dataIncomplete());
+
+    AllocationProfileAggregation high_completed;
+    configure(high_completed, cfg);
+    constexpr std::uint64_t high_tick = AllocationProfileAggregation::kMaxTickDecisions + 1;
+    high_completed.processTick(high_tick, 10.1);
+    assert(high_completed.tickAccepts(high_tick));
+    assert(high_completed.processSample(sample(1, window, 8, 1, high_tick)));
+    assert(high_completed.sampleCount() == 1);
+    assert(high_completed.pendingSampleDrops() == 0);
+    assert(high_completed.droppedSamples() == 0);
+    assert(!high_completed.dataIncomplete());
+
+    AllocationProfileAggregation high_reordered;
+    configure(high_reordered, cfg);
+    assert(!high_reordered.processSample(sample(1, window, 11, 1, high_tick)));
+    high_reordered.processTick(high_tick, 10.1);
+    assert(high_reordered.sampleCount() == 1);
+    assert(high_reordered.pendingSampleDrops() == 0);
+    assert(high_reordered.droppedSamples() == 0);
+    assert(!high_reordered.dataIncomplete());
+
+    AllocationProfileAggregation high_filtered;
+    configure(high_filtered, cfg);
+    high_filtered.processTick(high_tick, 10.0);
+    assert(!high_filtered.tickAccepts(high_tick));
+    assert(!high_filtered.processSample(sample(1, window, 9, 1, high_tick)));
+    assert(high_filtered.sampleCount() == 0);
+    assert(high_filtered.pendingSampleDrops() == 0);
+    assert(high_filtered.droppedSamples() == 0);
+    assert(!high_filtered.dataIncomplete());
+
+    AllocationProfileAggregation invariant;
+    configure(invariant, cfg);
+    constexpr std::uint64_t future_tick = high_tick + 1;
+    assert(!invariant.processSample(sample(1, window, 10, 1, future_tick)));
+    invariant.finishPending(high_tick);
+    assert(invariant.terminalInFlightTickSamplesDiscarded() == 0);
+    assert(invariant.pendingStaleDrops() == 1);
+    assert(invariant.pendingSampleDrops() == 1);
+    assert(invariant.droppedSamples() == 1);
+    assert(invariant.dataIncomplete());
 }
 
 }  // namespace
@@ -162,5 +291,6 @@ int main()
     spark::cumulativeWindowBound();
     spark::liveWindowAndBoundedIdentities();
     spark::pendingDrops();
+    spark::terminalTickClassification();
     return 0;
 }

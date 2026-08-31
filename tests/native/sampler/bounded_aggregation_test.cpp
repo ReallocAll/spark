@@ -1,8 +1,16 @@
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <functional>
+#include <mutex>
+#include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
+#include <utility>
 #include <vector>
 
 #include "native/sampler/call_tree.h"
@@ -26,6 +34,35 @@ struct SamplerTestAccess {
         sampler.profile_nodes_remaining_ = nodes;
         sampler.profile_time_entries_remaining_ = time_entries;
     }
+
+    static void setOnlyTicksOver(Sampler &sampler, std::int64_t threshold)
+    {
+        sampler.config_.only_ticks_over_ms = threshold;
+    }
+
+    static void addPending(Sampler &sampler, std::uint64_t tick_id, Sample sample)
+    {
+        sampler.buckets_[tick_id].push_back(std::move(sample));
+        ++sampler.pending_sample_count_;
+    }
+
+    static bool enqueueSample(Sampler &sampler, Sample sample) { return sampler.enqueueSample(std::move(sample)); }
+
+    static std::size_t pendingSampleCount(const Sampler &sampler) { return sampler.pending_sample_count_; }
+
+    static void setAggregatorThreadHook(Sampler &sampler, std::function<void()> hook)
+    {
+        sampler.aggregator_thread_hook_ = std::move(hook);
+    }
+
+    static void finishPending(Sampler &sampler, std::uint64_t terminal_tick) { sampler.finishPending(terminal_tick); }
+
+    static void recordTickDecision(Sampler &sampler, std::uint64_t tick_id, bool keep)
+    {
+        sampler.recordTickDecision(tick_id, keep);
+    }
+
+    static void flushOrDrop(Sampler &sampler, std::uint64_t tick_id, bool keep) { sampler.flushOrDrop(tick_id, keep); }
 };
 
 }  // namespace spark
@@ -49,6 +86,16 @@ public:
 spark::FrameKey frame(std::uint64_t rva)
 {
     return {.module = 1, .rva = rva, .raw_address = rva};
+}
+
+spark::Sample pendingSample(std::uint64_t rva)
+{
+    spark::Sample result;
+    result.thread_id = 1;
+    result.thread_name = "thread";
+    result.window = 1;
+    result.frames = {frame(rva)};
+    return result;
 }
 
 bool transactionalNodeAndTimeBudget()
@@ -161,13 +208,266 @@ bool excessThreadsUseOverflowRoot()
            sampler.droppedSamples() == 0 && !sampler.dataIncomplete();
 }
 
+bool terminalTickClassification()
+{
+    spark::Sampler sampler;
+    spark::SamplerTestAccess::reset(sampler);
+    spark::SamplerTestAccess::setOnlyTicksOver(sampler, 10);
+    for (std::uint64_t rva = 1; rva <= 4; ++rva) {
+        spark::SamplerTestAccess::addPending(sampler, 7, pendingSample(rva));
+    }
+    spark::SamplerTestAccess::finishPending(sampler, 7);
+    if (sampler.terminalInFlightTickSamplesDiscarded() != 4 || sampler.droppedPendingSamples() != 0 ||
+        sampler.droppedSamples() != 0 || sampler.dataIncomplete() || !sampler.tree().root().times.empty()) {
+        return false;
+    }
+    if (sampler.sampleCount() != 0) {
+        return false;
+    }
+
+    spark::Sampler mixed;
+    spark::SamplerTestAccess::reset(mixed);
+    spark::SamplerTestAccess::setOnlyTicksOver(mixed, 10);
+    spark::SamplerTestAccess::addPending(mixed, 6, pendingSample(2));
+    spark::SamplerTestAccess::addPending(mixed, 7, pendingSample(3));
+    spark::SamplerTestAccess::addPending(mixed, 8, pendingSample(4));
+    spark::SamplerTestAccess::finishPending(mixed, 7);
+    if (mixed.terminalInFlightTickSamplesDiscarded() != 1 || mixed.droppedPendingSamples() != 2 ||
+        mixed.droppedSamples() != 2 || !mixed.dataIncomplete()) {
+        return false;
+    }
+
+    spark::Sampler completed;
+    spark::SamplerTestAccess::reset(completed);
+    spark::SamplerTestAccess::setOnlyTicksOver(completed, 10);
+    spark::SamplerTestAccess::recordTickDecision(completed, 0, false);
+    spark::SamplerTestAccess::recordTickDecision(completed, 1, true);
+    spark::SamplerTestAccess::addPending(completed, 0, pendingSample(5));
+    spark::SamplerTestAccess::addPending(completed, 1, pendingSample(6));
+    spark::SamplerTestAccess::flushOrDrop(completed, 0, false);
+    spark::SamplerTestAccess::flushOrDrop(completed, 1, true);
+    return completed.terminalInFlightTickSamplesDiscarded() == 0 && completed.droppedPendingSamples() == 0 &&
+           completed.droppedSamples() == 0 && !completed.dataIncomplete() && completed.sampleCount() == 1 &&
+           completed.tree().sampleCount() == 1;
+}
+
+bool terminalTickLifecycle()
+{
+#if !defined(_WIN32) && !defined(__linux__)
+    return true;
+#else
+    using namespace std::chrono_literals;
+
+    spark::Sampler sampler;
+    spark::SamplerConfig config;
+    config.interval_us = 5'000'000;
+    config.only_ticks_over_ms = 10;
+    sampler.setTarget(0);
+
+    std::mutex mutex;
+    std::condition_variable cv;
+    bool hook_entered = false;
+    bool release_hook = false;
+    spark::SamplerTestAccess::setAggregatorThreadHook(sampler, [&] {
+        std::unique_lock lock(mutex);
+        hook_entered = true;
+        cv.notify_all();
+        cv.wait(lock, [&] { return release_hook; });
+    });
+
+    if (!sampler.start(config)) {
+        return false;
+    }
+    bool hook_timeout = false;
+    {
+        std::unique_lock lock(mutex);
+        hook_timeout = !cv.wait_for(lock, 2s, [&] { return hook_entered; });
+        if (hook_timeout) {
+            release_hook = true;
+        }
+    }
+    if (hook_timeout) {
+        cv.notify_all();
+        sampler.stop();
+        return false;
+    }
+
+    if (!spark::SamplerTestAccess::enqueueSample(sampler, pendingSample(10))) {
+        {
+            std::scoped_lock lock(mutex);
+            release_hook = true;
+        }
+        cv.notify_all();
+        sampler.stop();
+        return false;
+    }
+
+    std::atomic<bool> pause_started{false};
+    std::thread pause_thread([&] {
+        pause_started.store(true, std::memory_order_release);
+        sampler.pauseForExport();
+    });
+    const auto pause_deadline = std::chrono::steady_clock::now() + 2s;
+    while (!pause_started.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < pause_deadline) {
+        std::this_thread::yield();
+    }
+    if (!pause_started.load(std::memory_order_acquire)) {
+        {
+            std::scoped_lock lock(mutex);
+            release_hook = true;
+        }
+        cv.notify_all();
+        pause_thread.join();
+        sampler.stop();
+        return false;
+    }
+    {
+        std::scoped_lock lock(mutex);
+        release_hook = true;
+    }
+    cv.notify_all();
+    pause_thread.join();
+
+    if (spark::SamplerTestAccess::pendingSampleCount(sampler) != 1 || sampler.sampleCount() != 0 ||
+        sampler.terminalInFlightTickSamplesDiscarded() != 0 || sampler.droppedSamples() != 0 ||
+        sampler.dataIncomplete()) {
+        sampler.stop();
+        return false;
+    }
+
+    spark::SamplerTestAccess::setAggregatorThreadHook(sampler, {});
+    if (!sampler.resumeAfterExport()) {
+        sampler.stop();
+        return false;
+    }
+    sampler.onTick(50.0);
+    const auto admission_deadline = std::chrono::steady_clock::now() + 2s;
+    while (sampler.sampleCount() != 1 && std::chrono::steady_clock::now() < admission_deadline) {
+        std::this_thread::sleep_for(2ms);
+    }
+    if (sampler.sampleCount() != 1) {
+        sampler.stop();
+        return false;
+    }
+    if (sampler.numberOfTicks() != 1 || sampler.droppedSamples() != 0 || sampler.dataIncomplete()) {
+        sampler.stop();
+        return false;
+    }
+
+    spark::Sample current_sample = pendingSample(11);
+    current_sample.tick_id = sampler.numberOfTicks();
+    if (!spark::SamplerTestAccess::enqueueSample(sampler, std::move(current_sample))) {
+        sampler.stop();
+        return false;
+    }
+    sampler.pauseForExport();
+    if (spark::SamplerTestAccess::pendingSampleCount(sampler) != 1) {
+        sampler.stop();
+        return false;
+    }
+    if (!sampler.stop() || sampler.terminalInFlightTickSamplesDiscarded() != 1 ||
+        spark::SamplerTestAccess::pendingSampleCount(sampler) != 0 || sampler.sampleCount() != 1 ||
+        sampler.droppedPendingSamples() != 0 || sampler.droppedSamples() != 0 || sampler.dataIncomplete()) {
+        return false;
+    }
+
+    if (!sampler.stop() || sampler.terminalInFlightTickSamplesDiscarded() != 1 || sampler.sampleCount() != 1 ||
+        sampler.droppedSamples() != 0 || sampler.dataIncomplete()) {
+        return false;
+    }
+
+    if (!sampler.start(config) || !sampler.stop() || sampler.sampleCount() != 0 ||
+        sampler.terminalInFlightTickSamplesDiscarded() != 0 || sampler.droppedSamples() != 0 ||
+        sampler.numberOfTicks() != 0 || sampler.dataIncomplete()) {
+        sampler.stop();
+        return false;
+    }
+    return true;
+#endif
+}
+
+bool terminalTickFailureCleanup()
+{
+#if !defined(_WIN32) && !defined(__linux__)
+    return true;
+#else
+    using namespace std::chrono_literals;
+
+    spark::Sampler sampler;
+    spark::SamplerConfig config;
+    config.interval_us = 5'000'000;
+    config.only_ticks_over_ms = 10;
+    sampler.setTarget(0);
+
+    std::mutex mutex;
+    std::condition_variable cv;
+    bool hook_entered = false;
+    bool release_hook = false;
+    spark::SamplerTestAccess::setAggregatorThreadHook(sampler, [&] {
+        std::unique_lock lock(mutex);
+        hook_entered = true;
+        cv.notify_all();
+        cv.wait(lock, [&] { return release_hook; });
+        throw std::runtime_error("injected sampler aggregator failure");
+    });
+
+    if (!sampler.start(config)) {
+        return false;
+    }
+    bool hook_timeout = false;
+    {
+        std::unique_lock lock(mutex);
+        hook_timeout = !cv.wait_for(lock, 2s, [&] { return hook_entered; });
+        if (hook_timeout) {
+            release_hook = true;
+        }
+    }
+    if (hook_timeout) {
+        cv.notify_all();
+        sampler.stop();
+        return false;
+    }
+    if (!spark::SamplerTestAccess::enqueueSample(sampler, pendingSample(12))) {
+        {
+            std::scoped_lock lock(mutex);
+            release_hook = true;
+        }
+        cv.notify_all();
+        sampler.stop();
+        return false;
+    }
+    std::thread release_thread([&] {
+        while (sampler.running()) {
+            std::this_thread::yield();
+        }
+        {
+            std::scoped_lock lock(mutex);
+            release_hook = true;
+        }
+        cv.notify_all();
+    });
+    sampler.pauseForExport();
+    release_thread.join();
+
+    std::string failure;
+    if (!sampler.failure(failure) || !sampler.stop() || sampler.terminalInFlightTickSamplesDiscarded() != 1 ||
+        sampler.droppedSamples() != 0 || sampler.dataIncomplete() ||
+        spark::SamplerTestAccess::pendingSampleCount(sampler) != 0) {
+        sampler.stop();
+        return false;
+    }
+    return sampler.stop() && sampler.terminalInFlightTickSamplesDiscarded() == 1;
+#endif
+}
+
 }  // namespace
 
 int main()
 {
     if (!transactionalNodeAndTimeBudget() || !pruningReclaimsExactStorage() || !boundedModulesAndSamplerConstants() ||
         !combinedTreeBudgetIsTransactional() || !recoveryModuleDefinitionsPrecedeSamples() ||
-        !excessThreadsUseOverflowRoot()) {
+        !excessThreadsUseOverflowRoot() || !terminalTickClassification() || !terminalTickLifecycle() ||
+        !terminalTickFailureCleanup()) {
         std::fprintf(stderr, "bounded aggregation test failed\n");
         return 1;
     }

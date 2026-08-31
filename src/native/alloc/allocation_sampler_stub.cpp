@@ -245,6 +245,10 @@ std::uint64_t AllocationSampler::pendingStaleDrops() const
 {
     return 0;
 }
+std::uint64_t AllocationSampler::terminalInFlightTickSamplesDiscarded() const
+{
+    return 0;
+}
 std::uint64_t AllocationSampler::pendingFinalDrops() const
 {
     return 0;

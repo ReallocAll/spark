@@ -28,8 +28,38 @@ bool verifyAllocationLifecycle()
     std::string error;
 
     spark::AllocationSampler sampler;
-    if (!runAllocationSession(sampler, config, error) || !sampler.hooksInstalled() ||
-        !runAllocationSession(sampler, config, error) || !sampler.hooksInstalled()) {
+    spark::AllocationSamplerConfig terminal_config = config;
+    terminal_config.interval_bytes = 1;
+    terminal_config.only_ticks_over_ms = 10;
+    terminal_config.aggregator_delay_ms_for_testing = 1000;
+    if (!sampler.start(terminal_config, error) || !exerciseNativeAllocations() || !sampler.stop(error) ||
+        sampler.terminalInFlightTickSamplesDiscarded() == 0 || sampler.pendingSampleDrops() != 0 ||
+        sampler.droppedSamples() != 0 || sampler.dataIncomplete() ||
+        sampler.pendingFinalDrops() != sampler.terminalInFlightTickSamplesDiscarded()) {
+        std::fprintf(stderr,
+                     "allocation lifecycle: terminal in-flight classification failed "
+                     "(terminal=%llu pending=%llu dropped=%llu incomplete=%d error=%s)\n",
+                     static_cast<unsigned long long>(sampler.terminalInFlightTickSamplesDiscarded()),
+                     static_cast<unsigned long long>(sampler.pendingSampleDrops()),
+                     static_cast<unsigned long long>(sampler.droppedSamples()),
+                     static_cast<int>(sampler.dataIncomplete()), error.c_str());
+        sampler.stop(error);
+        return false;
+    }
+    const std::uint64_t terminal_samples = sampler.terminalInFlightTickSamplesDiscarded();
+    error = "sentinel";
+    if (!sampler.stop(error) || !error.empty() || sampler.terminalInFlightTickSamplesDiscarded() != terminal_samples ||
+        sampler.pendingSampleDrops() != 0 || sampler.droppedSamples() != 0 || sampler.dataIncomplete()) {
+        std::fprintf(stderr, "allocation lifecycle: terminal stop was not idempotent: %s\n", error.c_str());
+        return false;
+    }
+
+    config.only_ticks_over_ms = 0;
+    config.aggregator_delay_ms_for_testing = 0;
+    if (!runAllocationSession(sampler, config, error) || !sampler.hooksInstalled()) {
+        return false;
+    }
+    if (!runAllocationSession(sampler, config, error) || !sampler.hooksInstalled()) {
         return false;
     }
     const auto &capabilities = sampler.hookCapabilities();

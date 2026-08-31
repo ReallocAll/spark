@@ -380,6 +380,8 @@ std::string Profiler::exportData(const ExportContext &ctx, const AllocationSnaps
             std::to_string(allocation_sampler_.pendingCapacityDrops());
         meta.extra_platform_metadata["Allocation pending stale drops"] =
             std::to_string(allocation_sampler_.pendingStaleDrops());
+        meta.extra_platform_metadata["Allocation terminal in-flight tick samples discarded"] =
+            std::to_string(allocation_sampler_.terminalInFlightTickSamplesDiscarded());
         meta.extra_platform_metadata["Allocation pending final drops"] =
             std::to_string(allocation_sampler_.pendingFinalDrops());
         meta.extra_platform_metadata["Allocation module overflow frames"] =
@@ -455,6 +457,8 @@ std::string Profiler::exportData(const ExportContext &ctx, const AllocationSnaps
             std::to_string(sampler_.droppedQueueSamples());
         meta.extra_platform_metadata["Execution pending samples dropped"] =
             std::to_string(sampler_.droppedPendingSamples());
+        meta.extra_platform_metadata["Execution terminal in-flight tick samples discarded"] =
+            std::to_string(sampler_.terminalInFlightTickSamplesDiscarded());
         meta.extra_platform_metadata["Execution profile samples dropped"] =
             std::to_string(sampler_.droppedProfileSamples());
         meta.extra_platform_metadata["Execution tick events dropped"] = std::to_string(sampler_.droppedTickEvents());

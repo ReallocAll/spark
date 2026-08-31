@@ -1,4 +1,6 @@
+#include <charconv>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -6,7 +8,9 @@
 #include <limits>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <thread>
+#include <vector>
 
 #ifdef _WIN32
 #include <malloc.h>
@@ -19,6 +23,8 @@
 namespace spark {
 
 struct ProfilerTestAccess {
+    static void setMode(Profiler &profiler, ProfileMode mode) { profiler.mode_ = mode; }
+
     static bool allocationSnapshot(Profiler &profiler, AllocationSnapshot &snapshot, std::string &error)
     {
         return profiler.allocation_sampler_.snapshot(snapshot, error);
@@ -39,6 +45,46 @@ struct ProfilerTestAccess {
     static std::uint64_t allocationContentionDropped(const Profiler &profiler)
     {
         return profiler.allocation_sampler_.contentionDropped();
+    }
+
+    static std::uint64_t allocationTerminalSamples(const Profiler &profiler)
+    {
+        return profiler.allocation_sampler_.terminalInFlightTickSamplesDiscarded();
+    }
+
+    static std::uint64_t allocationDroppedSamples(const Profiler &profiler)
+    {
+        return profiler.allocation_sampler_.droppedSamples();
+    }
+
+    static std::uint64_t allocationPendingSamples(const Profiler &profiler)
+    {
+        return profiler.allocation_sampler_.pendingSampleDrops();
+    }
+
+    static bool allocationDataIncomplete(const Profiler &profiler)
+    {
+        return profiler.allocation_sampler_.dataIncomplete();
+    }
+
+    static void seedExecutionTerminalSamples(Profiler &profiler, std::size_t count)
+    {
+        profiler.mode_ = ProfileMode::Execution;
+        profiler.sampler_.resetSession();
+        profiler.sampler_.config_.only_ticks_over_ms = 10;
+        for (std::size_t i = 0; i < count; ++i) {
+            Sample sample;
+            sample.thread_id = 1;
+            sample.thread_name = "thread";
+            sample.window = 1;
+            sample.tick_id = 7;
+            sample.frames.push_back(FrameKey{.module = 1,
+                                             .rva = static_cast<std::uint64_t>(i + 1),
+                                             .raw_address = static_cast<std::uint64_t>(i + 1)});
+            profiler.sampler_.buckets_[sample.tick_id].push_back(sample);
+            ++profiler.sampler_.pending_sample_count_;
+        }
+        profiler.sampler_.finishPending(7);
     }
 
     static bool persistentAllocationCountingActive(const Profiler &profiler)
@@ -83,6 +129,163 @@ bool packedDoubleHasPositive(std::string_view bytes)
     }
     return false;
 }
+
+bool findExtraMetadataValue(std::string_view profile, std::string_view key, std::string &value)
+{
+    spark::ProtoReader data(profile);
+    int field = 0;
+    int wire_type = 0;
+    while (data.nextField(field, wire_type)) {
+        if (field != 1 || wire_type != 2) {
+            data.skip(wire_type);
+            continue;
+        }
+
+        spark::ProtoReader metadata = data.readMessage();
+        int metadata_field = 0;
+        int metadata_wire_type = 0;
+        while (metadata.nextField(metadata_field, metadata_wire_type)) {
+            if (metadata_field != 14 || metadata_wire_type != 2) {
+                metadata.skip(metadata_wire_type);
+                continue;
+            }
+            spark::ProtoReader entry = metadata.readMessage();
+            std::string_view entry_key;
+            std::string_view entry_value;
+            int entry_field = 0;
+            int entry_wire_type = 0;
+            while (entry.nextField(entry_field, entry_wire_type)) {
+                if (entry_field == 1 && entry_wire_type == 2) {
+                    entry_key = entry.readString();
+                }
+                else if (entry_field == 2 && entry_wire_type == 2) {
+                    entry_value = entry.readString();
+                }
+                else {
+                    entry.skip(entry_wire_type);
+                }
+            }
+            if (!entry.valid()) {
+                return false;
+            }
+            if (entry_key == key) {
+                value.assign(entry_value);
+                return metadata.valid() && data.valid();
+            }
+        }
+        if (!metadata.valid()) {
+            return false;
+        }
+    }
+    return false;
+}
+
+bool metadataUnsigned(std::string_view profile, std::string_view key, std::uint64_t expected)
+{
+    std::string value;
+    if (!findExtraMetadataValue(profile, key, value)) {
+        return false;
+    }
+    std::uint64_t parsed = 0;
+    const auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), parsed);
+    return error == std::errc{} && end == value.data() + value.size() && parsed == expected;
+}
+
+bool metadataBoolean(std::string_view profile, std::string_view key, bool expected)
+{
+    std::string value;
+    return findExtraMetadataValue(profile, key, value) && value == (expected ? "true" : "false");
+}
+
+bool verifyTerminalMetadataExport()
+{
+    spark::Profiler execution;
+    const std::string execution_profile = execution.exportData({});
+    if (execution_profile.empty() ||
+        !metadataUnsigned(execution_profile, "Execution terminal in-flight tick samples discarded", 0) ||
+        !metadataUnsigned(execution_profile, "Execution samples dropped", 0) ||
+        !metadataUnsigned(execution_profile, "Execution pending samples dropped", 0) ||
+        !metadataBoolean(execution_profile, "Execution data incomplete", false)) {
+        std::fprintf(stderr, "terminal metadata: execution values were not serialized correctly\n");
+        return false;
+    }
+
+    spark::Profiler allocation;
+    spark::ProfilerTestAccess::setMode(allocation, spark::ProfileMode::Allocation);
+    const std::string allocation_profile = allocation.exportData({});
+    if (allocation_profile.empty() ||
+        !metadataUnsigned(allocation_profile, "Allocation terminal in-flight tick samples discarded", 0) ||
+        !metadataUnsigned(allocation_profile, "Allocation pending final drops", 0) ||
+        !metadataUnsigned(allocation_profile, "Allocation samples dropped", 0) ||
+        !metadataUnsigned(allocation_profile, "Allocation pending samples dropped", 0) ||
+        !metadataBoolean(allocation_profile, "Allocation data incomplete", false)) {
+        std::fprintf(stderr, "terminal metadata: allocation values were not serialized correctly\n");
+        return false;
+    }
+    return true;
+}
+
+#if defined(_WIN32) || defined(__linux__)
+bool verifyTerminalMetadataExportWithSamples()
+{
+    spark::Profiler execution;
+    spark::ProfilerTestAccess::seedExecutionTerminalSamples(execution, 4);
+    const std::string execution_profile = execution.exportData({});
+    if (!metadataUnsigned(execution_profile, "Execution terminal in-flight tick samples discarded", 4) ||
+        !metadataUnsigned(execution_profile, "Execution samples dropped", 0) ||
+        !metadataUnsigned(execution_profile, "Execution pending samples dropped", 0) ||
+        !metadataBoolean(execution_profile, "Execution data incomplete", false)) {
+        std::fprintf(stderr, "terminal metadata: execution nonzero values were not serialized correctly\n");
+        return false;
+    }
+
+    spark::Profiler allocation;
+    spark::ProfilerOptions options;
+    options.alloc = true;
+    options.only_ticks_over_ms = 10;
+    options.allocation_interval_bytes = 1;
+    std::string error;
+    if (!allocation.start(options, spark::currentNativeThreadId(), error)) {
+        std::fprintf(stderr, "terminal metadata: allocation start failed: %s\n", error.c_str());
+        return false;
+    }
+    std::vector<void *> retained;
+    retained.reserve(1024);
+    for (int i = 0; i < 1024; ++i) {
+        void *pointer = std::malloc(256);
+        if (pointer != nullptr) {
+            static_cast<volatile unsigned char *>(pointer)[0] = static_cast<unsigned char>(i);
+            retained.push_back(pointer);
+        }
+    }
+    if (retained.empty() || !allocation.stopSampling(error)) {
+        std::fprintf(stderr, "terminal metadata: allocation stop failed: %s\n", error.c_str());
+        for (void *pointer : retained) {
+            std::free(pointer);
+        }
+        allocation.shutdown(error);
+        return false;
+    }
+    const std::uint64_t terminal = spark::ProfilerTestAccess::allocationTerminalSamples(allocation);
+    const std::string allocation_profile = allocation.exportData({});
+    const bool valid =
+        terminal != 0 &&
+        metadataUnsigned(allocation_profile, "Allocation terminal in-flight tick samples discarded", terminal) &&
+        metadataUnsigned(allocation_profile, "Allocation pending final drops", terminal) &&
+        metadataUnsigned(allocation_profile, "Allocation samples dropped", 0) &&
+        metadataUnsigned(allocation_profile, "Allocation pending samples dropped", 0) &&
+        metadataBoolean(allocation_profile, "Allocation data incomplete", false);
+    for (void *pointer : retained) {
+        std::free(pointer);
+    }
+    if (!valid) {
+        std::fprintf(stderr, "terminal metadata: allocation nonzero values were not serialized correctly\n");
+        allocation.shutdown(error);
+        return false;
+    }
+    return allocation.shutdown(error);
+}
+#endif
 
 bool serializedAllocationTreeNonEmpty(std::string_view profile)
 {
@@ -320,7 +523,17 @@ bool verifyPersistentAllocationExportOrdering()
 
     const std::string profile = profiler.exportData({});
     if (profile.empty() || !serializedAllocationTreeNonEmpty(profile) || profiler.sampleCount() != samples_after_stop ||
-        profiler.sampledAllocationBytes() != bytes_after_stop) {
+        profiler.sampledAllocationBytes() != bytes_after_stop ||
+        !metadataUnsigned(profile, "Allocation terminal in-flight tick samples discarded",
+                          spark::ProfilerTestAccess::allocationTerminalSamples(profiler)) ||
+        !metadataUnsigned(profile, "Allocation pending final drops",
+                          spark::ProfilerTestAccess::allocationTerminalSamples(profiler)) ||
+        !metadataUnsigned(profile, "Allocation samples dropped",
+                          spark::ProfilerTestAccess::allocationDroppedSamples(profiler)) ||
+        !metadataUnsigned(profile, "Allocation pending samples dropped",
+                          spark::ProfilerTestAccess::allocationPendingSamples(profiler)) ||
+        !metadataBoolean(profile, "Allocation data incomplete",
+                         spark::ProfilerTestAccess::allocationDataIncomplete(profiler))) {
         std::fprintf(stderr,
                      "persistent export: serialized SamplerData did not preserve a non-empty allocation tree\n");
         return false;
@@ -631,6 +844,14 @@ bool verifyRetainedAllocationLiveExport()
 
 int main()
 {
+    if (!verifyTerminalMetadataExport()) {
+        return 1;
+    }
+#if defined(_WIN32) || defined(__linux__)
+    if (!verifyTerminalMetadataExportWithSamples()) {
+        return 1;
+    }
+#endif
 #if defined(_WIN32) || defined(__linux__)
     if (!verifyPersistentAllocationExportOrdering()) {
         return 1;
