@@ -37,6 +37,33 @@ void Sampler::dropPendingSamples(std::size_t count) noexcept
     dropped_samples_.fetch_add(static_cast<std::uint64_t>(count), std::memory_order_relaxed);
 }
 
+void Sampler::finishPending(std::uint64_t terminal_tick)
+{
+    if (config_.only_ticks_over_ms <= 0) {
+        for (const auto &[tick_id, samples] : buckets_) {
+            (void)tick_id;
+            for (const Sample &sample : samples) {
+                acceptSample(sample);
+            }
+        }
+        buckets_.clear();
+        pending_sample_count_ = 0;
+        return;
+    }
+    for (const auto &[tick_id, samples] : buckets_) {
+        const std::size_t count = samples.size();
+        if (tick_id == terminal_tick) {
+            terminal_in_flight_tick_samples_discarded_.fetch_add(static_cast<std::uint64_t>(count),
+                                                                 std::memory_order_relaxed);
+        }
+        else {
+            dropPendingSamples(count);
+        }
+    }
+    buckets_.clear();
+    pending_sample_count_ = 0;
+}
+
 void Sampler::journalModuleDefinitions(const Sample &sample)
 {
     if (recovery_sink_ == nullptr) {
@@ -213,80 +240,72 @@ void Sampler::flushOrDrop(std::uint64_t tick_id, bool keep)
     buckets_.erase(it);
 }
 
+void Sampler::drainQueues()
+{
+    const bool ticked = config_.only_ticks_over_ms > 0;
+    const auto threshold = static_cast<double>(config_.only_ticks_over_ms);
+    TickEvent event;
+    while (ticks_.try_dequeue(event)) {
+        const bool keep = !ticked || event.mspt_ms > threshold;
+        if (ticked) {
+            recordTickDecision(event.tick_id, keep);
+        }
+        if (recovery_sink_) {
+            recovery_sink_->journalTickEvent(event.tick_id, event.mspt_ms);
+        }
+        flushOrDrop(event.tick_id, keep);
+    }
+    Sample sample;
+    while (samples_.try_dequeue(sample)) {
+        journalModuleDefinitions(sample);
+        if (!ticked) {
+            acceptSample(sample);
+        }
+        else {
+            bool pending_drop = sample.tick_id < tick_decision_base_;
+            bool undecided = false;
+            if (!pending_drop) {
+                const auto offset = static_cast<std::size_t>(sample.tick_id - tick_decision_base_);
+                const bool decided = offset < tick_decisions_.size() && tick_decisions_[offset] != 0;
+                if (decided) {
+                    if (tick_decisions_[offset] == 2) {
+                        acceptSample(sample);
+                    }
+                }
+                else if (pending_sample_count_ >= kMaxPendingSamples) {
+                    pending_drop = true;
+                }
+                else {
+                    undecided = true;
+                }
+            }
+            if (pending_drop) {
+                dropPendingSamples(1);
+            }
+            else if (undecided) {
+                buckets_[sample.tick_id].push_back(std::move(sample));
+                ++pending_sample_count_;
+            }
+        }
+    }
+}
+
 void Sampler::aggregatorLoop()
 {
     aggregator_tid_.store(currentNativeThreadId(), std::memory_order_release);
-    const bool ticked = config_.only_ticks_over_ms > 0;
-    const auto threshold = static_cast<double>(config_.only_ticks_over_ms);
-
-    auto drain = [&] {
-        TickEvent event;
-        while (ticks_.try_dequeue(event)) {
-            const bool keep = !ticked || event.mspt_ms > threshold;
-            if (ticked) {
-                recordTickDecision(event.tick_id, keep);
-            }
-            if (recovery_sink_) {
-                recovery_sink_->journalTickEvent(event.tick_id, event.mspt_ms);
-            }
-            flushOrDrop(event.tick_id, keep);
-        }
-        Sample sample;
-        while (samples_.try_dequeue(sample)) {
-            journalModuleDefinitions(sample);
-            if (!ticked) {
-                acceptSample(sample);
-            }
-            else {
-                bool pending_drop = sample.tick_id < tick_decision_base_;
-                bool undecided = false;
-                if (!pending_drop) {
-                    const auto offset = static_cast<std::size_t>(sample.tick_id - tick_decision_base_);
-                    const bool decided = offset < tick_decisions_.size() && tick_decisions_[offset] != 0;
-                    if (decided) {
-                        if (tick_decisions_[offset] == 2) {
-                            acceptSample(sample);
-                        }
-                    }
-                    else if (pending_sample_count_ >= kMaxPendingSamples) {
-                        pending_drop = true;
-                    }
-                    else {
-                        undecided = true;
-                    }
-                }
-                if (pending_drop) {
-                    dropPendingSamples(1);
-                }
-                else if (undecided) {
-                    buckets_[sample.tick_id].push_back(std::move(sample));
-                    ++pending_sample_count_;
-                }
-            }
-        }
-    };
 
     while (agg_running_.load()) {
-        drain();
+        drainQueues();
         aggregator_heartbeat_.beat();
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
-    drain();
+    drainQueues();
     aggregator_heartbeat_.beat();
 
-    if (ticked) {
-        dropPendingSamples(pending_sample_count_);
+    if (finalize_pending_.load(std::memory_order_acquire)) {
+        finishPending(terminal_tick_.load(std::memory_order_acquire));
+        pending_finalized_.store(true, std::memory_order_release);
     }
-    else {
-        for (auto &[tick_id, samples] : buckets_) {
-            (void)tick_id;
-            for (const Sample &sample : samples) {
-                acceptSample(sample);
-            }
-        }
-    }
-    buckets_.clear();
-    pending_sample_count_ = 0;
     aggregator_tid_.store(0, std::memory_order_release);
 }
 
