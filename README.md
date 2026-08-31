@@ -159,7 +159,8 @@ response with access to the data stream.
   seconds, which must be greater than `10`. Omit this flag to run until `stop` or
   `cancel` is issued.
 * `--only-ticks-over <ms>` — retain samples only from ticks longer than the given
-  positive whole number of milliseconds.
+  positive whole number of milliseconds. Samples from the unfinished tick at
+  finalization are excluded and reported separately from incomplete-data drops.
 * `--comment <text>` — attach a note to the profile; quote text containing spaces.
 * `--save-to-file` — write a `.sparkprofile` file under
   `plugins/spark/profiles/` instead of uploading it (open the file by dragging it

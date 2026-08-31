@@ -71,6 +71,7 @@ std::size_t pythonInsertionPoint(const std::vector<FrameKey> &frames, const Modu
 
 void Sampler::markWorkerFailure() noexcept
 {
+    tick_admission_open_.store(false, std::memory_order_release);
     worker_failed_.store(true, std::memory_order_release);
     running_.store(false, std::memory_order_release);
     agg_running_.store(false, std::memory_order_release);
@@ -142,6 +143,7 @@ Sampler::~Sampler()
 
 bool Sampler::start(const SamplerConfig &config)
 {
+    std::scoped_lock lifecycle_lock(lifecycle_mutex_);
     last_error_.clear();
     if (running_.load()) {
         last_error_ = "sampler is already running";
@@ -164,7 +166,14 @@ bool Sampler::start(const SamplerConfig &config)
 
 bool Sampler::stop()
 {
-    running_.store(false);
+    std::scoped_lock lifecycle_lock(lifecycle_mutex_);
+    {
+        std::scoped_lock tick_lock(tick_mutex_);
+        tick_admission_open_.store(false, std::memory_order_release);
+        terminal_tick_.store(current_tick_.load(std::memory_order_relaxed), std::memory_order_release);
+        finalize_pending_.store(true, std::memory_order_release);
+        running_.store(false, std::memory_order_release);
+    }
 #ifdef _WIN32
     Capture::cancelPending();
 #endif
@@ -176,6 +185,11 @@ bool Sampler::stop()
     if (aggregator_thread_.joinable()) {
         aggregator_thread_.join();  // drains everything the sampler left behind
     }
+    drainQueues();
+    if (finalize_pending_.load(std::memory_order_acquire) && !pending_finalized_.load(std::memory_order_acquire)) {
+        finishPending(terminal_tick_.load(std::memory_order_acquire));
+        pending_finalized_.store(true, std::memory_order_release);
+    }
     if (!Capture::disarm()) {
         last_error_ = "the stack-capture handler is still active";
         return false;
@@ -185,6 +199,7 @@ bool Sampler::stop()
 
 void Sampler::requestStop() noexcept
 {
+    tick_admission_open_.store(false, std::memory_order_release);
     running_.store(false, std::memory_order_release);
 #ifdef _WIN32
     Capture::cancelPending();
@@ -194,7 +209,12 @@ void Sampler::requestStop() noexcept
 
 void Sampler::pauseForExport()
 {
-    running_.store(false);
+    std::scoped_lock lifecycle_lock(lifecycle_mutex_);
+    {
+        std::scoped_lock tick_lock(tick_mutex_);
+        running_.store(false, std::memory_order_release);
+        finalize_pending_.store(false, std::memory_order_release);
+    }
 #ifdef _WIN32
     Capture::cancelPending();
 #endif
@@ -211,8 +231,13 @@ void Sampler::pauseForExport()
 
 bool Sampler::resumeAfterExport()
 {
+    std::scoped_lock lifecycle_lock(lifecycle_mutex_);
     if (running_.load()) {
         return true;
+    }
+    if (finalize_pending_.load(std::memory_order_acquire) || !tick_admission_open_.load(std::memory_order_acquire)) {
+        last_error_ = "the sampler session is no longer resumable";
+        return false;
     }
     if (!startServiceThreads()) {
         last_error_ = "the sampler service threads could not be resumed";
@@ -249,6 +274,7 @@ void Sampler::resetSession()
     dropped_pending_samples_.store(0, std::memory_order_relaxed);
     dropped_profile_samples_.store(0, std::memory_order_relaxed);
     dropped_tick_events_.store(0, std::memory_order_relaxed);
+    terminal_in_flight_tick_samples_discarded_.store(0, std::memory_order_relaxed);
     module_overflow_frames_.store(0, std::memory_order_relaxed);
     overflow_thread_samples_.store(0, std::memory_order_relaxed);
     history_samples_pruned_.store(0, std::memory_order_relaxed);
@@ -256,6 +282,10 @@ void Sampler::resetSession()
     sampler_tid_.store(0, std::memory_order_relaxed);
     aggregator_tid_.store(0, std::memory_order_relaxed);
     worker_failed_.store(false, std::memory_order_relaxed);
+    tick_admission_open_.store(true, std::memory_order_relaxed);
+    finalize_pending_.store(false, std::memory_order_relaxed);
+    pending_finalized_.store(false, std::memory_order_relaxed);
+    terminal_tick_.store(0, std::memory_order_relaxed);
     sampler_heartbeat_.sequence.store(0, std::memory_order_relaxed);
     sampler_heartbeat_.last_ns.store(0, std::memory_order_relaxed);
     aggregator_heartbeat_.sequence.store(0, std::memory_order_relaxed);
@@ -274,6 +304,10 @@ std::int32_t Sampler::currentWindow()
 
 void Sampler::onTick(double mspt_ms)
 {
+    std::scoped_lock tick_lock(tick_mutex_);
+    if (!tick_admission_open_.load(std::memory_order_acquire)) {
+        return;
+    }
     std::uint64_t finished = current_tick_.load();
     if (!ticks_.try_enqueue(tick_producer_, TickEvent{.tick_id = finished, .mspt_ms = mspt_ms})) {
         dropped_tick_events_.fetch_add(1, std::memory_order_relaxed);

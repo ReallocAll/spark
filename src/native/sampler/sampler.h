@@ -107,6 +107,10 @@ public:
     std::uint64_t droppedPendingSamples() const { return dropped_pending_samples_.load(std::memory_order_relaxed); }
     std::uint64_t droppedProfileSamples() const { return dropped_profile_samples_.load(std::memory_order_relaxed); }
     std::uint64_t droppedTickEvents() const { return dropped_tick_events_.load(std::memory_order_relaxed); }
+    std::uint64_t terminalInFlightTickSamplesDiscarded() const
+    {
+        return terminal_in_flight_tick_samples_discarded_.load(std::memory_order_relaxed);
+    }
     static constexpr std::size_t sampleQueueCapacity() { return kSampleQueueCapacity; }
     static constexpr std::size_t tickQueueCapacity() { return kTickQueueCapacity; }
     static constexpr std::size_t moduleCapacity() { return kModuleCapacity; }
@@ -151,6 +155,7 @@ private:
 
     void samplerLoop();
     void aggregatorLoop();
+    void drainQueues();
     bool acceptSample(const Sample &sample);
     void journalModuleDefinitions(const Sample &sample);
     void flushOrDrop(std::uint64_t tick_id, bool keep);
@@ -161,6 +166,7 @@ private:
     void recordTickDecision(std::uint64_t tick_id, bool keep);
     bool enqueueSample(Sample sample) noexcept;
     void dropPendingSamples(std::size_t count) noexcept;
+    void finishPending(std::uint64_t terminal_tick);
     void markWorkerFailure() noexcept;
     bool startServiceThreads();
 
@@ -177,6 +183,7 @@ private:
     std::atomic<std::uint64_t> dropped_pending_samples_{0};
     std::atomic<std::uint64_t> dropped_profile_samples_{0};
     std::atomic<std::uint64_t> dropped_tick_events_{0};
+    std::atomic<std::uint64_t> terminal_in_flight_tick_samples_discarded_{0};
     std::atomic<std::uint64_t> module_overflow_frames_{0};
     std::atomic<std::uint64_t> overflow_thread_samples_{0};
     std::atomic<std::uint64_t> history_samples_pruned_{0};
@@ -184,12 +191,18 @@ private:
     std::atomic<std::uint64_t> sampler_tid_{0};
     std::atomic<std::uint64_t> aggregator_tid_{0};
     std::atomic<bool> worker_failed_{false};
+    std::atomic<bool> tick_admission_open_{true};
+    std::atomic<bool> finalize_pending_{false};
+    std::atomic<bool> pending_finalized_{false};
+    std::atomic<std::uint64_t> terminal_tick_{0};
     std::atomic<std::uint64_t> service_start_count_{0};
     std::atomic<PythonStackProvider *> python_stack_provider_{nullptr};
     std::string target_name_ = "Server thread";
 
     std::thread sampler_thread_;
     std::thread aggregator_thread_;
+    std::mutex lifecycle_mutex_;
+    std::mutex tick_mutex_;
     std::condition_variable wait_cv_;
     std::mutex wait_mutex_;
 

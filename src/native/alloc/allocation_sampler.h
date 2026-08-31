@@ -161,6 +161,8 @@ public:
     std::uint64_t pendingSampleDrops() const;
     std::uint64_t pendingCapacityDrops() const;
     std::uint64_t pendingStaleDrops() const;
+    std::uint64_t terminalInFlightTickSamplesDiscarded() const;
+    // Deprecated compatibility alias for terminalInFlightTickSamplesDiscarded().
     std::uint64_t pendingFinalDrops() const;
     std::uint64_t moduleOverflowFrames() const;
     std::uint64_t retainedHistoryWindows() const;
