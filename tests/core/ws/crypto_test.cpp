@@ -3,6 +3,7 @@
 #include <iostream>
 #include <vector>
 
+#include "core/util/base64.h"
 #include "core/ws/crypto.h"
 #include "crypto_test_keys.h"
 
@@ -28,6 +29,33 @@ const std::uint8_t KTestSignature[] = {
 constexpr std::size_t KTestSignatureLen = sizeof(KTestSignature);
 const char KTestMessage[] = "spark-crypto-test-vector";
 constexpr std::size_t KTestMessageLen = sizeof(KTestMessage) - 1;
+
+// This PKCS#8 key has a 255-byte private exponent for a 256-byte modulus. DER
+// correctly omits the leading zero octet; CNG's RSAFULLPRIVATE blob requires it
+// to be restored to cbModulus before the following fixed-width fields are read.
+constexpr std::string_view KShortPrivateExponentKey =
+    "MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQCLPrN5fKns7zVwPlm42tUZK5pE8KrNzeEwoEnDlTMg6YAT1C+3"
+    "LEydf/dW6iEr3tV+G1NWzqaiQvw0s3vj8JI6DHvIg+4bHNw/HWjhyW1mbRQ1QWZwMdmy/flNSypyRW9roYIeorl66MJeuwXJvqacv1EC2"
+    "vf/5VmdnRopFKCI3AybryNSrHhlJ6kg6/TbCA5mfdDunTxAveW+oAJxAGkzSvusoWyW2aGEakMGy7HiV/VS72HDacT89MixXWFJAjxBP"
+    "BRStF6JJyKEgqv1a6PWLGTdaU0KW0K4CxDcOHwxb0oVyvbywLN+bFve9Fttd34imsUB8aTMS90+O+s6G/wpAgMBAAECggEAAKaGcxGuixVW"
+    "W69mhKyIfV0ik9aNWP2k7qUy3e1gzRvyJEtj8ZVS33wfcMrjzUfqDf/rc9yomNoMTbW5NryXcqZK9jLF8erjnsit3YxXr74mNVvvpozv"
+    "nNmEqLLY5jYUa2v1e0Tt7fAhSlLdY3GW5yr3LfDwnODmKLUKhH6/mvey+ldKXrxJRqAVqUT/dpirQDsWY0E/VhVD4wMQdb6FrgTG50c"
+    "3QkcxJ4LD29SGVcWPlUI2CAbB4glSHCME6WV/JNEUupAQJHW2ekxYgv8tFWv9KUWVmSnkykSbLwozgBlZhMH6eZNUe8XLKTLOPXrT5J"
+    "AsH5a/nmYypW/nTDqDYQKBgQDAcC6IO/Qot9GLg49+4BC0fDrXyV6+4LlnSlRwYUkSfjmPujD8PSREbOeOs+qQW7xD3t1EPeXRvOx8u"
+    "q12rXrXsrXy1/3dSE18AX5RTapyzZTukG3ACIIBlH2xaPQO152T3dD+DWXk2dqW3pr2KmTjZouu/PDf2eF/e1ubZn3QUQKBgQC5PLRU"
+    "JRbTmWxM8Sr4a2Vll1mo30+rQkltSkfeimtn93JKxv3o+PaViNcr2ptc6Wt87QMRorraFyzLcEKuHO0f19LZWpSe4U5iysVYLvYp8HQ"
+    "B81hvl00VS4JG6IWYco3w43gYjJSCp+kSS+ETr+hZ/CRnf5bqabQetTV6/OGQWQKBgQCyuz6sr6p86wWHY6CyQV+ikkOAyfnipQvuQF"
+    "4epmzc7Tl/IXp/vDXkC5Yhtz7j5x/7lZHC4Q6D98lZq3SS5ltS3RwaubuCe7Xjt+tfjhgCWqi5zpDwq7Y7y3PWg9kxs9caUAnc/AqoP"
+    "CLGv2gDvKpJfqO72hfKgS3sXmFd+xpdkQKBgQCn7BsBiNnnmtbt7Vbp+tnhvdG+4Cnl8+KCm+sJF+yERHKszTYSw9ct+e4tyDA9izEw"
+    "/99fVmkTGh02k58vHfPsgQeYmJ/QZCleL7m01mW74UoZFpQeHUf4vQnt5A5wA7EfJeaSQqbCxxrnxjfVVAtLv+L0nFqgSJDLobRIuQ"
+    "R2iQKBgBg4WgR/pYfuTc93uCun3fl+PQmT/rQ1dELQyvryf6DoF1TLjTwidhS5NErQynxq0UlCN02eVH4CQX62MkC9qPSxSGSqmPmdA"
+    "pylJoERy+G03s0en9viBTkZnyvDM50VmzsS6n7mzjFFK2RoZiW3CQTtYv1lF8YgzniWs1Q78y03";
+constexpr std::string_view KShortPrivateExponentSignature =
+    "NWJFb5+roy+3Y6xsLqAIvFQ3oaXfk4gKlOQyqhDUDxHj+EZETDiRy1lLXi7ed+3/QA+B1b5ES54ppL3QMaIQ+TUcmWbqRBa+RyKsu4nC"
+    "D43FkZoajhlHC01+D0MB9pVpZ/OAuQy8LFr6/37uPMEc9M+OuI6RoCTlbP1hsN48D/zGbEuH2VzKR6BtsARyRiSuHk/FYYuXw1Tatvo"
+    "M1YyEhsxnApygdewf0K0+PXvAyuPAXB+XGkAdXGstU14VKyVR8Zwx0D6Bs3KukRQo/ZLHrBG7LgJyG5IWgRr9oaAYM8d2UDiBlD2d+"
+    "75HH4lURUCJaUFFchmZVEtuC8WHeK5Nzw==";
+constexpr std::string_view KShortPrivateExponentMessage = "spark-cng-leading-zero-regression";
 
 int runCryptoTests()
 {
@@ -72,7 +100,7 @@ int runCryptoTests()
     ok = spark::Crypto::verify(pub, reinterpret_cast<const std::uint8_t *>(KTestMessage), KTestMessageLen,
                                bad_sig.data(), bad_sig.size());
     if (ok) {
-        std::cerr << "FAIL: verify() accepted a tampered signature\n";
+        std::cerr << "FAIL: verify() accepted a signature for a tampered message\n";
         return 1;
     }
     std::cout << "PASS: verify() rejects a tampered signature\n";
@@ -94,7 +122,19 @@ int runCryptoTests()
     }
     std::cout << "PASS: decodePublicKey() rejects garbage input\n";
 
-    // 7. generateKeyPair produces usable keys.
+    // 7. PKCS#8 private integers shorter than their CNG field widths are padded back.
+    const auto short_private_key = spark::base64Decode(KShortPrivateExponentKey);
+    const auto expected_short_signature = spark::base64Decode(KShortPrivateExponentSignature);
+    const auto short_signature = spark::Crypto::sign(
+        short_private_key, reinterpret_cast<const std::uint8_t *>(KShortPrivateExponentMessage.data()),
+        KShortPrivateExponentMessage.size());
+    if (short_signature != expected_short_signature) {
+        std::cerr << "FAIL: sign() did not restore the fixed-width CNG private exponent\n";
+        return 1;
+    }
+    std::cout << "PASS: sign() restores shortened PKCS#8 private integers for CNG\n";
+
+    // 8. generateKeyPair produces usable keys.
     auto kp = spark::Crypto::generateKeyPair();
     if (kp.public_key_x509.empty() || kp.private_key_pkcs8.empty()) {
         std::cerr << "FAIL: generateKeyPair() returned empty keys\n";
@@ -115,7 +155,7 @@ int runCryptoTests()
     }
     std::cout << "PASS: generateKeyPair() produces a valid sign/verify key pair\n";
 
-    // 8. Cross-check: verify the generated key's signature with the test public key fails.
+    // 9. Cross-check: verify the generated key's signature with the test public key fails.
     ok = spark::Crypto::verify(pub, reinterpret_cast<const std::uint8_t *>(gen_msg), sizeof(gen_msg) - 1,
                                gen_sig.data(), gen_sig.size());
     if (ok) {
