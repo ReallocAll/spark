@@ -6,6 +6,7 @@
 
 #include <array>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 
 namespace spark::stable_entry_experiment {
