@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - "exp/windows-stable-entry-hooks"
+      - "exp/windows-no-shim-permanent-gateway"
     paths:
       - "src/native/alloc/windows_stable_entry_*"
       - "tests/native/alloc/windows_stable_entry_*"
@@ -94,6 +95,9 @@ jobs:
       - name: Fail closed under ProcessDynamicCodePolicy
         shell: pwsh
         run: .\build\stable-entry\Release\windows_stable_entry_atomic_test.exe dynamic-code
+      - name: Classify reclaim lifetime faults across generations
+        shell: pwsh
+        run: .\build\stable-entry\Release\windows_stable_entry_reclaim_diagnostic_test.exe
       - name: Run concurrent 1000-cycle executable entry stress
         shell: pwsh
         run: .\build\stable-entry\Release\windows_stable_entry_atomic_test.exe synthetic-stress
