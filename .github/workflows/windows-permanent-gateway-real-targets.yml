@@ -1,0 +1,47 @@
+name: Windows Permanent Gateway Real Targets
+
+on:
+  push:
+    branches:
+      - exp/windows-permanent-gateway
+    paths:
+      - 'src/native/alloc/windows_stable_entry_*'
+      - 'src/native/alloc/windows_permanent_gateway_*'
+      - 'tests/native/alloc/permanent_gateway_real_targets/**'
+      - '.github/workflows/windows-permanent-gateway-real-targets.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  real-ucrt-heap-targets:
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up MSVC environment
+        uses: TheMrMilchmann/setup-msvc-dev@v4
+        with:
+          arch: x64
+      - name: Configure real-target probe
+        shell: pwsh
+        run: cmake -S tests/native/alloc/permanent_gateway_real_targets -B build/permanent-gateway-real-targets -A x64
+      - name: Build real-target probe
+        shell: pwsh
+        run: cmake --build build/permanent-gateway-real-targets --config Release --parallel
+      - name: Install pass-through gateways on real allocator entries
+        shell: pwsh
+        run: |
+          & .\build\permanent-gateway-real-targets\Release\windows_permanent_gateway_real_targets.exe 2>&1 |
+            Tee-Object -FilePath permanent-gateway-real-targets.log
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+      - name: Upload real-target evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: permanent-gateway-real-targets-${{ github.sha }}
+          path: permanent-gateway-real-targets.log
+          if-no-files-found: warn
