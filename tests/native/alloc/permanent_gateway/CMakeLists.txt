@@ -44,16 +44,10 @@ target_compile_definitions(windows_stable_entry_p0_context_diagnostic PRIVATE NO
 target_compile_options(windows_stable_entry_p0_context_diagnostic PRIVATE /W4 /WX /UNDEBUG)
 target_link_libraries(windows_stable_entry_p0_context_diagnostic PRIVATE funchook-static)
 
-set(PERMANENT_GATEWAY_SOURCE
-        "${SPARK_ROOT}/src/native/alloc/windows_permanent_gateway_experiment.cpp")
-set_source_files_properties(${PERMANENT_GATEWAY_SOURCE}
-        PROPERTIES COMPILE_DEFINITIONS "atomicCompareExchange8=atomicCompareExchange8Quiesced")
-
 add_library(permanent_gateway_engine STATIC
         "${SPARK_ROOT}/src/native/alloc/windows_stable_entry_experiment.cpp"
         "${SPARK_ROOT}/src/native/alloc/windows_stable_entry_atomic.cpp"
-        "${SPARK_ROOT}/src/native/alloc/windows_permanent_gateway_guarded_publish.cpp"
-        ${PERMANENT_GATEWAY_SOURCE})
+        "${SPARK_ROOT}/src/native/alloc/windows_permanent_gateway_experiment.cpp")
 target_include_directories(permanent_gateway_engine PUBLIC "${SPARK_ROOT}/src")
 target_compile_definitions(permanent_gateway_engine PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
 # GatewayState is intentionally cache-line aligned inside page-aligned permanent
@@ -65,18 +59,19 @@ add_library(windows_permanent_gateway_test_handler SHARED
         "${SPARK_ROOT}/tests/native/alloc/permanent_gateway/windows_permanent_gateway_test_handler.cpp")
 target_compile_definitions(windows_permanent_gateway_test_handler PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
 target_compile_options(windows_permanent_gateway_test_handler PRIVATE /W4 /WX)
+set_target_properties(windows_permanent_gateway_test_handler PROPERTIES PREFIX "")
 
-add_executable(windows_permanent_gateway_initial_publish_stress
-        "${SPARK_ROOT}/tests/native/alloc/permanent_gateway/windows_permanent_gateway_initial_publish_stress.cpp")
-target_include_directories(windows_permanent_gateway_initial_publish_stress PRIVATE "${SPARK_ROOT}/src")
-target_compile_definitions(windows_permanent_gateway_initial_publish_stress PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
-target_compile_options(windows_permanent_gateway_initial_publish_stress PRIVATE /W4 /WX /UNDEBUG)
-target_link_libraries(windows_permanent_gateway_initial_publish_stress PRIVATE permanent_gateway_engine)
+add_executable(windows_permanent_gateway_hot_reload_runtime_test
+        "${SPARK_ROOT}/tests/native/alloc/permanent_gateway/windows_permanent_gateway_hot_reload_runtime_test.cpp")
+target_include_directories(windows_permanent_gateway_hot_reload_runtime_test PRIVATE "${SPARK_ROOT}/src")
+target_compile_definitions(windows_permanent_gateway_hot_reload_runtime_test PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_compile_options(windows_permanent_gateway_hot_reload_runtime_test PRIVATE /W4 /WX /UNDEBUG)
+target_link_libraries(windows_permanent_gateway_hot_reload_runtime_test PRIVATE permanent_gateway_engine)
+add_dependencies(windows_permanent_gateway_hot_reload_runtime_test windows_permanent_gateway_test_handler)
 
-add_executable(windows_permanent_gateway_hot_reload_test
-        "${SPARK_ROOT}/tests/native/alloc/permanent_gateway/windows_permanent_gateway_hot_reload_test.cpp")
-target_include_directories(windows_permanent_gateway_hot_reload_test PRIVATE "${SPARK_ROOT}/src")
-target_compile_definitions(windows_permanent_gateway_hot_reload_test PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
-target_compile_options(windows_permanent_gateway_hot_reload_test PRIVATE /W4 /WX /UNDEBUG)
-target_link_libraries(windows_permanent_gateway_hot_reload_test PRIVATE permanent_gateway_engine)
-add_dependencies(windows_permanent_gateway_hot_reload_test windows_permanent_gateway_test_handler)
+add_executable(windows_permanent_gateway_install_transition_stress
+        "${SPARK_ROOT}/tests/native/alloc/permanent_gateway/windows_permanent_gateway_install_transition_stress.cpp")
+target_include_directories(windows_permanent_gateway_install_transition_stress PRIVATE "${SPARK_ROOT}/src")
+target_compile_definitions(windows_permanent_gateway_install_transition_stress PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_compile_options(windows_permanent_gateway_install_transition_stress PRIVATE /W4 /WX /UNDEBUG)
+target_link_libraries(windows_permanent_gateway_install_transition_stress PRIVATE permanent_gateway_engine)

@@ -15,11 +15,7 @@ permissions:
   contents: read
 
 jobs:
-  # P0 is now evidence collection, not a promotion gate. It intentionally races
-  # the already-rejected reclaimable publisher and may terminate with AV. Keep it
-  # available for manual reproduction without burning four runners on every P1 push.
   p0-entry-transition-context:
-    if: github.event_name == 'workflow_dispatch'
     runs-on: windows-2022
     strategy:
       fail-fast: false
@@ -53,7 +49,7 @@ jobs:
           path: p0-context-${{ matrix.attempt }}.log
           if-no-files-found: error
 
-  p1-initial-publication:
+  p1-first-publication-stress:
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v7
@@ -64,26 +60,14 @@ jobs:
       - name: Configure permanent-gateway research
         shell: pwsh
         run: cmake -S tests/native/alloc/permanent_gateway -B build/permanent-gateway -A x64
-      - name: Build guarded publisher and lifecycle tests
+      - name: Build permanent gateway tests
         shell: pwsh
         run: cmake --build build/permanent-gateway --config Release --parallel
-      - name: Run 1000-cycle live initial publication stress
+      - name: Stress first permanent publication under live callers
         shell: pwsh
-        run: |
-          & .\build\permanent-gateway\Release\windows_permanent_gateway_initial_publish_stress.exe 2>&1 |
-            Tee-Object -FilePath permanent-gateway-initial-publish.log
-          if ($LASTEXITCODE -ne 0) {
-            exit $LASTEXITCODE
-          }
-      - name: Upload initial publication log
-        if: always()
-        uses: actions/upload-artifact@v6
-        with:
-          name: permanent-gateway-initial-publication
-          path: permanent-gateway-initial-publish.log
-          if-no-files-found: error
+        run: .\build\permanent-gateway\Release\windows_permanent_gateway_install_transition_stress.exe
 
-  p1-true-hot-reload:
+  p1-handler-dll-hot-reload:
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v7
@@ -94,21 +78,9 @@ jobs:
       - name: Configure permanent-gateway research
         shell: pwsh
         run: cmake -S tests/native/alloc/permanent_gateway -B build/permanent-gateway -A x64
-      - name: Build gateway and unloadable handler DLL
+      - name: Build permanent gateway tests
         shell: pwsh
         run: cmake --build build/permanent-gateway --config Release --parallel
-      - name: Run 1000-cycle LoadLibrary FreeLibrary handler stress
+      - name: Run true 1000-cycle handler DLL hot unload/reload stress
         shell: pwsh
-        run: |
-          & .\build\permanent-gateway\Release\windows_permanent_gateway_hot_reload_test.exe 2>&1 |
-            Tee-Object -FilePath permanent-gateway-hot-reload.log
-          if ($LASTEXITCODE -ne 0) {
-            exit $LASTEXITCODE
-          }
-      - name: Upload hot reload log
-        if: always()
-        uses: actions/upload-artifact@v6
-        with:
-          name: permanent-gateway-hot-reload
-          path: permanent-gateway-hot-reload.log
-          if-no-files-found: error
+        run: .\build\permanent-gateway\Release\windows_permanent_gateway_hot_reload_runtime_test.exe
