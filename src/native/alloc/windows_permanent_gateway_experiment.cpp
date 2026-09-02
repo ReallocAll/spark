@@ -20,20 +20,22 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <new>
 #include <string>
 
 namespace spark::stable_entry_experiment {
 namespace {
 
-constexpr std::uint64_t kGatewayMagic = 0x31595754474B5053ULL;  // "SPKGWTY1" little-endian marker.
-constexpr std::uint32_t kGatewayAbiVersion = 1;
+constexpr std::uint64_t kGatewayMagic = 0x32595754474B5053ULL;  // "SPKGWTY2" marker.
+constexpr std::uint32_t kGatewayAbiVersion = 2;
 constexpr std::size_t kGatewayCodeOffset = 256;
-constexpr std::size_t kGatewayCodeSize = 63;
+constexpr std::size_t kGatewayCodeCapacity = 128;
 constexpr std::uint64_t kGateClosed = 0;
 constexpr std::uint64_t kGateOpen = 1;
+constexpr std::uint32_t kMaxStackArguments = 1;
 
-struct alignas(64) GatewayState {
+struct GatewayState {
     std::uint64_t magic = kGatewayMagic;
     std::uint32_t abi_version = kGatewayAbiVersion;
     std::uint32_t struct_size = sizeof(GatewayState);
@@ -47,6 +49,8 @@ struct alignas(64) GatewayState {
     std::uint64_t code_hash = 0;
     std::uint64_t original_hash = 0;
     std::uint64_t installed_hash = 0;
+    std::uint32_t code_size = 0;
+    std::uint32_t stack_argument_count = 0;
     std::array<std::uint8_t, 8> original_bytes{};
     std::array<std::uint8_t, 8> installed_bytes{};
 };
@@ -56,6 +60,8 @@ static_assert(offsetof(GatewayState, gate) == 24);
 static_assert(offsetof(GatewayState, active) == 32);
 static_assert(offsetof(GatewayState, handler) == 40);
 static_assert(offsetof(GatewayState, original) == 48);
+static_assert(std::atomic<std::uint64_t>::is_always_lock_free);
+static_assert(std::atomic<void *>::is_always_lock_free);
 
 [[nodiscard]] std::uint64_t hashBytesLocal(const void *data, std::size_t size) noexcept
 {
@@ -70,67 +76,166 @@ static_assert(offsetof(GatewayState, original) == 48);
     return value;
 }
 
-[[nodiscard]] bool dynamicCodeAllowed(std::string &error) noexcept
+[[nodiscard]] bool mitigationAllowsPrototype(std::string &error) noexcept
 {
-    PROCESS_MITIGATION_DYNAMIC_CODE_POLICY policy{};
-    if (::GetProcessMitigationPolicy(::GetCurrentProcess(), ProcessDynamicCodePolicy, &policy,
-                                     static_cast<SIZE_T>(sizeof(policy))) == FALSE) {
+    PROCESS_MITIGATION_DYNAMIC_CODE_POLICY dynamic_code{};
+    if (::GetProcessMitigationPolicy(::GetCurrentProcess(), ProcessDynamicCodePolicy, &dynamic_code,
+                                     static_cast<SIZE_T>(sizeof(dynamic_code))) == FALSE) {
         error = "GetProcessMitigationPolicy(ProcessDynamicCodePolicy) failed: " +
                 std::to_string(::GetLastError());
         return false;
     }
-    if (policy.ProhibitDynamicCode != 0) {
+    if (dynamic_code.ProhibitDynamicCode != 0) {
         error = "ProcessDynamicCodePolicy prohibits permanent gateway executable code";
+        return false;
+    }
+
+    PROCESS_MITIGATION_CONTROL_FLOW_GUARD_POLICY cfg{};
+    if (::GetProcessMitigationPolicy(::GetCurrentProcess(), ProcessControlFlowGuardPolicy, &cfg,
+                                     static_cast<SIZE_T>(sizeof(cfg))) == FALSE) {
+        error = "GetProcessMitigationPolicy(ProcessControlFlowGuardPolicy) failed: " +
+                std::to_string(::GetLastError());
+        return false;
+    }
+    // The v2 probe emits a raw indirect CALL/JMP. Do not silently bypass a
+    // process-wide CFG policy. A production candidate must either use a
+    // documented CFG-compatible dispatch path or fail closed as this probe does.
+    if (cfg.EnableControlFlowGuard != 0) {
+        error = "ProcessControlFlowGuardPolicy is enabled; v2 raw gateway dispatch fails closed";
         return false;
     }
     return true;
 }
 
-[[nodiscard]] std::array<std::uint8_t, kGatewayCodeSize> gatewayCode(GatewayState *state) noexcept
+[[nodiscard]] bool emit(std::array<std::uint8_t, kGatewayCodeCapacity> &code, std::size_t &out,
+                        std::initializer_list<std::uint8_t> bytes, std::string &error)
 {
-    // Windows x64 ABI preserving tail gateway. It touches only volatile R10/R11
-    // and does not call a helper, so allocator arguments and stack arguments are
-    // unchanged when execution reaches either destination.
+    if (out + bytes.size() > code.size()) {
+        error = "permanent gateway machine-code buffer capacity exceeded";
+        return false;
+    }
+    for (std::uint8_t byte : bytes) {
+        code[out++] = byte;
+    }
+    return true;
+}
+
+[[nodiscard]] bool patchRel8(std::array<std::uint8_t, kGatewayCodeCapacity> &code,
+                             std::size_t branch_offset, std::size_t target, std::string &error)
+{
+    if (branch_offset + 2 > code.size() || target > code.size()) {
+        error = "permanent gateway branch patch is outside code buffer";
+        return false;
+    }
+    const std::intptr_t delta = static_cast<std::intptr_t>(target) -
+                                static_cast<std::intptr_t>(branch_offset + 2);
+    if (delta < -128 || delta > 127) {
+        error = "permanent gateway branch exceeds rel8 range";
+        return false;
+    }
+    code[branch_offset + 1] = static_cast<std::uint8_t>(static_cast<std::int8_t>(delta));
+    return true;
+}
+
+[[nodiscard]] bool buildGatewayCode(GatewayState *state,
+                                    std::array<std::uint8_t, kGatewayCodeCapacity> &code,
+                                    std::size_t &code_size, std::string &error)
+{
+    code = {};
+    code_size = 0;
+    if (state == nullptr || state->stack_argument_count > kMaxStackArguments) {
+        error = "unsupported permanent gateway stack-argument count";
+        return false;
+    }
+
+    // The gateway is process-lifetime code. It performs admission itself, then
+    // CALLs the unloadable handler and keeps active > 0 until the handler RET has
+    // landed back in permanent code. Only then does it decrement active and RET
+    // to the original caller. This closes the pre-return executable corridor
+    // which a handler-side active-- cannot prove safe.
     //
-    //   mov r11, state
-    //   cmp [r11+gate], 0
-    //   je  fallback
-    //   mov r10, [r11+generation]
-    //   lock inc [r11+active]
-    //   cmp [r11+gate], 0
-    //   je  rollback
-    //   cmp r10, [r11+generation]
-    //   jne rollback
-    //   mov r10, [r11+handler]
-    //   test r10, r10
-    //   je  rollback
-    //   jmp r10
-    // rollback:
-    //   lock dec [r11+active]
-    // fallback:
-    //   mov r10, [r11+original]
-    //   jmp r10
-    std::array<std::uint8_t, kGatewayCodeSize> code{
-        0x49, 0xBB, 0, 0, 0, 0, 0, 0, 0, 0,
-        0x49, 0x83, 0x7B, 0x18, 0x00,
-        0x74, 0x27,
-        0x4D, 0x8B, 0x53, 0x10,
-        0xF0, 0x49, 0xFF, 0x43, 0x20,
-        0x49, 0x83, 0x7B, 0x18, 0x00,
-        0x74, 0x12,
-        0x4D, 0x3B, 0x53, 0x10,
-        0x75, 0x0C,
-        0x4D, 0x8B, 0x53, 0x28,
-        0x4D, 0x85, 0xD2,
-        0x74, 0x03,
-        0x41, 0xFF, 0xE2,
-        0xF0, 0x49, 0xFF, 0x4B, 0x20,
-        0x4D, 0x8B, 0x53, 0x30,
-        0x41, 0xFF, 0xE2,
-    };
+    // Only volatile R10/R11 are touched before the call. RCX/RDX/R8/R9 and XMM
+    // argument registers are preserved. We allocate the required Windows x64
+    // shadow space with `sub rsp, 0x28`. If a target has one stack argument,
+    // copy original [rsp+40] into the forwarded call frame [new_rsp+32].
     const std::uint64_t state_address = reinterpret_cast<std::uint64_t>(state);
-    std::memcpy(code.data() + 2, &state_address, sizeof(state_address));
-    return code;
+    if (!emit(code, code_size, {0x49, 0xBB}, error)) {
+        return false;
+    }
+    if (code_size + sizeof(state_address) > code.size()) {
+        error = "permanent gateway state immediate exceeds code buffer";
+        return false;
+    }
+    std::memcpy(code.data() + code_size, &state_address, sizeof(state_address));
+    code_size += sizeof(state_address);
+
+    if (!emit(code, code_size, {0x49, 0x83, 0x7B, 0x18, 0x00}, error)) {  // cmp [r11+gate],0
+        return false;
+    }
+    const std::size_t initial_fallback = code_size;
+    if (!emit(code, code_size, {0x74, 0x00}, error) ||                   // je fallback
+        !emit(code, code_size, {0x4D, 0x8B, 0x53, 0x10}, error) ||       // mov r10,[r11+generation]
+        !emit(code, code_size, {0xF0, 0x49, 0xFF, 0x43, 0x20}, error) || // lock inc [r11+active]
+        !emit(code, code_size, {0x49, 0x83, 0x7B, 0x18, 0x00}, error)) {  // cmp [r11+gate],0
+        return false;
+    }
+    const std::size_t closed_rollback = code_size;
+    if (!emit(code, code_size, {0x74, 0x00}, error) ||             // je rollback
+        !emit(code, code_size, {0x4D, 0x3B, 0x53, 0x10}, error)) {  // cmp r10,[r11+generation]
+        return false;
+    }
+    const std::size_t generation_rollback = code_size;
+    if (!emit(code, code_size, {0x75, 0x00}, error) ||             // jne rollback
+        !emit(code, code_size, {0x4D, 0x8B, 0x53, 0x28}, error) ||  // mov r10,[r11+handler]
+        !emit(code, code_size, {0x4D, 0x85, 0xD2}, error)) {        // test r10,r10
+        return false;
+    }
+    const std::size_t null_rollback = code_size;
+    if (!emit(code, code_size, {0x74, 0x00}, error)) {  // je rollback
+        return false;
+    }
+
+    if (state->stack_argument_count == 1 &&
+        !emit(code, code_size, {0x4C, 0x8B, 0x5C, 0x24, 0x28}, error)) {  // mov r11,[rsp+40]
+        return false;
+    }
+    if (!emit(code, code_size, {0x48, 0x83, 0xEC, 0x28}, error)) {  // sub rsp,40
+        return false;
+    }
+    if (state->stack_argument_count == 1 &&
+        !emit(code, code_size, {0x4C, 0x89, 0x5C, 0x24, 0x20}, error)) {  // mov [rsp+32],r11
+        return false;
+    }
+    if (!emit(code, code_size, {0x41, 0xFF, 0xD2}, error) ||        // call r10
+        !emit(code, code_size, {0x48, 0x83, 0xC4, 0x28}, error) ||  // add rsp,40
+        !emit(code, code_size, {0x49, 0xBB}, error)) {              // mov r11,state
+        return false;
+    }
+    if (code_size + sizeof(state_address) > code.size()) {
+        error = "permanent gateway post-call state immediate exceeds code buffer";
+        return false;
+    }
+    std::memcpy(code.data() + code_size, &state_address, sizeof(state_address));
+    code_size += sizeof(state_address);
+    if (!emit(code, code_size, {0xF0, 0x49, 0xFF, 0x4B, 0x20}, error) ||  // lock dec [r11+active]
+        !emit(code, code_size, {0xC3}, error)) {                            // ret original caller
+        return false;
+    }
+
+    const std::size_t rollback = code_size;
+    if (!emit(code, code_size, {0xF0, 0x49, 0xFF, 0x4B, 0x20}, error)) {  // lock dec [r11+active]
+        return false;
+    }
+    const std::size_t fallback = code_size;
+    if (!emit(code, code_size, {0x4D, 0x8B, 0x53, 0x30}, error) ||  // mov r10,[r11+original]
+        !emit(code, code_size, {0x41, 0xFF, 0xE2}, error)) {        // jmp r10
+        return false;
+    }
+
+    return patchRel8(code, initial_fallback, fallback, error) &&
+           patchRel8(code, closed_rollback, rollback, error) &&
+           patchRel8(code, generation_rollback, rollback, error) &&
+           patchRel8(code, null_rollback, rollback, error);
 }
 
 [[nodiscard]] bool isExecutableReadOnly(DWORD protection) noexcept
@@ -178,7 +283,8 @@ static_assert(offsetof(GatewayState, original) == 48);
 {
     if (state == nullptr || state->magic != kGatewayMagic || state->abi_version != kGatewayAbiVersion ||
         state->struct_size != sizeof(GatewayState) || state->entry != entry || state->gateway != gateway ||
-        state->original == nullptr) {
+        state->original == nullptr || state->stack_argument_count > kMaxStackArguments ||
+        state->code_size == 0 || state->code_size > kGatewayCodeCapacity) {
         error = "permanent gateway state identity/ABI validation failed";
         return false;
     }
@@ -195,11 +301,13 @@ void populateHandle(GatewayState *state, MEMORY_BASIC_INFORMATION code_memory,
     handle.permanent_rx_bytes = code_memory.RegionSize;
     handle.permanent_rw_bytes = state_memory.RegionSize;
     handle.generation = state->generation.load(std::memory_order_acquire);
+    handle.stack_argument_count = state->stack_argument_count;
 }
 
 }  // namespace
 
-bool installPermanentGateway(void *entry, PermanentGatewayHandle &handle, std::string &error)
+bool installPermanentGateway(void *entry, std::uint32_t stack_argument_count,
+                             PermanentGatewayHandle &handle, std::string &error)
 {
     handle = {};
     error.clear();
@@ -207,7 +315,11 @@ bool installPermanentGateway(void *entry, PermanentGatewayHandle &handle, std::s
         error = "permanent gateway entry is null";
         return false;
     }
-    if (!dynamicCodeAllowed(error)) {
+    if (stack_argument_count > kMaxStackArguments) {
+        error = "permanent gateway prototype supports at most one stack argument";
+        return false;
+    }
+    if (!mitigationAllowsPrototype(error)) {
         return false;
     }
     if (!isAlignedForAtomic8(reinterpret_cast<std::uintptr_t>(entry))) {
@@ -237,7 +349,7 @@ bool installPermanentGateway(void *entry, PermanentGatewayHandle &handle, std::s
         return false;
     }
     if (relocation.memory == nullptr || relocation.entry == nullptr ||
-        relocation.allocation_size < kGatewayCodeOffset + kGatewayCodeSize ||
+        relocation.allocation_size < kGatewayCodeOffset + kGatewayCodeCapacity ||
         !rel32Reachable(entry_value + 5,
                         reinterpret_cast<std::uintptr_t>(relocation.memory) + kGatewayCodeOffset)) {
         releaseBoundedRelocation(relocation);
@@ -256,10 +368,19 @@ bool installPermanentGateway(void *entry, PermanentGatewayHandle &handle, std::s
     state->entry = entry;
     state->original = relocation.entry;
     state->gateway = static_cast<std::uint8_t *>(relocation.memory) + kGatewayCodeOffset;
+    state->stack_argument_count = stack_argument_count;
     std::memcpy(state->original_bytes.data(), original.data(), state->original_bytes.size());
     state->original_hash = hashBytesLocal(state->original_bytes.data(), state->original_bytes.size());
 
-    const auto code = gatewayCode(state);
+    std::array<std::uint8_t, kGatewayCodeCapacity> code{};
+    std::size_t code_size = 0;
+    if (!buildGatewayCode(state, code, code_size, error)) {
+        ::VirtualFree(state_memory_raw, 0, MEM_RELEASE);
+        releaseBoundedRelocation(relocation);
+        return false;
+    }
+    state->code_size = static_cast<std::uint32_t>(code_size);
+
     DWORD old_code_protection = 0;
     if (::VirtualProtect(relocation.memory, relocation.allocation_size, PAGE_READWRITE, &old_code_protection) == FALSE) {
         const DWORD failure = ::GetLastError();
@@ -268,7 +389,7 @@ bool installPermanentGateway(void *entry, PermanentGatewayHandle &handle, std::s
         error = "VirtualProtect permanent code island writable failed: " + std::to_string(failure);
         return false;
     }
-    std::memcpy(state->gateway, code.data(), code.size());
+    std::memcpy(state->gateway, code.data(), code_size);
     DWORD ignored_code_protection = 0;
     if (::VirtualProtect(relocation.memory, relocation.allocation_size, PAGE_EXECUTE_READ,
                          &ignored_code_protection) == FALSE ||
@@ -279,7 +400,7 @@ bool installPermanentGateway(void *entry, PermanentGatewayHandle &handle, std::s
         error = "publishing permanent RX code island failed: " + std::to_string(failure);
         return false;
     }
-    state->code_hash = hashBytesLocal(state->gateway, code.size());
+    state->code_hash = hashBytesLocal(state->gateway, code_size);
 
     std::array<std::uint8_t, 16> installed{};
     if (!encodeAtomic8RelayEntry(entry_value, reinterpret_cast<std::uintptr_t>(state->gateway), original, installed,
@@ -303,8 +424,7 @@ bool installPermanentGateway(void *entry, PermanentGatewayHandle &handle, std::s
     const AtomicCompareResult transaction = atomicCompareExchange8(entry, original, installed);
     const BOOL flushed = transaction.exchanged ? ::FlushInstructionCache(::GetCurrentProcess(), entry, 8) : TRUE;
     DWORD ignored_entry_protection = 0;
-    const BOOL protection_restored =
-        ::VirtualProtect(entry, 8, old_entry_protection, &ignored_entry_protection);
+    const BOOL protection_restored = ::VirtualProtect(entry, 8, old_entry_protection, &ignored_entry_protection);
 
     if (!transaction.exchanged) {
         ::VirtualFree(state_memory_raw, 0, MEM_RELEASE);
@@ -313,8 +433,8 @@ bool installPermanentGateway(void *entry, PermanentGatewayHandle &handle, std::s
         return false;
     }
 
-    // After publication the entry can execute this state/code at any instant.
-    // Never reclaim them on a post-CAS failure.
+    // Publication is the lifetime boundary. Never reclaim the code/state after
+    // the entry CAS succeeds, even if a later diagnostic check fails.
     if (flushed == FALSE || protection_restored == FALSE) {
         error = "permanent gateway entry published but cache/protection restoration failed; resources pinned fail-closed";
         return false;
@@ -370,7 +490,7 @@ bool discoverPermanentGateway(void *entry, PermanentGatewayHandle &handle, std::
         return false;
     }
     const auto code_region_end = reinterpret_cast<std::uintptr_t>(code_memory.BaseAddress) + code_memory.RegionSize;
-    if (gateway_value > code_region_end || code_region_end - gateway_value < kGatewayCodeSize ||
+    if (gateway_value > code_region_end || code_region_end - gateway_value < 10 ||
         gateway[0] != 0x49 || gateway[1] != 0xBB) {
         error = "decoded gateway does not contain the Spark permanent gateway signature";
         return false;
@@ -388,10 +508,15 @@ bool discoverPermanentGateway(void *entry, PermanentGatewayHandle &handle, std::
         return false;
     }
 
-    const auto expected_code = gatewayCode(state);
-    if (std::memcmp(gateway, expected_code.data(), expected_code.size()) != 0 ||
-        state->code_hash != hashBytesLocal(gateway, expected_code.size())) {
-        error = "permanent gateway code signature/hash validation failed";
+    std::array<std::uint8_t, kGatewayCodeCapacity> expected_code{};
+    std::size_t expected_size = 0;
+    if (!buildGatewayCode(state, expected_code, expected_size, error) ||
+        expected_size != state->code_size ||
+        std::memcmp(gateway, expected_code.data(), expected_size) != 0 ||
+        state->code_hash != hashBytesLocal(gateway, expected_size)) {
+        if (error.empty()) {
+            error = "permanent gateway code signature/hash validation failed";
+        }
         return false;
     }
     if (std::memcmp(installed.data(), state->installed_bytes.data(), installed.size()) != 0 ||
@@ -422,6 +547,11 @@ bool bindPermanentGateway(PermanentGatewayHandle &handle, void *handler, std::ui
         }
         return false;
     }
+    MEMORY_BASIC_INFORMATION handler_memory{};
+    if (!queryCommitted(handler, handler_memory, error) || !isExecutableReadOnly(handler_memory.Protect)) {
+        error = "permanent gateway handler is not committed executable read-only memory";
+        return false;
+    }
     if (state->gate.load(std::memory_order_acquire) != kGateClosed ||
         state->handler.load(std::memory_order_acquire) != nullptr) {
         error = "permanent gateway bind requires a detached state";
@@ -431,6 +561,11 @@ bool bindPermanentGateway(PermanentGatewayHandle &handle, void *handler, std::ui
         return false;
     }
 
+    const std::uint64_t current = state->generation.load(std::memory_order_acquire);
+    if (current >= (std::numeric_limits<std::uint64_t>::max)() - 1) {
+        error = "permanent gateway generation exhausted; admission remains closed";
+        return false;
+    }
     const std::uint64_t generation = state->generation.fetch_add(1, std::memory_order_acq_rel) + 1;
     state->handler.store(handler, std::memory_order_release);
     state->gate.store(kGateOpen, std::memory_order_seq_cst);
@@ -450,16 +585,24 @@ bool detachPermanentGateway(PermanentGatewayHandle &handle, std::uint64_t timeou
     }
 
     state->gate.store(kGateClosed, std::memory_order_seq_cst);
+    const std::uint64_t current = state->generation.load(std::memory_order_acquire);
+    if (current == (std::numeric_limits<std::uint64_t>::max)()) {
+        error = "permanent gateway generation exhausted after admission close";
+        return false;
+    }
     const std::uint64_t generation = state->generation.fetch_add(1, std::memory_order_acq_rel) + 1;
     handle.generation = generation;
+
+    // A callback which has passed revalidation keeps active > 0 through the
+    // entire unloadable handler body and until RET lands in permanent gateway
+    // code. Delayed pre-increment attempts can still pulse active later, but the
+    // closed gate + changed generation forces them to rollback without loading
+    // or calling the handler. Therefore this drain is sufficient to clear the
+    // only unloadable-image pointer safely.
     if (!waitForZero(state, timeout_ms, error)) {
         return false;
     }
     state->handler.store(nullptr, std::memory_order_seq_cst);
-    if (state->active.load(std::memory_order_acquire) != 0) {
-        error = "permanent gateway active count changed while clearing detached handler";
-        return false;
-    }
     return true;
 }
 
@@ -467,14 +610,6 @@ void *permanentGatewayOriginal(const PermanentGatewayHandle &handle) noexcept
 {
     GatewayState *state = stateFromHandle(handle);
     return state != nullptr ? state->original : nullptr;
-}
-
-void completePermanentGatewayHandlerCall(const PermanentGatewayHandle &handle) noexcept
-{
-    GatewayState *state = stateFromHandle(handle);
-    if (state != nullptr) {
-        state->active.fetch_sub(1, std::memory_order_release);
-    }
 }
 
 void *permanentGatewayHandler(const PermanentGatewayHandle &handle) noexcept
