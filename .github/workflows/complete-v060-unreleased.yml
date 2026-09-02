@@ -1,4 +1,4 @@
-name: Complete v0.6.0 unreleased notes
+name: Complete v0.6.0 release docs
 
 on:
   push:
@@ -18,138 +18,99 @@ jobs:
           ref: docs/windows-allocation-release-accuracy
           fetch-depth: 0
 
-      - name: Complete v0.6.0 release-facing documentation
+      - name: Complete release-facing README
         shell: python
         run: |
           from pathlib import Path
 
-          def replace_once(text, old, new, label):
-              if old not in text:
-                  raise SystemExit(f"{label} anchor not found")
-              return text.replace(old, new, 1)
+          changelog = Path("CHANGELOG.md").read_text(encoding="utf-8")
+          required = [
+              "CPython 3.12+",
+              "CPython 3.11 remains native-only",
+              "native allocation-rate metrics",
+              "process-lifetime pinned",
+              "Preserve the real Linux allocation caller frame",
+          ]
+          for marker in required:
+              if marker not in changelog:
+                  raise SystemExit(f"completed changelog marker missing: {marker}")
 
-          changelog = Path("CHANGELOG.md")
-          text = changelog.read_text(encoding="utf-8")
-          text = replace_once(
-              text,
-              "- Include current Endstone game-rule values in exported Spark world metadata.\n",
-              "- Export current Bedrock game-rule values with canonical names, runtime/API-first\n"
-              "  defaults plus safe fallbacks, and locatorBar-to-playerWaypoints migration metadata.\n",
-              "gamerule changelog",
-          )
-          text = replace_once(
-              text,
-              "- Support Java-compatible Spark configuration environment variables.\n\n",
-              "- Support Java-compatible Spark configuration environment variables.\n"
-              "- Add cached BlockActor/tile-entity world statistics with availability semantics.\n"
-              "- Export a reviewed safe subset of `server.properties`, with sensitive-name guards\n"
-              "  and administrator opt-in for additional safe keys.\n"
-              "- Preserve player initiator UUID metadata across profiler, health, activity, upload,\n"
-              "  and recovery paths.\n"
-              "- Export active Bedrock behavior-pack metadata without depending on internal\n"
-              "  `ResourcePackStack` ABI details.\n"
-              "- Add a one-hour native process-memory curve, including cgroup v2 and Windows Job\n"
-              "  Object limits when available.\n"
-              "- Add process-wide native allocation-rate metrics and 1m/5m/15m rolling rates on\n"
-              "  Linux and Windows.\n"
-              "- Attribute sampled Python plugin call chains on CPython 3.12+ using a bounded PEP\n"
-              "  669 shadow stack while keeping sampling native; CPython 3.11 remains native-only.\n\n",
-              "Added section",
-          )
-          text = replace_once(
-              text,
-              "- Add Windows x64 native allocation profiling through a process-lifetime pinned\n"
-              "  shim and IAT redirection, with fail-closed callback draining and ownership-safe\n"
-              "  teardown before unloadable Spark plugin code is detached.\n\n"
-              "### Fixed\n",
-              "- Add Windows x64 native allocation profiling through a process-lifetime pinned\n"
-              "  shim and IAT redirection, with fail-closed callback draining and ownership-safe\n"
-              "  teardown before unloadable Spark plugin code is detached.\n\n"
-              "### Changed\n\n"
-              "- Reduce allocation-profiler hot-path contention with sharded lifecycle/statistics\n"
-              "  state and bounded retries while preserving fail-closed drop reporting.\n"
-              "- Cache the native Linux thread ID per PEP 669 callback thread instead of issuing a\n"
-              "  `gettid` syscall for every Python execution event.\n\n"
-              "### Fixed\n",
-              "Changed section",
-          )
-          text = replace_once(
-              text,
-              "- Match Java spark's tick-duration placeholder windows and percentile ranks, and\n"
-              "  avoid rebuilding unrelated rolling statistics for each placeholder value.\n\n"
-              "## [0.5.3][0.5.3] - 2026-08-14\n",
-              "- Match Java spark's tick-duration placeholder windows and percentile ranks, and\n"
-              "  avoid rebuilding unrelated rolling statistics for each placeholder value.\n"
-              "- Journal newly observed module definitions before recovered execution samples can\n"
-              "  reference them, preserving crash replay across multi-session hard kills.\n"
-              "- Prevent the spark viewer's process-memory denominator from decoding as zero while\n"
-              "  keeping native RSS/committed-memory semantics strict.\n"
-              "- Skip unsafe device-metadata ping polling for unauthenticated headless BDS clients.\n"
-              "- Preserve a completed allocation profile until serialization finishes before\n"
-              "  persistent allocation-rate counting resumes.\n"
-              "- Canonicalize Python plugin identities and filter only Spark's observer bridge\n"
-              "  frames without hiding unrelated user ctypes/libffi/native paths.\n"
-              "- Preserve the real Linux allocation caller frame by correcting the cpptrace stack\n"
-              "  skip count used by allocation hooks.\n\n"
-              "## [0.5.3][0.5.3] - 2026-08-14\n",
-              "Fixed section",
-          )
-          changelog.write_text(text, encoding="utf-8")
+          path = Path("README.md")
+          text = path.read_text(encoding="utf-8")
 
-          readme = Path("README.md")
-          text = readme.read_text(encoding="utf-8")
-          text = replace_once(
-              text,
-              "> CMake fetches upstream funchook `v1.1.3` for its bundled distorm decoder, which\n"
-              "> is used by both x86-64 symbol guessers. No funchook hook library is linked;\n"
-              "> Linux allocation profiling uses atomic ELF import-slot redirection, and Windows\n"
-              "> allocation profiling is temporarily unavailable.\n",
-              "> CMake fetches upstream funchook `v1.1.3` for its bundled distorm decoder, which\n"
-              "> is used by both x86-64 symbol guessers. No funchook hook library is linked;\n"
-              "> Linux allocation profiling uses atomic ELF import-slot redirection, and Windows\n"
-              "> allocation profiling uses project-owned IAT redirection through the process-lifetime\n"
-              "> `spark_allocation_shim.dll`.\n",
-              "README build backend",
-          )
-          text = replace_once(
-              text,
-              "window fields from the generated current-protocol payload. On Windows,\n"
-              "`spark_windows_allocation_unavailable_test` verifies the deterministic allocation\n"
-              "profiling refusal and harmless shutdown path.\n",
-              "window fields from the generated current-protocol payload. On Windows,\n"
-              "`spark_windows_allocation_unavailable_test` exercises process-lifetime shim installation,\n"
-              "late-module refresh, real sampled call trees, repeat sessions, and harmless post-shutdown\n"
-              "allocator pass-through.\n",
-              "README Windows self-test",
-          )
-          text = replace_once(
-              text,
-              "The plugin is emitted as `build/endstone_spark.so` (Linux) /\n"
-              "`build/endstone_spark.dll` (Windows). Drop it in your server's `plugins/`\n"
-              "directory.\n",
-              "The plugin is emitted as `build/endstone_spark.so` (Linux) /\n"
-              "`build/endstone_spark.dll` (Windows). Drop it in your server's `plugins/`\n"
-              "directory. Windows builds also emit `spark_allocation_shim.dll`; deploy it next to\n"
-              "`endstone_spark.dll` so allocation profiling has a process-lifetime redirection target.\n",
-              "README deployment",
-          )
-          text = replace_once(
-              text,
-              "Linux allocation coverage is limited to the listed allocator entry points/imports. Static CRT\n"
-              "copies, inlined or private allocators, arenas and object pools that do not reach a\n"
-              "covered entry point, `VirtualAlloc`/`VirtualFree`, and `mmap`/`munmap` are not\n"
-              "sampled. A Linux module loaded and unloaded entirely between rescans can escape\n"
-              "coverage.\n",
-              "Allocation coverage is limited to the listed allocator entry points/imports. Static CRT\n"
-              "copies, inlined or private allocators, arenas and object pools that do not reach a\n"
-              "covered entry point, direct virtual-memory APIs, and memory mappings that bypass the\n"
-              "covered allocator families are not sampled. A Linux module loaded and unloaded\n"
-              "entirely between rescans can escape coverage.\n",
-              "README allocation limitations",
-          )
-          readme.write_text(text, encoding="utf-8")
+          replacements = [
+              (
+                  "\n".join([
+                      "> CMake fetches upstream funchook `v1.1.3` for its bundled distorm decoder, which",
+                      "> is used by both x86-64 symbol guessers. No funchook hook library is linked;",
+                      "> Linux allocation profiling uses atomic ELF import-slot redirection, and Windows",
+                      "> allocation profiling is temporarily unavailable.",
+                  ]),
+                  "\n".join([
+                      "> CMake fetches upstream funchook `v1.1.3` for its bundled distorm decoder, which",
+                      "> is used by both x86-64 symbol guessers. No funchook hook library is linked;",
+                      "> Linux allocation profiling uses atomic ELF import-slot redirection, and Windows",
+                      "> allocation profiling uses project-owned IAT redirection through the process-lifetime",
+                      "> `spark_allocation_shim.dll`.",
+                  ]),
+                  "build backend",
+              ),
+              (
+                  "\n".join([
+                      "window fields from the generated current-protocol payload. On Windows,",
+                      "`spark_windows_allocation_unavailable_test` verifies the deterministic allocation",
+                      "profiling refusal and harmless shutdown path.",
+                  ]),
+                  "\n".join([
+                      "window fields from the generated current-protocol payload. On Windows,",
+                      "`spark_windows_allocation_unavailable_test` exercises process-lifetime shim installation,",
+                      "late-module refresh, real sampled call trees, repeat sessions, and harmless post-shutdown",
+                      "allocator pass-through.",
+                  ]),
+                  "Windows self-test",
+              ),
+              (
+                  "\n".join([
+                      "The plugin is emitted as `build/endstone_spark.so` (Linux) /",
+                      "`build/endstone_spark.dll` (Windows). Drop it in your server's `plugins/`",
+                      "directory.",
+                  ]),
+                  "\n".join([
+                      "The plugin is emitted as `build/endstone_spark.so` (Linux) /",
+                      "`build/endstone_spark.dll` (Windows). Drop it in your server's `plugins/`",
+                      "directory. Windows builds also emit `spark_allocation_shim.dll`; deploy it next to",
+                      "`endstone_spark.dll` so allocation profiling has a process-lifetime redirection target.",
+                  ]),
+                  "Windows shim deployment",
+              ),
+              (
+                  "\n".join([
+                      "Linux allocation coverage is limited to the listed allocator entry points/imports. Static CRT",
+                      "copies, inlined or private allocators, arenas and object pools that do not reach a",
+                      "covered entry point, `VirtualAlloc`/`VirtualFree`, and `mmap`/`munmap` are not",
+                      "sampled. A Linux module loaded and unloaded entirely between rescans can escape",
+                      "coverage.",
+                  ]),
+                  "\n".join([
+                      "Allocation coverage is limited to the listed allocator entry points/imports. Static CRT",
+                      "copies, inlined or private allocators, arenas and object pools that do not reach a",
+                      "covered entry point, direct virtual-memory APIs, and memory mappings that bypass the",
+                      "covered allocator families are not sampled. A Linux module loaded and unloaded",
+                      "entirely between rescans can escape coverage.",
+                  ]),
+                  "allocation limitations",
+              ),
+          ]
 
-      - name: Validate changelog and release tooling
+          for old, new, label in replacements:
+              if old in text:
+                  text = text.replace(old, new, 1)
+              elif new not in text:
+                  raise SystemExit(f"README {label} anchor missing")
+
+          path.write_text(text, encoding="utf-8")
+
+      - name: Validate release documentation
         shell: bash
         run: |
           set -euo pipefail
@@ -164,6 +125,7 @@ jobs:
           grep -F "Windows x64 native allocation profiling" /tmp/release_body.md
           grep -F "CPython 3.12+" /tmp/release_body.md
           grep -F "native allocation-rate metrics" /tmp/release_body.md
+          grep -F "spark_allocation_shim.dll" README.md
           ! grep -R -F "allocation profiling is temporarily unavailable" README.md docs CHANGELOG.md
           ! grep -R -F "safe allocator entry patching is unavailable" README.md docs CHANGELOG.md
           git diff --check
@@ -175,6 +137,6 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git rm .github/workflows/complete-v060-unreleased.yml
-          git add CHANGELOG.md README.md
-          git commit -m "docs: complete v0.6.0 release notes"
+          git add README.md
+          git commit -m "docs: finish v0.6.0 release-facing documentation"
           git push origin HEAD:docs/windows-allocation-release-accuracy
