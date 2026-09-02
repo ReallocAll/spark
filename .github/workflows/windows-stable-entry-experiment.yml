@@ -73,6 +73,9 @@ jobs:
           } else {
             Write-Host "no funchook relocation log produced"
           }
+      - name: Isolate prepare install call restore lifecycle
+        shell: pwsh
+        run: .\build\stable-entry\Release\windows_stable_entry_lifecycle_probe.exe
       - name: Prove CMPXCHG16B data atomicity under contention
         shell: pwsh
         run: .\build\stable-entry\Release\windows_stable_entry_atomic_test.exe cmpxchg16
