@@ -238,8 +238,7 @@ std::vector<std::uint8_t> buildRsaKeyBlob(bool is_private, const RsaKeyParams &p
         // BCRYPT_RSAFULLPRIVATE_BLOB requires the CRT exponents/coefficient to
         // occupy their prime widths and the private exponent to occupy cbModulus.
         if (!append_fixed_width(p.prime1, header.cbPrime1) || !append_fixed_width(p.prime2, header.cbPrime2) ||
-            !append_fixed_width(p.exponent1, header.cbPrime1) ||
-            !append_fixed_width(p.exponent2, header.cbPrime2) ||
+            !append_fixed_width(p.exponent1, header.cbPrime1) || !append_fixed_width(p.exponent2, header.cbPrime2) ||
             !append_fixed_width(p.coefficient, header.cbPrime1) ||
             !append_fixed_width(p.private_exp, header.cbModulus)) {
             return {};
