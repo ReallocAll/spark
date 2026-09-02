@@ -6,6 +6,7 @@ on:
       - "exp/windows-permanent-gateway"
     paths:
       - "src/native/alloc/windows_stable_entry_*"
+      - "src/native/alloc/windows_permanent_gateway_*"
       - "tests/native/alloc/permanent_gateway/**"
       - ".github/workflows/windows-permanent-gateway-research.yml"
   workflow_dispatch:
@@ -14,7 +15,7 @@ permissions:
   contents: read
 
 jobs:
-  p0-reclamation-diagnostic:
+  p0-entry-transition-context:
     runs-on: windows-2022
     strategy:
       fail-fast: false
@@ -26,24 +27,24 @@ jobs:
         uses: TheMrMilchmann/setup-msvc-dev@v4
         with:
           arch: x64
-      - name: Configure P0 diagnostic
+      - name: Configure permanent-gateway research
         shell: pwsh
         run: cmake -S tests/native/alloc/permanent_gateway -B build/permanent-gateway -A x64
-      - name: Build P0 diagnostic
+      - name: Build diagnostics and gateway engine
         shell: pwsh
         run: cmake --build build/permanent-gateway --config Release --parallel
-      - name: Reproduce and classify reclaim race
+      - name: Reproduce entry-transition race with full context
         shell: pwsh
         run: |
-          & .\build\permanent-gateway\Release\windows_stable_entry_p0_diagnostic.exe 2>&1 |
-            Tee-Object -FilePath "p0-attempt-${{ matrix.attempt }}.log"
+          & .\build\permanent-gateway\Release\windows_stable_entry_p0_context_diagnostic.exe 2>&1 |
+            Tee-Object -FilePath "p0-context-${{ matrix.attempt }}.log"
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
           }
-      - name: Upload P0 diagnostic log
+      - name: Upload P0 context log
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: p0-reclamation-diagnostic-${{ matrix.attempt }}
-          path: p0-attempt-${{ matrix.attempt }}.log
+          name: p0-entry-context-${{ matrix.attempt }}
+          path: p0-context-${{ matrix.attempt }}.log
           if-no-files-found: error
