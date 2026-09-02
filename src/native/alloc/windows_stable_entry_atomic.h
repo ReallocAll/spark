@@ -82,7 +82,15 @@ public:
     [[nodiscard]] const std::array<std::uint8_t, 16> &installedBytes() const noexcept { return installed_bytes_; }
     [[nodiscard]] std::span<const AddressRange> protectedRanges() const noexcept
     {
-        return std::span<const AddressRange>(protected_ranges_.data(), protected_range_count_);
+        // Slot zero is the allocator's public entry patch window. Once restore
+        // has completed that address is no longer Spark-owned executable code;
+        // a thread legitimately executing the restored allocator entry must not
+        // block unload. Quiescence therefore inspects only the relay,
+        // trampoline and Spark hook/pre-guard ranges stored after slot zero.
+        if (protected_range_count_ <= 1) {
+            return {};
+        }
+        return std::span<const AddressRange>(protected_ranges_.data() + 1, protected_range_count_ - 1);
     }
     [[nodiscard]] const char *failureReason() const noexcept { return failure_.data(); }
 
