@@ -67,11 +67,10 @@ public:
             ::VirtualAlloc(nullptr, 64 * 1024, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE));
         assert(page_ != nullptr);
         assert((reinterpret_cast<std::uintptr_t>(page_) & 7U) == 0);
-        // lea eax,[rcx+1]; ret; nops. Keeping a NOP after the short function
-        // gives funchook's bounded relocation engine a complete >=5-byte patch
-        // window without splitting any instruction.
+        // Five complete bytes precede RET. This exercises funchook's normal
+        // bounded relocation path instead of its special short-function tail.
         constexpr std::array<std::uint8_t, 16> code{
-            0x8D, 0x41, 0x01, 0xC3, 0x90, 0x90, 0x90, 0x90,
+            0x8D, 0x41, 0x01, 0x66, 0x90, 0xC3, 0x90, 0x90,
             0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
         };
         std::memcpy(page_, code.data(), code.size());
