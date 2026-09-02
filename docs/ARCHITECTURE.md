@@ -88,7 +88,7 @@ Captures native thread stacks at a bounded interval. Linux uses `SIGPROF` with c
 
 ### Allocation Profiler (`native/alloc/`)
 
-Samples allocation stacks by requested bytes on Linux x86-64 by redirecting supported ELF allocator imports. Windows allocation profiling is temporarily unavailable because safe allocator entry patching is unavailable. Hook callbacks enqueue bounded records for later processing. Live exports deep-copy cumulative aggregator state or rebuild a temporary retained tree from the authoritative live index without stopping hooks. The hook path is free of allocations, string construction, and unbounded containers.
+Samples allocation stacks by requested bytes on Linux x86-64 by redirecting supported ELF allocator imports and on Windows x86-64 by redirecting supported IAT slots to the process-lifetime `spark_allocation_shim.dll`. The plugin owns per-session callback state while the shim remains safe to call across session stop and plugin unload; shutdown drains and clears Spark callbacks before plugin code can disappear. Hook callbacks enqueue bounded records for later processing. Live exports deep-copy cumulative aggregator state or rebuild a temporary retained tree from the authoritative live index without stopping hooks. The hook path is free of allocations, string construction, and unbounded containers.
 
 ### Symbol Guesser (`native/symbol/`)
 
