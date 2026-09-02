@@ -1,0 +1,94 @@
+name: Windows ETW Heap Feasibility Probe
+
+on:
+  push:
+    branches:
+      - "exp/windows-etw-heap-probe"
+    paths:
+      - "tests/native/alloc/etw_heap/**"
+      - ".github/workflows/windows-etw-heap-probe.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  xperf-heap-coverage:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up MSVC environment
+        uses: TheMrMilchmann/setup-msvc-dev@v4
+        with:
+          arch: x64
+      - name: Verify Windows Performance Toolkit
+        shell: pwsh
+        run: |
+          Get-Command xperf | Format-List *
+          xperf -version
+      - name: Build deterministic allocation workload
+        shell: pwsh
+        run: |
+          cmake -S tests/native/alloc/etw_heap -B build/etw-heap -A x64
+          cmake --build build/etw-heap --config RelWithDebInfo --parallel
+      - name: Capture heap ETW with stack walking
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = (Resolve-Path '.\build\etw-heap\RelWithDebInfo\windows_etw_heap_workload.exe').Path
+          $session = 'SparkHeapProbe'
+          # Clean only our own well-known experimental sessions from a prior failed step.
+          & xperf -stop $session 2>$null | Out-Null
+          & xperf -stop 'NT Kernel Logger' 2>$null | Out-Null
+
+          & xperf -on PROC_THREAD+LOADER -BufferSize 1024 -MinBuffers 16 -MaxBuffers 64
+          if ($LASTEXITCODE -ne 0) { throw "kernel logger start failed: $LASTEXITCODE" }
+          try {
+            & xperf -start $session -heap -PidNewProcess "`"$exe`"" -stackwalk HeapAlloc+HeapRealloc+HeapFree -BufferSize 1024 -MinBuffers 128 -MaxBuffers 256
+            if ($LASTEXITCODE -ne 0) { throw "heap session start failed: $LASTEXITCODE" }
+
+            Start-Sleep -Milliseconds 250
+            (& xperf -loggers 2>&1) | Tee-Object -FilePath etw-loggers-live.txt | Out-Host
+
+            $deadline = [DateTime]::UtcNow.AddSeconds(30)
+            do {
+              $process = Get-Process -Name windows_etw_heap_workload -ErrorAction SilentlyContinue
+              if (-not $process) { break }
+              Start-Sleep -Milliseconds 200
+            } while ([DateTime]::UtcNow -lt $deadline)
+            if ($process) { throw 'ETW workload did not exit within 30 seconds' }
+          }
+          finally {
+            & xperf -stop 'NT Kernel Logger' -stop $session -d etw-heap.etl
+            if ($LASTEXITCODE -ne 0) { throw "trace stop/merge failed: $LASTEXITCODE" }
+          }
+      - name: Analyze coverage stacks live-set and loss
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $env:_NT_SYMBOL_PATH = (Resolve-Path '.\build\etw-heap\RelWithDebInfo').Path
+          & xperf -i etw-heap.etl -o etw-tracestats.txt -a tracestats -detail stack
+          & xperf -i etw-heap.etl -o etw-heap-total.txt -symbols -a heap -stacks st -top 200
+          & xperf -i etw-heap.etl -o etw-heap-outstanding.txt -symbols -a heap -stacks so -top 200
+          & xperf -i etw-heap.etl -o etw-heap-totals.txt -a heap -totals
+          Write-Host '=== logger snapshot ==='
+          Get-Content etw-loggers-live.txt -ErrorAction SilentlyContinue | Select-String -Pattern 'Heap|Events Lost|Buffers Lost|Buffer Size|Maximum Buffers|Minimum Buffers'
+          Write-Host '=== trace stats heap events/stacks ==='
+          Get-Content etw-tracestats.txt -ErrorAction SilentlyContinue | Select-String -Pattern 'Heap|Lost|Stack' | Select-Object -First 160
+          Write-Host '=== custom marker visibility ==='
+          Get-Content etw-heap-total.txt -ErrorAction SilentlyContinue | Select-String -Pattern 'spark_etw_probe|HeapAlloc|malloc|realloc|aligned' | Select-Object -First 160
+          Write-Host '=== outstanding marker visibility ==='
+          Get-Content etw-heap-outstanding.txt -ErrorAction SilentlyContinue | Select-String -Pattern 'spark_etw_probe_live_malloc|spark_etw_probe|malloc' | Select-Object -First 120
+      - name: Upload ETW feasibility evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: windows-etw-heap-feasibility
+          path: |
+            etw-heap.etl
+            etw-loggers-live.txt
+            etw-tracestats.txt
+            etw-heap-total.txt
+            etw-heap-outstanding.txt
+            etw-heap-totals.txt
+          if-no-files-found: warn
