@@ -55,6 +55,17 @@ target_compile_definitions(windows_permanent_gateway_test PRIVATE NOMINMAX WIN32
 target_compile_options(windows_permanent_gateway_test PRIVATE /W4 /WX /UNDEBUG)
 target_link_libraries(windows_permanent_gateway_test PRIVATE funchook-static distorm)
 
+add_executable(windows_permanent_gateway_third_party_test
+        "${SPARK_ROOT}/src/native/alloc/windows_stable_entry_experiment.cpp"
+        "${SPARK_ROOT}/src/native/alloc/windows_stable_entry_atomic.cpp"
+        "${SPARK_ROOT}/src/native/alloc/windows_stable_entry_relocator.cpp"
+        "${SPARK_ROOT}/src/native/alloc/windows_permanent_gateway_experiment.cpp"
+        "${SPARK_ROOT}/tests/native/alloc/windows_permanent_gateway_third_party_test.cpp")
+target_include_directories(windows_permanent_gateway_third_party_test PRIVATE "${SPARK_ROOT}/src")
+target_compile_definitions(windows_permanent_gateway_third_party_test PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_compile_options(windows_permanent_gateway_third_party_test PRIVATE /W4 /WX /UNDEBUG)
+target_link_libraries(windows_permanent_gateway_third_party_test PRIVATE funchook-static distorm)
+
 add_library(windows_gateway_test_handler SHARED
         "${SPARK_ROOT}/tests/native/alloc/windows_gateway_test_handler.cpp")
 target_compile_definitions(windows_gateway_test_handler PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
