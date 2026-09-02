@@ -100,7 +100,7 @@ int runCryptoTests()
     ok = spark::Crypto::verify(pub, reinterpret_cast<const std::uint8_t *>(KTestMessage), KTestMessageLen,
                                bad_sig.data(), bad_sig.size());
     if (ok) {
-        std::cerr << "FAIL: verify() accepted a signature for a tampered message\n";
+        std::cerr << "FAIL: verify() accepted a tampered signature\n";
         return 1;
     }
     std::cout << "PASS: verify() rejects a tampered signature\n";
