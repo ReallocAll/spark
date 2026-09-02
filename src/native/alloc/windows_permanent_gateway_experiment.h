@@ -31,6 +31,8 @@ public:
 
     PermanentGateway(const PermanentGateway &) = delete;
     PermanentGateway &operator=(const PermanentGateway &) = delete;
+    PermanentGateway(PermanentGateway &&) noexcept = default;
+    PermanentGateway &operator=(PermanentGateway &&) noexcept = default;
 
     // Installs the permanent entry patch exactly once, or rediscovers an already
     // installed compatible process-lifetime gateway from the allocator entry.
