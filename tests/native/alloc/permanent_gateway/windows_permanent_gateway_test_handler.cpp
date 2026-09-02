@@ -15,6 +15,7 @@ volatile LONG64 *g_calls = nullptr;
 volatile LONG64 *g_entered = nullptr;
 volatile LONG64 *g_stack_ok = nullptr;
 volatile LONG *g_hold = nullptr;
+volatile LONG g_stack_checked = 0;
 std::uintptr_t g_gateway_begin = 0;
 std::uintptr_t g_gateway_end = 0;
 
@@ -40,6 +41,7 @@ extern "C" __declspec(dllexport) BOOL __cdecl configure_gateway_handler(
     g_hold = hold;
     g_gateway_begin = reinterpret_cast<std::uintptr_t>(gateway_begin);
     g_gateway_end = g_gateway_begin + gateway_size;
+    (void)::InterlockedExchange(&g_stack_checked, 0);
     return TRUE;
 }
 
@@ -47,17 +49,19 @@ extern "C" __declspec(dllexport) int __cdecl gateway_test_handler(int value) noe
 {
     ::InterlockedIncrement64(g_entered);
 
-    void *frames[16]{};
-    const USHORT frame_count = ::RtlCaptureStackBackTrace(0, 16, frames, nullptr);
-    bool saw_gateway = false;
-    for (USHORT index = 0; index < frame_count; ++index) {
-        if (inGateway(frames[index])) {
-            saw_gateway = true;
-            break;
+    if (::InterlockedCompareExchange(&g_stack_checked, 1, 0) == 0) {
+        void *frames[16]{};
+        const USHORT frame_count = ::RtlCaptureStackBackTrace(0, 16, frames, nullptr);
+        bool saw_gateway = false;
+        for (USHORT index = 0; index < frame_count; ++index) {
+            if (inGateway(frames[index])) {
+                saw_gateway = true;
+                break;
+            }
         }
-    }
-    if (saw_gateway) {
-        ::InterlockedIncrement64(g_stack_ok);
+        if (saw_gateway) {
+            ::InterlockedIncrement64(g_stack_ok);
+        }
     }
 
     while (::InterlockedCompareExchange(g_hold, 0, 0) != 0) {
