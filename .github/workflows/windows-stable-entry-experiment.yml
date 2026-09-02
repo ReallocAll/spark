@@ -1,0 +1,50 @@
+name: Windows Stable Entry Experiment
+
+on:
+  pull_request:
+    paths:
+      - "src/native/alloc/windows_stable_entry_experiment.*"
+      - "src/native/alloc/windows_stable_entry_resolver.cpp"
+      - "tests/native/alloc/windows_stable_entry_*_test.cpp"
+      - ".github/workflows/windows-stable-entry-experiment.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deterministic-state-machine:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Compile fail-closed state-machine tests
+        run: >-
+          c++ -std=c++20 -Wall -Wextra -Werror -pedantic
+          -Isrc
+          src/native/alloc/windows_stable_entry_experiment.cpp
+          tests/native/alloc/windows_stable_entry_experiment_test.cpp
+          -o windows_stable_entry_experiment_test
+      - name: Run fail-closed state-machine tests
+        run: ./windows_stable_entry_experiment_test
+
+  native-windows-resolution:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up MSVC environment
+        uses: TheMrMilchmann/setup-msvc-dev@v4
+        with:
+          arch: x64
+      - name: Compile native allocator resolver probe
+        shell: pwsh
+        run: |
+          $clang = "C:\Program Files\LLVM\bin\clang-cl.exe"
+          & $clang /nologo /std:c++20 /EHsc /W4 /WX /I src `
+            src/native/alloc/windows_stable_entry_experiment.cpp `
+            src/native/alloc/windows_stable_entry_resolver.cpp `
+            tests/native/alloc/windows_stable_entry_resolver_test.cpp `
+            /Fe:windows_stable_entry_resolver_test.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Resolve real allocator entries and mitigation policy
+        shell: pwsh
+        run: .\windows_stable_entry_resolver_test.exe
