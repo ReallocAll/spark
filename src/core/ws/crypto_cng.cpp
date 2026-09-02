@@ -224,12 +224,25 @@ std::vector<std::uint8_t> buildRsaKeyBlob(bool is_private, const RsaKeyParams &p
     blob.insert(blob.end(), p.public_exp.begin(), p.public_exp.end());
     blob.insert(blob.end(), p.modulus.begin(), p.modulus.end());
     if (is_private) {
-        blob.insert(blob.end(), p.prime1.begin(), p.prime1.end());
-        blob.insert(blob.end(), p.prime2.begin(), p.prime2.end());
-        blob.insert(blob.end(), p.exponent1.begin(), p.exponent1.end());
-        blob.insert(blob.end(), p.exponent2.begin(), p.exponent2.end());
-        blob.insert(blob.end(), p.coefficient.begin(), p.coefficient.end());
-        blob.insert(blob.end(), p.private_exp.begin(), p.private_exp.end());
+        auto append_fixed_width = [&blob](const std::vector<std::uint8_t> &value, std::size_t width) {
+            if (value.empty() || value.size() > width) {
+                return false;
+            }
+            blob.insert(blob.end(), width - value.size(), 0);
+            blob.insert(blob.end(), value.begin(), value.end());
+            return true;
+        };
+
+        // PKCS#1/DER integers are minimally encoded, so leading zero octets from
+        // CNG's fixed-width private fields disappear during the DER round trip.
+        // BCRYPT_RSAFULLPRIVATE_BLOB requires the CRT exponents/coefficient to
+        // occupy their prime widths and the private exponent to occupy cbModulus.
+        if (!append_fixed_width(p.prime1, header.cbPrime1) || !append_fixed_width(p.prime2, header.cbPrime2) ||
+            !append_fixed_width(p.exponent1, header.cbPrime1) || !append_fixed_width(p.exponent2, header.cbPrime2) ||
+            !append_fixed_width(p.coefficient, header.cbPrime1) ||
+            !append_fixed_width(p.private_exp, header.cbModulus)) {
+            return {};
+        }
     }
     return blob;
 }
