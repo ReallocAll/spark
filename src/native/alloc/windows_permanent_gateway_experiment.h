@@ -67,7 +67,9 @@ public:
     [[nodiscard]] std::size_t gatewayCodeSize() const noexcept { return code_size_; }
     [[nodiscard]] GatewayFootprint footprint() const noexcept;
 
-private:
+    // Experimental implementation view. These are non-owning POD addresses;
+    // they are public only while the rediscovery ABI is being proven, so the
+    // standalone validator can reconstruct a handle without Spark-owned state.
     void *entry_ = nullptr;
     void *island_ = nullptr;
     void *state_ = nullptr;
