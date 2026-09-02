@@ -9,6 +9,7 @@
 #include <cassert>
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <string>
@@ -100,8 +101,9 @@ bool same16(const std::array<std::uint8_t, 16> &a, const std::array<std::uint8_t
 
 void testCmpxchg16bNoTornObservers()
 {
+    std::cerr << "stage=cmpxchg16 begin\n";
     if (!cpuSupportsAtomic16()) {
-        std::cout << "CMPXCHG16B unavailable; atomic16 capability test skipped\n";
+        std::cerr << "stage=cmpxchg16 skipped: CPU feature unavailable\n";
         return;
     }
 
@@ -139,11 +141,58 @@ void testCmpxchg16bNoTornObservers()
     reader.join();
     assert(torn.load(std::memory_order_relaxed) == 0);
     ::VirtualFree(memory, 0, MEM_RELEASE);
-    std::cout << "CMPXCHG16B contention: no torn 16-byte observers\n";
+    std::cerr << "stage=cmpxchg16 pass torn=0\n";
+}
+
+void runSyntheticCycle(ExecutableSyntheticFunction &target, std::size_t cycle)
+{
+    SyntheticFn function = target.function();
+    AtomicEntryHook hook;
+    std::string error;
+    if (!hook.prepare(target.address(), reinterpret_cast<void *>(&syntheticHook), error)) {
+        std::cerr << "prepare failed at cycle " << cycle << ": " << error << '\n';
+        std::abort();
+    }
+    g_synthetic_trampoline.store(hook.trampoline(), std::memory_order_release);
+    if (!hook.install(error)) {
+        std::cerr << "install failed at cycle " << cycle << ": " << error << '\n';
+        std::abort();
+    }
+    for (int i = 0; i < 32; ++i) {
+        assert(function(i) == i + 1);
+    }
+    if (!hook.restore(error)) {
+        std::cerr << "restore failed at cycle " << cycle << ": " << error << '\n';
+        std::abort();
+    }
+    if (!hook.proveQuiescence(g_synthetic_active, 5000, error)) {
+        std::cerr << "quiescence failed at cycle " << cycle << ": " << error << '\n';
+        std::abort();
+    }
+    if (!hook.destroy(error)) {
+        std::cerr << "destroy failed at cycle " << cycle << ": " << error << '\n';
+        std::abort();
+    }
+    g_synthetic_trampoline.store(nullptr, std::memory_order_release);
+    assert(function(9) == 10);
+}
+
+void testSyntheticSingleThreadLifecycle()
+{
+    std::cerr << "stage=synthetic-single begin\n";
+    ExecutableSyntheticFunction target;
+    SyntheticFn function = target.function();
+    assert(function(41) == 42);
+    runSyntheticCycle(target, 0);
+    assert(g_synthetic_hook_calls.load(std::memory_order_relaxed) != 0);
+    assert(g_synthetic_stale_calls.load(std::memory_order_relaxed) == 0);
+    std::cerr << "stage=synthetic-single pass hook_calls="
+              << g_synthetic_hook_calls.load(std::memory_order_relaxed) << '\n';
 }
 
 void testSyntheticLifecycleStress()
 {
+    std::cerr << "stage=synthetic-stress begin\n";
     ExecutableSyntheticFunction target;
     SyntheticFn function = target.function();
     assert(function(41) == 42);
@@ -169,34 +218,10 @@ void testSyntheticLifecycleStress()
 
     constexpr std::size_t kCycles = 1000;
     for (std::size_t cycle = 0; cycle < kCycles; ++cycle) {
-        AtomicEntryHook hook;
-        std::string error;
-        if (!hook.prepare(target.address(), reinterpret_cast<void *>(&syntheticHook), error)) {
-            std::cerr << "prepare failed at cycle " << cycle << ": " << error << '\n';
-            std::abort();
+        runSyntheticCycle(target, cycle);
+        if ((cycle + 1) % 100 == 0) {
+            std::cerr << "stage=synthetic-stress progress=" << (cycle + 1) << '/' << kCycles << '\n';
         }
-        g_synthetic_trampoline.store(hook.trampoline(), std::memory_order_release);
-        if (!hook.install(error)) {
-            std::cerr << "install failed at cycle " << cycle << ": " << error << '\n';
-            std::abort();
-        }
-        for (int i = 0; i < 32; ++i) {
-            assert(function(i) == i + 1);
-        }
-        if (!hook.restore(error)) {
-            std::cerr << "restore failed at cycle " << cycle << ": " << error << '\n';
-            std::abort();
-        }
-        if (!hook.proveQuiescence(g_synthetic_active, 5000, error)) {
-            std::cerr << "quiescence failed at cycle " << cycle << ": " << error << '\n';
-            std::abort();
-        }
-        if (!hook.destroy(error)) {
-            std::cerr << "destroy failed at cycle " << cycle << ": " << error << '\n';
-            std::abort();
-        }
-        g_synthetic_trampoline.store(nullptr, std::memory_order_release);
-        assert(function(9) == 10);
     }
 
     stop.store(true, std::memory_order_release);
@@ -206,18 +231,19 @@ void testSyntheticLifecycleStress()
     assert(g_synthetic_hook_calls.load(std::memory_order_relaxed) != 0);
     assert(g_synthetic_stale_calls.load(std::memory_order_relaxed) == 0);
     assert(worker_calls.load(std::memory_order_relaxed) != 0);
-    std::cout << "synthetic stable-entry lifecycle cycles=" << kCycles
+    std::cerr << "stage=synthetic-stress pass cycles=" << kCycles
               << " worker_calls=" << worker_calls.load(std::memory_order_relaxed)
               << " hook_calls=" << g_synthetic_hook_calls.load(std::memory_order_relaxed) << '\n';
 }
 
 void testRealUcrtMallocEntry()
 {
+    std::cerr << "stage=ucrt-malloc begin\n";
     HMODULE ucrt = ::GetModuleHandleW(L"ucrtbase.dll");
     assert(ucrt != nullptr);
     void *entry = reinterpret_cast<void *>(::GetProcAddress(ucrt, "malloc"));
     assert(entry != nullptr);
-    std::cout << "ucrtbase!malloc entry=0x" << std::hex << reinterpret_cast<std::uintptr_t>(entry) << std::dec
+    std::cerr << "ucrtbase!malloc entry=0x" << std::hex << reinterpret_cast<std::uintptr_t>(entry) << std::dec
               << " align8=" << ((reinterpret_cast<std::uintptr_t>(entry) & 7U) == 0)
               << " align16=" << ((reinterpret_cast<std::uintptr_t>(entry) & 15U) == 0) << '\n';
 
@@ -228,28 +254,54 @@ void testRealUcrtMallocEntry()
         std::abort();
     }
     g_malloc_trampoline.store(hook.trampoline(), std::memory_order_release);
-    assert(hook.install(error));
+    if (!hook.install(error)) {
+        std::cerr << "real UCRT malloc install failed: " << error << '\n';
+        std::abort();
+    }
     for (std::size_t i = 1; i <= 4096; i += 17) {
         void *pointer = std::malloc(i);
         assert(pointer != nullptr);
         std::free(pointer);
     }
-    assert(hook.restore(error));
-    assert(hook.proveQuiescence(g_malloc_active, 5000, error));
-    assert(hook.destroy(error));
+    if (!hook.restore(error)) {
+        std::cerr << "real UCRT malloc restore failed: " << error << '\n';
+        std::abort();
+    }
+    if (!hook.proveQuiescence(g_malloc_active, 5000, error)) {
+        std::cerr << "real UCRT malloc quiescence failed: " << error << '\n';
+        std::abort();
+    }
+    if (!hook.destroy(error)) {
+        std::cerr << "real UCRT malloc destroy failed: " << error << '\n';
+        std::abort();
+    }
     g_malloc_trampoline.store(nullptr, std::memory_order_release);
     assert(g_malloc_hook_calls.load(std::memory_order_relaxed) != 0);
-    std::cout << "real UCRT malloc stable-entry hook_calls=" << g_malloc_hook_calls.load(std::memory_order_relaxed)
-              << '\n';
+    std::cerr << "stage=ucrt-malloc pass hook_calls=" << g_malloc_hook_calls.load(std::memory_order_relaxed) << '\n';
 }
 
 }  // namespace
 
-int main()
+int main(int argc, char **argv)
 {
-    testCmpxchg16bNoTornObservers();
-    testSyntheticLifecycleStress();
-    testRealUcrtMallocEntry();
-    std::cout << "Windows atomic stable-entry native tests passed\n";
+    const std::string mode = argc > 1 ? argv[1] : "all";
+    if (mode == "cmpxchg16" || mode == "all") {
+        testCmpxchg16bNoTornObservers();
+    }
+    if (mode == "synthetic-single" || mode == "all") {
+        testSyntheticSingleThreadLifecycle();
+    }
+    if (mode == "synthetic-stress" || mode == "all") {
+        testSyntheticLifecycleStress();
+    }
+    if (mode == "ucrt-malloc" || mode == "all") {
+        testRealUcrtMallocEntry();
+    }
+    if (mode != "all" && mode != "cmpxchg16" && mode != "synthetic-single" && mode != "synthetic-stress" &&
+        mode != "ucrt-malloc") {
+        std::cerr << "unknown test mode: " << mode << '\n';
+        return 2;
+    }
+    std::cerr << "Windows atomic stable-entry mode passed: " << mode << '\n';
     return 0;
 }
