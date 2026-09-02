@@ -45,11 +45,12 @@ target_compile_options(windows_stable_entry_lifecycle_probe PRIVATE /W4 /WX /UND
 target_link_libraries(windows_stable_entry_lifecycle_probe PRIVATE funchook-static)
 
 add_executable(windows_stable_entry_relocation_probe
+        "${SPARK_ROOT}/src/native/alloc/windows_stable_entry_relocator.cpp"
         "${SPARK_ROOT}/tests/native/alloc/windows_stable_entry_relocation_probe.cpp")
 target_include_directories(windows_stable_entry_relocation_probe PRIVATE "${SPARK_ROOT}/src")
 target_compile_definitions(windows_stable_entry_relocation_probe PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
 target_compile_options(windows_stable_entry_relocation_probe PRIVATE /W4 /WX /UNDEBUG)
-target_link_libraries(windows_stable_entry_relocation_probe PRIVATE funchook-static)
+target_link_libraries(windows_stable_entry_relocation_probe PRIVATE distorm)
 
 add_executable(windows_stable_entry_alignment_test
         "${SPARK_ROOT}/src/native/alloc/windows_stable_entry_experiment.cpp"
