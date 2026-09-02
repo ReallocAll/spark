@@ -33,10 +33,10 @@ target_compile_definitions(windows_stable_entry_atomic_test PRIVATE NOMINMAX WIN
 target_compile_options(windows_stable_entry_atomic_test PRIVATE /W4 /WX)
 target_link_libraries(windows_stable_entry_atomic_test PRIVATE funchook-static)
 
-add_executable(windows_stable_entry_resolver_atomic_test
+add_executable(windows_stable_entry_alignment_test
         "${SPARK_ROOT}/src/native/alloc/windows_stable_entry_experiment.cpp"
         "${SPARK_ROOT}/src/native/alloc/windows_stable_entry_resolver.cpp"
-        "${SPARK_ROOT}/tests/native/alloc/windows_stable_entry_resolver_test.cpp")
-target_include_directories(windows_stable_entry_resolver_atomic_test PRIVATE "${SPARK_ROOT}/src")
-target_compile_definitions(windows_stable_entry_resolver_atomic_test PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
-target_compile_options(windows_stable_entry_resolver_atomic_test PRIVATE /W4 /WX)
+        "${SPARK_ROOT}/tests/native/alloc/windows_stable_entry_alignment_test.cpp")
+target_include_directories(windows_stable_entry_alignment_test PRIVATE "${SPARK_ROOT}/src")
+target_compile_definitions(windows_stable_entry_alignment_test PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_compile_options(windows_stable_entry_alignment_test PRIVATE /W4 /WX)
