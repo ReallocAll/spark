@@ -4,12 +4,17 @@ on:
   push:
     branches:
       - "exp/windows-stable-entry-hooks"
+      - "exp/windows-etw-allocation"
     paths:
       - "tests/native/alloc/windows_etw_heap_probe.cpp"
+      - "tests/native/alloc/windows_etw_heap_workload.cpp"
+      - "tests/native/alloc/windows_etw_heap_etl_inspect.cpp"
       - ".github/workflows/windows-etw-heap-probe.yml"
   pull_request:
     paths:
       - "tests/native/alloc/windows_etw_heap_probe.cpp"
+      - "tests/native/alloc/windows_etw_heap_workload.cpp"
+      - "tests/native/alloc/windows_etw_heap_etl_inspect.cpp"
       - ".github/workflows/windows-etw-heap-probe.yml"
   workflow_dispatch:
 
@@ -46,3 +51,80 @@ jobs:
       - name: Run raw System Memory heap probe
         shell: pwsh
         run: .\windows_etw_heap_probe.exe
+
+  wpr-process-heap:
+    runs-on: windows-2022
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up MSVC environment
+        uses: TheMrMilchmann/setup-msvc-dev@v4
+        with:
+          arch: x64
+      - name: Compile WPR heap workload and ETL inspector
+        shell: pwsh
+        run: |
+          cl.exe /nologo /std:c++20 /EHsc /W4 /WX /DWIN32_LEAN_AND_MEAN /DNOMINMAX tests\native\alloc\windows_etw_heap_workload.cpp /Fe:windows_etw_heap_workload.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cl.exe /nologo /std:c++20 /EHsc /W4 /WX /DWIN32_LEAN_AND_MEAN /DNOMINMAX tests\native\alloc\windows_etw_heap_etl_inspect.cpp /Fe:windows_etw_heap_etl_inspect.exe /link advapi32.lib
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Trace process heap with WPR and verify cleanup
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $workloadName = 'windows_etw_heap_workload.exe'
+          $etl = Join-Path $PWD 'etw-heap-probe.etl'
+          $registryPath = "Registry::HKEY_LOCAL_MACHINE\Software\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\$workloadName"
+          $sessionStarted = $false
+          $primaryError = $null
+          try {
+            & wpr.exe -HeapTracingConfig $workloadName enable | Out-Host
+            if ($LASTEXITCODE -ne 0) { throw "wpr HeapTracingConfig enable failed exit=$LASTEXITCODE" }
+
+            & wpr.exe -start Heap -filemode | Out-Host
+            if ($LASTEXITCODE -ne 0) { throw "wpr start Heap failed exit=$LASTEXITCODE" }
+            $sessionStarted = $true
+
+            $output = & .\windows_etw_heap_workload.exe 2>&1
+            $workloadExit = $LASTEXITCODE
+            $output | ForEach-Object { Write-Host $_ }
+            if ($workloadExit -ne 0) { throw "heap workload failed exit=$workloadExit" }
+
+            $pidLine = $output | Where-Object { "$_" -match '^pid=(\d+)$' } | Select-Object -First 1
+            if ($null -eq $pidLine) { throw 'heap workload did not report pid' }
+            $workloadPid = [int](("$pidLine").Substring(4))
+            Write-Host "captured_workload_pid=$workloadPid"
+
+            & wpr.exe -stop $etl | Out-Host
+            if ($LASTEXITCODE -ne 0) { throw "wpr stop failed exit=$LASTEXITCODE" }
+            $sessionStarted = $false
+
+            & .\windows_etw_heap_etl_inspect.exe $etl $workloadPid
+            if ($LASTEXITCODE -ne 0) { throw "ETL inspector failed exit=$LASTEXITCODE" }
+          } catch {
+            $primaryError = $_
+          } finally {
+            if ($sessionStarted) {
+              & wpr.exe -cancel | Out-Host
+            }
+            & wpr.exe -HeapTracingConfig $workloadName disable | Out-Host
+            $cleanupExit = $LASTEXITCODE
+            $remaining = Get-ItemProperty -Path $registryPath -Name TracingFlags -ErrorAction SilentlyContinue
+            if ($cleanupExit -ne 0) {
+              throw "wpr HeapTracingConfig disable failed exit=$cleanupExit"
+            }
+            if ($null -ne $remaining) {
+              throw "TracingFlags cleanup failed path=$registryPath"
+            }
+          }
+          if ($null -ne $primaryError) {
+            throw $primaryError
+          }
+      - name: Upload ETL evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: windows-etw-heap-probe
+          path: etw-heap-probe.etl
+          if-no-files-found: ignore
+          retention-days: 7
