@@ -24,8 +24,9 @@ jobs:
       - name: Verify Windows Performance Toolkit
         shell: pwsh
         run: |
-          Get-Command xperf | Format-List *
-          xperf -version
+          $command = Get-Command xperf -ErrorAction Stop
+          $command | Format-List Path,Version,FileVersionInfo
+          if (-not (Test-Path $command.Source)) { throw 'xperf executable is not available' }
       - name: Build deterministic allocation workload
         shell: pwsh
         run: |
@@ -37,7 +38,8 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $exe = (Resolve-Path '.\build\etw-heap\RelWithDebInfo\windows_etw_heap_workload.exe').Path
           $session = 'SparkHeapProbe'
-          # Clean only our own well-known experimental sessions from a prior failed step.
+          # Dedicated hosted runner: clean only the known experimental heap session
+          # plus a kernel logger that this job itself is about to own.
           & xperf -stop $session 2>$null | Out-Null
           & xperf -stop 'NT Kernel Logger' 2>$null | Out-Null
 
@@ -51,6 +53,7 @@ jobs:
             (& xperf -loggers 2>&1) | Tee-Object -FilePath etw-loggers-live.txt | Out-Host
 
             $deadline = [DateTime]::UtcNow.AddSeconds(30)
+            $process = $null
             do {
               $process = Get-Process -Name windows_etw_heap_workload -ErrorAction SilentlyContinue
               if (-not $process) { break }
