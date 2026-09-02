@@ -41,7 +41,7 @@ using ResetEnteredFn = void(__cdecl *)();
 using EnteredFn = int(__cdecl *)();
 
 constexpr std::size_t kWorkers = 4;
-constexpr std::size_t kUnloadCycles = 500;
+constexpr std::size_t kUnloadCycles = 1000;
 constexpr std::uint64_t kTimeoutMs = 5000;
 constexpr wchar_t kHandlerName[] = L"windows_gateway_test_handler.dll";
 
