@@ -253,8 +253,9 @@ TPS marker, and Minecraft color codes. These placeholders are player-independent
 ### Native allocation profiler
 
 `--alloc` profiles successful native allocation requests across process threads on
-Linux x86-64. On Windows, the option remains available for command compatibility
-but fails explicitly because safe allocator entry patching is unavailable.
+Linux x86-64 and Windows x64. Linux redirects supported ELF allocator imports;
+Windows redirects supported allocator IAT slots through a process-lifetime pinned
+shim whose callbacks fall back safely after Spark-owned handlers are detached.
 Every thread has an independent randomized byte-sampling phase and a non-reused
 session identity, so short-lived threads and operating-system thread-ID reuse do
 not merge unrelated stacks. Samples are weighted by requested bytes using a
@@ -271,7 +272,7 @@ expression, string construction, or thread-name query runs in an allocator hook,
 and a free or realloc on an unselected thread can still retire an allocation
 created by a selected thread.
 
-On Linux x86-64, `--alloc-live-only` follows sampled allocations through realloc and free calls,
+`--alloc-live-only` follows sampled allocations through realloc and free calls on both supported platforms,
 including releases from other threads, and reports only allocations still live
 at export time. This applies to each Live Viewer update and the final stopped
 profile. It is intended to identify retained-memory and leak candidates;
@@ -284,6 +285,13 @@ import the effective libc allocator. Loaded modules are rescanned at session sta
 and every five seconds while profiling; unloaded modules are recognized before
 restoration so stale slots are never written.
 
+On Windows x64, Spark redirects supported UCRT and heap allocation imports through
+the pinned `spark_allocation_shim.dll`. Shutdown first closes and drains the shim's
+callback admission gate, then clears Spark-owned handlers and restores IAT slots
+still owned by Spark. Stale or ownership-uncertain slots remain safe because the
+process-lifetime shim falls back to the original allocator without calling unloaded
+Spark plugin code.
+
 Stack symbolization and call-tree aggregation run outside the hook path. A fixed
 preallocated queue drops and reports excess samples instead of blocking allocator
 threads. Live records, thread roots, module entries, pending samples, and call-tree
@@ -294,11 +302,11 @@ hook, observed-byte, sampling-point, live/freed lifecycle, and drop diagnostics 
 explicitly labeled process-wide. If an allocation-origin thread exits before its
 name can be read, a named selector fails closed for that identity rather than
 attributing it using a possibly reused operating-system thread ID.
-Linux allocation coverage is limited to the listed allocator entry points/imports. Static CRT
+Allocation coverage is limited to the listed allocator entry points/imports. Static CRT
 copies, inlined or private allocators, arenas and object pools that do not reach a
-covered entry point, `VirtualAlloc`/`VirtualFree`, and `mmap`/`munmap` are not
-sampled. A Linux module loaded and unloaded entirely between rescans can escape
-coverage.
+covered entry point, direct virtual-memory APIs, and memory mappings that bypass the
+covered allocator families are not sampled. A Linux module loaded and unloaded
+entirely between rescans can escape coverage.
 
 ## Crash recovery
 
@@ -365,7 +373,8 @@ this file without touching `config.toml`.
 > CMake fetches upstream funchook `v1.1.3` for its bundled distorm decoder, which
 > is used by both x86-64 symbol guessers. No funchook hook library is linked;
 > Linux allocation profiling uses atomic ELF import-slot redirection, and Windows
-> allocation profiling is temporarily unavailable.
+> allocation profiling uses project-owned IAT redirection through the process-lifetime
+> `spark_allocation_shim.dll`.
 
 The platform requirements are:
 
@@ -396,8 +405,9 @@ single/four-thread, live-only, and forced saturation cases.
 CPU windows, true MSPT median/p95 calculations, partial-history spans, and exact
 per-second profile boundaries. The default self-test also decodes key rolling and
 window fields from the generated current-protocol payload. On Windows,
-`spark_windows_allocation_unavailable_test` verifies the deterministic allocation
-profiling refusal and harmless shutdown path.
+`spark_windows_allocation_unavailable_test` exercises process-lifetime shim installation,
+late-module refresh, real sampled call trees, repeat sessions, and harmless post-shutdown
+allocator pass-through.
 
 On Linux, the bundled profile selects libunwind because the SIGPROF sampler
 requires cpptrace's async-signal-safe unwinding path. Windows does not use
@@ -406,7 +416,8 @@ with StackWalk64.
 
 The plugin is emitted as `build/endstone_spark.so` (Linux) /
 `build/endstone_spark.dll` (Windows). Drop it in your server's `plugins/`
-directory.
+directory. Windows builds also emit `spark_allocation_shim.dll`; deploy it next to
+`endstone_spark.dll` so allocation profiling has a process-lifetime redirection target.
 
 > **Toolchain / ABI note.** A C++ Endstone plugin must use the runtime ABI expected
 > by the Endstone build it is loaded into. Match its compiler, compiler ABI, C++
