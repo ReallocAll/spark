@@ -52,7 +52,10 @@ add_executable(windows_permanent_gateway_test
         "${SPARK_ROOT}/tests/native/alloc/windows_permanent_gateway_test.cpp")
 target_include_directories(windows_permanent_gateway_test PRIVATE "${SPARK_ROOT}/src")
 target_compile_definitions(windows_permanent_gateway_test PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
-target_compile_options(windows_permanent_gateway_test PRIVATE /W4 /WX /UNDEBUG)
+# GatewayState intentionally reserves a cache-line-sized process-lifetime ABI
+# block. MSVC's C4324 reports the resulting tail padding; it is deliberate and
+# separately guarded by offset static_asserts, so keep /WX for all other warnings.
+target_compile_options(windows_permanent_gateway_test PRIVATE /W4 /WX /UNDEBUG /wd4324)
 target_link_libraries(windows_permanent_gateway_test PRIVATE funchook-static distorm)
 
 add_executable(windows_stable_entry_lifecycle_probe
