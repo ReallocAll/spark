@@ -50,5 +50,7 @@ add_library(permanent_gateway_engine STATIC
         "${SPARK_ROOT}/src/native/alloc/windows_permanent_gateway_experiment.cpp")
 target_include_directories(permanent_gateway_engine PUBLIC "${SPARK_ROOT}/src")
 target_compile_definitions(permanent_gateway_engine PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
-target_compile_options(permanent_gateway_engine PRIVATE /W4 /WX)
+# GatewayState is intentionally cache-line aligned inside page-aligned permanent
+# storage; MSVC C4324 is expected padding, not an actionable correctness warning.
+target_compile_options(permanent_gateway_engine PRIVATE /W4 /WX /wd4324)
 target_link_libraries(permanent_gateway_engine PUBLIC funchook-static)
