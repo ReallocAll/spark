@@ -60,7 +60,7 @@ add_executable(windows_stable_entry_permanent_gateway_test
         "${SPARK_ROOT}/tests/native/alloc/windows_stable_entry_permanent_gateway_test.cpp")
 target_include_directories(windows_stable_entry_permanent_gateway_test PRIVATE "${SPARK_ROOT}/src")
 target_compile_definitions(windows_stable_entry_permanent_gateway_test PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
-target_compile_options(windows_stable_entry_permanent_gateway_test PRIVATE /W4 /WX /UNDEBUG)
+target_compile_options(windows_stable_entry_permanent_gateway_test PRIVATE /W4 /WX /UNDEBUG /wd4324)
 target_link_libraries(windows_stable_entry_permanent_gateway_test PRIVATE funchook-static distorm)
 
 add_executable(windows_stable_entry_relocation_probe
