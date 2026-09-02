@@ -4,8 +4,25 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <span>
 #include <string>
+
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+// Keep Win32 declarations in the global namespace. The implementation includes
+// these headers again after opening the experiment namespace; the SDK/header
+// guards deliberately make those later includes no-ops.
+#include <windows.h>
+#include <tlhelp32.h>
+#include <intrin.h>
+#include <funchook.h>
+#endif
 
 #include "native/alloc/windows_stable_entry_experiment.h"
 
