@@ -24,7 +24,9 @@ using SyntheticFn = int(__cdecl *)(int);
 struct GenerationRanges {
     std::uint64_t generation = 0;
     AddressRange relay{};
+    AddressRange relay_allocation{};
     AddressRange trampoline{};
+    AddressRange trampoline_allocation{};
     AddressRange hook{};
 };
 
@@ -39,16 +41,52 @@ std::atomic<std::uint64_t> g_hook_calls{0};
 std::atomic<std::uint64_t> g_cycle{0};
 std::atomic<unsigned> g_phase{0};
 
+AddressRange allocationRangeFor(void *address) noexcept
+{
+    if (address == nullptr) {
+        return {};
+    }
+    MEMORY_BASIC_INFORMATION first{};
+    if (::VirtualQuery(address, &first, sizeof(first)) == 0 || first.AllocationBase == nullptr) {
+        return {};
+    }
+
+    const auto allocation_base = reinterpret_cast<std::uintptr_t>(first.AllocationBase);
+    std::uintptr_t cursor = allocation_base;
+    std::uintptr_t end = allocation_base;
+    for (std::size_t region = 0; region < 4096; ++region) {
+        MEMORY_BASIC_INFORMATION memory{};
+        if (::VirtualQuery(reinterpret_cast<const void *>(cursor), &memory, sizeof(memory)) == 0 ||
+            memory.AllocationBase != first.AllocationBase || memory.RegionSize == 0) {
+            break;
+        }
+        const auto region_begin = reinterpret_cast<std::uintptr_t>(memory.BaseAddress);
+        const auto region_end = region_begin + memory.RegionSize;
+        if (region_end <= cursor || region_end < region_begin) {
+            break;
+        }
+        end = region_end;
+        cursor = region_end;
+    }
+    return {allocation_base, end};
+}
+
 const char *rangeClass(std::uintptr_t rip, const GenerationRanges &record) noexcept
 {
     if (record.relay.contains(rip)) {
-        return "relay";
+        return "relay-code";
     }
     if (record.trampoline.contains(rip)) {
-        return "trampoline";
+        return "trampoline-region";
     }
     if (record.hook.contains(rip)) {
         return "hook";
+    }
+    if (record.relay_allocation.contains(rip)) {
+        return "relay-allocation";
+    }
+    if (record.trampoline_allocation.contains(rip)) {
+        return "trampoline-allocation";
     }
     return nullptr;
 }
@@ -109,12 +147,17 @@ LONG WINAPI diagnosticUnhandledExceptionFilter(EXCEPTION_POINTERS *exception) no
         const GenerationRanges &record = g_history[static_cast<std::size_t>(classified_generation - 1)];
         std::fprintf(stderr,
                      "stage=reclaim-diagnostic classified generation=%llu relay=[0x%llx,0x%llx) "
-                     "trampoline=[0x%llx,0x%llx) hook=[0x%llx,0x%llx)\n",
+                     "relay_allocation=[0x%llx,0x%llx) trampoline=[0x%llx,0x%llx) "
+                     "trampoline_allocation=[0x%llx,0x%llx) hook=[0x%llx,0x%llx)\n",
                      static_cast<unsigned long long>(record.generation),
                      static_cast<unsigned long long>(record.relay.begin),
                      static_cast<unsigned long long>(record.relay.end),
+                     static_cast<unsigned long long>(record.relay_allocation.begin),
+                     static_cast<unsigned long long>(record.relay_allocation.end),
                      static_cast<unsigned long long>(record.trampoline.begin),
                      static_cast<unsigned long long>(record.trampoline.end),
+                     static_cast<unsigned long long>(record.trampoline_allocation.begin),
+                     static_cast<unsigned long long>(record.trampoline_allocation.end),
                      static_cast<unsigned long long>(record.hook.begin),
                      static_cast<unsigned long long>(record.hook.end));
     }
@@ -176,8 +219,12 @@ void recordGeneration(const AtomicEntryHook &hook, std::size_t cycle)
     GenerationRanges record;
     record.generation = static_cast<std::uint64_t>(cycle + 1);
     record.relay = ranges[0];
+    record.relay_allocation = allocationRangeFor(hook.relay());
     record.trampoline = ranges[1];
+    record.trampoline_allocation = allocationRangeFor(hook.trampoline());
     record.hook = ranges[2];
+    assert(record.relay_allocation.contains(reinterpret_cast<std::uintptr_t>(hook.relay())));
+    assert(record.trampoline_allocation.contains(reinterpret_cast<std::uintptr_t>(hook.trampoline())));
     g_history[cycle] = record;
     g_history_count.store(cycle + 1, std::memory_order_release);
 }
