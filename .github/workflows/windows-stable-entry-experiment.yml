@@ -101,6 +101,9 @@ jobs:
       - name: Fail closed under ProcessDynamicCodePolicy
         shell: pwsh
         run: .\build\stable-entry\Release\windows_stable_entry_atomic_test.exe dynamic-code
+      - name: Run process-lifetime gateway registry/reload reuse stress
+        shell: pwsh
+        run: .\build\stable-entry\Release\windows_permanent_gateway_registry_test.exe
       - name: Prove permanent gateway safe after third-party entry ownership loss
         shell: pwsh
         run: .\build\stable-entry\Release\windows_permanent_gateway_third_party_test.exe

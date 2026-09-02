@@ -28,6 +28,12 @@ set(STABLE_ENTRY_ENGINE_SOURCES
         "${SPARK_ROOT}/src/native/alloc/windows_stable_entry_experiment.cpp"
         "${SPARK_ROOT}/src/native/alloc/windows_stable_entry_atomic.cpp")
 
+set(PERMANENT_GATEWAY_ENGINE_SOURCES
+        "${SPARK_ROOT}/src/native/alloc/windows_stable_entry_experiment.cpp"
+        "${SPARK_ROOT}/src/native/alloc/windows_stable_entry_atomic.cpp"
+        "${SPARK_ROOT}/src/native/alloc/windows_stable_entry_relocator.cpp"
+        "${SPARK_ROOT}/src/native/alloc/windows_permanent_gateway_experiment.cpp")
+
 add_executable(windows_stable_entry_atomic_test
         ${STABLE_ENTRY_ENGINE_SOURCES}
         "${SPARK_ROOT}/tests/native/alloc/windows_stable_entry_atomic_test.cpp")
@@ -45,21 +51,24 @@ target_compile_options(windows_stable_entry_retired_fault_probe PRIVATE /W4 /WX 
 target_link_libraries(windows_stable_entry_retired_fault_probe PRIVATE funchook-static)
 
 add_executable(windows_permanent_gateway_test
-        "${SPARK_ROOT}/src/native/alloc/windows_stable_entry_experiment.cpp"
-        "${SPARK_ROOT}/src/native/alloc/windows_stable_entry_atomic.cpp"
-        "${SPARK_ROOT}/src/native/alloc/windows_stable_entry_relocator.cpp"
-        "${SPARK_ROOT}/src/native/alloc/windows_permanent_gateway_experiment.cpp"
+        ${PERMANENT_GATEWAY_ENGINE_SOURCES}
         "${SPARK_ROOT}/tests/native/alloc/windows_permanent_gateway_test.cpp")
 target_include_directories(windows_permanent_gateway_test PRIVATE "${SPARK_ROOT}/src")
 target_compile_definitions(windows_permanent_gateway_test PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
 target_compile_options(windows_permanent_gateway_test PRIVATE /W4 /WX /UNDEBUG)
 target_link_libraries(windows_permanent_gateway_test PRIVATE funchook-static distorm)
 
+add_executable(windows_permanent_gateway_registry_test
+        ${PERMANENT_GATEWAY_ENGINE_SOURCES}
+        "${SPARK_ROOT}/src/native/alloc/windows_permanent_gateway_registry_experiment.cpp"
+        "${SPARK_ROOT}/tests/native/alloc/windows_permanent_gateway_registry_test.cpp")
+target_include_directories(windows_permanent_gateway_registry_test PRIVATE "${SPARK_ROOT}/src")
+target_compile_definitions(windows_permanent_gateway_registry_test PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_compile_options(windows_permanent_gateway_registry_test PRIVATE /W4 /WX /UNDEBUG)
+target_link_libraries(windows_permanent_gateway_registry_test PRIVATE funchook-static distorm)
+
 add_executable(windows_permanent_gateway_third_party_test
-        "${SPARK_ROOT}/src/native/alloc/windows_stable_entry_experiment.cpp"
-        "${SPARK_ROOT}/src/native/alloc/windows_stable_entry_atomic.cpp"
-        "${SPARK_ROOT}/src/native/alloc/windows_stable_entry_relocator.cpp"
-        "${SPARK_ROOT}/src/native/alloc/windows_permanent_gateway_experiment.cpp"
+        ${PERMANENT_GATEWAY_ENGINE_SOURCES}
         "${SPARK_ROOT}/tests/native/alloc/windows_permanent_gateway_third_party_test.cpp")
 target_include_directories(windows_permanent_gateway_third_party_test PRIVATE "${SPARK_ROOT}/src")
 target_compile_definitions(windows_permanent_gateway_third_party_test PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
@@ -72,10 +81,7 @@ target_compile_definitions(windows_gateway_test_handler PRIVATE NOMINMAX WIN32_L
 target_compile_options(windows_gateway_test_handler PRIVATE /W4 /WX)
 
 add_executable(windows_permanent_gateway_unload_test
-        "${SPARK_ROOT}/src/native/alloc/windows_stable_entry_experiment.cpp"
-        "${SPARK_ROOT}/src/native/alloc/windows_stable_entry_atomic.cpp"
-        "${SPARK_ROOT}/src/native/alloc/windows_stable_entry_relocator.cpp"
-        "${SPARK_ROOT}/src/native/alloc/windows_permanent_gateway_experiment.cpp"
+        ${PERMANENT_GATEWAY_ENGINE_SOURCES}
         "${SPARK_ROOT}/tests/native/alloc/windows_permanent_gateway_unload_test.cpp")
 target_include_directories(windows_permanent_gateway_unload_test PRIVATE "${SPARK_ROOT}/src")
 target_compile_definitions(windows_permanent_gateway_unload_test PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
