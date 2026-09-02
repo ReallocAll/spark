@@ -24,14 +24,25 @@ FetchContent_MakeAvailable(funchook)
 
 get_filename_component(SPARK_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../../.." ABSOLUTE)
 
-add_executable(windows_stable_entry_atomic_test
+set(STABLE_ENTRY_ENGINE_SOURCES
         "${SPARK_ROOT}/src/native/alloc/windows_stable_entry_experiment.cpp"
-        "${SPARK_ROOT}/src/native/alloc/windows_stable_entry_atomic.cpp"
+        "${SPARK_ROOT}/src/native/alloc/windows_stable_entry_atomic.cpp")
+
+add_executable(windows_stable_entry_atomic_test
+        ${STABLE_ENTRY_ENGINE_SOURCES}
         "${SPARK_ROOT}/tests/native/alloc/windows_stable_entry_atomic_test.cpp")
 target_include_directories(windows_stable_entry_atomic_test PRIVATE "${SPARK_ROOT}/src")
 target_compile_definitions(windows_stable_entry_atomic_test PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
 target_compile_options(windows_stable_entry_atomic_test PRIVATE /W4 /WX /UNDEBUG)
 target_link_libraries(windows_stable_entry_atomic_test PRIVATE funchook-static)
+
+add_executable(windows_stable_entry_lifecycle_probe
+        ${STABLE_ENTRY_ENGINE_SOURCES}
+        "${SPARK_ROOT}/tests/native/alloc/windows_stable_entry_lifecycle_probe.cpp")
+target_include_directories(windows_stable_entry_lifecycle_probe PRIVATE "${SPARK_ROOT}/src")
+target_compile_definitions(windows_stable_entry_lifecycle_probe PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_compile_options(windows_stable_entry_lifecycle_probe PRIVATE /W4 /WX /UNDEBUG)
+target_link_libraries(windows_stable_entry_lifecycle_probe PRIVATE funchook-static)
 
 add_executable(windows_stable_entry_relocation_probe
         "${SPARK_ROOT}/tests/native/alloc/windows_stable_entry_relocation_probe.cpp")
