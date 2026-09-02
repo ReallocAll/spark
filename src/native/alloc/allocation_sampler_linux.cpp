@@ -61,7 +61,9 @@ constexpr std::size_t KMaxProfileNodes = 131072;
 constexpr std::size_t KMaxPendingSamples = 32768;
 constexpr std::size_t KMaxTickDecisions = 100000;
 constexpr std::size_t KTickEventCapacity = 4096;
-constexpr std::size_t KFramesToSkip = 4;
+// cpptrace::safe_generate_raw_trace adds one frame to the requested skip internally.
+// Skip only recordAllocation -> handleMalloc -> hookMalloc here so the real allocating caller is retained.
+constexpr std::size_t KFramesToSkip = 3;
 
 void *tombstonePointer() noexcept
 {
