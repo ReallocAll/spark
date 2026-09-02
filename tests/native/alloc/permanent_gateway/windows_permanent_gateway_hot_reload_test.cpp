@@ -187,7 +187,7 @@ int main()
 
     const void *const island = gateway.islandBase();
     const void *const state = gateway.stateBase();
-    const void *const original = gateway.originalTrampoline();
+    void *const original = gateway.originalTrampoline();
     const void *const gateway_entry = gateway.gatewayEntry();
     const std::size_t gateway_code_size = gateway.gatewayCodeSize();
     const auto footprint = gateway.footprint();
