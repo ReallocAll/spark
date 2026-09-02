@@ -32,11 +32,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   installed or active.
 - Support Java-compatible Spark configuration environment variables.
 
-### Changed
-
-- **BREAKING**: Temporarily disable Windows native allocation profiling in v0.6;
-  `--alloc` now reports that safe allocator entry patching is unavailable. Linux
-  x86-64 allocation profiling remains supported.
+- Add Windows x64 native allocation profiling through a process-lifetime pinned
+  shim and IAT redirection, with fail-closed callback draining and ownership-safe
+  teardown before unloadable Spark plugin code is detached.
 
 ### Fixed
 

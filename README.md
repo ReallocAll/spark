@@ -253,8 +253,9 @@ TPS marker, and Minecraft color codes. These placeholders are player-independent
 ### Native allocation profiler
 
 `--alloc` profiles successful native allocation requests across process threads on
-Linux x86-64. On Windows, the option remains available for command compatibility
-but fails explicitly because safe allocator entry patching is unavailable.
+Linux x86-64 and Windows x64. Linux redirects supported ELF allocator imports;
+Windows redirects supported allocator IAT slots through a process-lifetime pinned
+shim whose callbacks fall back safely after Spark-owned handlers are detached.
 Every thread has an independent randomized byte-sampling phase and a non-reused
 session identity, so short-lived threads and operating-system thread-ID reuse do
 not merge unrelated stacks. Samples are weighted by requested bytes using a
@@ -271,7 +272,7 @@ expression, string construction, or thread-name query runs in an allocator hook,
 and a free or realloc on an unselected thread can still retire an allocation
 created by a selected thread.
 
-On Linux x86-64, `--alloc-live-only` follows sampled allocations through realloc and free calls,
+`--alloc-live-only` follows sampled allocations through realloc and free calls on both supported platforms,
 including releases from other threads, and reports only allocations still live
 at export time. This applies to each Live Viewer update and the final stopped
 profile. It is intended to identify retained-memory and leak candidates;
@@ -283,6 +284,13 @@ and loaded ELF modules, including Endstone, native plugins, and Python when they
 import the effective libc allocator. Loaded modules are rescanned at session start
 and every five seconds while profiling; unloaded modules are recognized before
 restoration so stale slots are never written.
+
+On Windows x64, Spark redirects supported UCRT and heap allocation imports through
+the pinned `spark_allocation_shim.dll`. Shutdown first closes and drains the shim's
+callback admission gate, then clears Spark-owned handlers and restores IAT slots
+still owned by Spark. Stale or ownership-uncertain slots remain safe because the
+process-lifetime shim falls back to the original allocator without calling unloaded
+Spark plugin code.
 
 Stack symbolization and call-tree aggregation run outside the hook path. A fixed
 preallocated queue drops and reports excess samples instead of blocking allocator
