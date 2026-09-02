@@ -61,6 +61,15 @@ jobs:
       - name: Report real allocator entry alignment
         shell: pwsh
         run: .\build\stable-entry\Release\windows_stable_entry_alignment_test.exe
-      - name: Run atomic patch, UCRT, and 1000-cycle lifecycle stress
+      - name: Prove CMPXCHG16B data atomicity under contention
         shell: pwsh
-        run: .\build\stable-entry\Release\windows_stable_entry_atomic_test.exe
+        run: .\build\stable-entry\Release\windows_stable_entry_atomic_test.exe cmpxchg16
+      - name: Run single-thread executable entry lifecycle
+        shell: pwsh
+        run: .\build\stable-entry\Release\windows_stable_entry_atomic_test.exe synthetic-single
+      - name: Run concurrent 1000-cycle executable entry stress
+        shell: pwsh
+        run: .\build\stable-entry\Release\windows_stable_entry_atomic_test.exe synthetic-stress
+      - name: Run real UCRT malloc entry probe
+        shell: pwsh
+        run: .\build\stable-entry\Release\windows_stable_entry_atomic_test.exe ucrt-malloc
