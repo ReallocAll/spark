@@ -4,6 +4,14 @@
 #error "windows_stable_entry_alignment_test.cpp is Windows-only"
 #endif
 
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+
 #include <array>
 #include <cassert>
 #include <cstdint>
