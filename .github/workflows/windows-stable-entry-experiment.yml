@@ -6,13 +6,17 @@ on:
       - "exp/windows-stable-entry-hooks"
     paths:
       - "src/native/alloc/windows_stable_entry_*"
+      - "src/native/alloc/windows_permanent_gateway_*"
       - "tests/native/alloc/windows_stable_entry_*"
+      - "tests/native/alloc/windows_permanent_gateway_*"
       - "tests/native/alloc/stable_entry/**"
       - ".github/workflows/windows-stable-entry-experiment.yml"
   pull_request:
     paths:
       - "src/native/alloc/windows_stable_entry_*"
+      - "src/native/alloc/windows_permanent_gateway_*"
       - "tests/native/alloc/windows_stable_entry_*"
+      - "tests/native/alloc/windows_permanent_gateway_*"
       - "tests/native/alloc/stable_entry/**"
       - ".github/workflows/windows-stable-entry-experiment.yml"
   workflow_dispatch:
@@ -94,6 +98,9 @@ jobs:
       - name: Fail closed under ProcessDynamicCodePolicy
         shell: pwsh
         run: .\build\stable-entry\Release\windows_stable_entry_atomic_test.exe dynamic-code
+      - name: Run permanent gateway 1000-cycle admission/reuse stress
+        shell: pwsh
+        run: .\build\stable-entry\Release\windows_permanent_gateway_test.exe
       - name: Classify retired executable faults under concurrent reclaim stress
         shell: pwsh
         run: .\build\stable-entry\Release\windows_stable_entry_retired_fault_probe.exe
