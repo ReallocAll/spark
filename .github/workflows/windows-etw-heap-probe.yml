@@ -1,0 +1,128 @@
+name: Windows ETW Heap Feasibility
+
+on:
+  push:
+    branches:
+      - exp/windows-permanent-gateway
+    paths:
+      - 'tests/native/alloc/etw_heap_probe/**'
+      - '.github/workflows/windows-etw-heap-probe.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  wpr-heap-probe:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up MSVC environment
+        uses: TheMrMilchmann/setup-msvc-dev@v4
+        with:
+          arch: x64
+
+      - name: Configure ETW heap fixture
+        shell: pwsh
+        run: cmake -S tests/native/alloc/etw_heap_probe -B build/etw-heap-probe -A x64
+
+      - name: Build ETW heap fixture
+        shell: pwsh
+        run: cmake --build build/etw-heap-probe --config Release --parallel
+
+      - name: Record WPR Heap profile
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = (Resolve-Path '.\build\etw-heap-probe\Release\windows_etw_heap_fixture.exe').Path
+          $exeName = Split-Path -Leaf $exe
+          $traceStarted = $false
+          $heapConfigEnabled = $false
+
+          "wpr=$((Get-Command wpr.exe).Source)" | Tee-Object -FilePath etw-probe-env.log
+          "tracerpt=$((Get-Command tracerpt.exe).Source)" | Tee-Object -FilePath etw-probe-env.log -Append
+          & wpr.exe -status 2>&1 | Tee-Object -FilePath etw-probe-pre-status.log
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "No pre-existing WPR recording (status exit $LASTEXITCODE)."
+          }
+
+          try {
+            & wpr.exe -HeapTracingConfig $exeName enable 2>&1 | Tee-Object -FilePath etw-probe-config-enable.log
+            if ($LASTEXITCODE -ne 0) {
+              throw "wpr -HeapTracingConfig enable failed with exit $LASTEXITCODE"
+            }
+            $heapConfigEnabled = $true
+
+            & wpr.exe -start Heap -filemode 2>&1 | Tee-Object -FilePath etw-probe-start.log
+            if ($LASTEXITCODE -ne 0) {
+              throw "wpr -start Heap failed with exit $LASTEXITCODE"
+            }
+            $traceStarted = $true
+
+            & $exe 2>&1 | Tee-Object -FilePath etw-fixture.log
+            if ($LASTEXITCODE -ne 0) {
+              throw "ETW heap fixture failed with exit $LASTEXITCODE"
+            }
+
+            & wpr.exe -stop etw-heap.etl 2>&1 | Tee-Object -FilePath etw-probe-stop.log
+            if ($LASTEXITCODE -ne 0) {
+              throw "wpr -stop failed with exit $LASTEXITCODE"
+            }
+            $traceStarted = $false
+          }
+          finally {
+            if ($traceStarted) {
+              & wpr.exe -cancel 2>&1 | Tee-Object -FilePath etw-probe-cancel.log
+              $traceStarted = $false
+            }
+            if ($heapConfigEnabled) {
+              & wpr.exe -HeapTracingConfig $exeName disable 2>&1 | Tee-Object -FilePath etw-probe-config-disable.log
+              $heapConfigEnabled = $false
+            }
+          }
+
+          if (-not (Test-Path etw-heap.etl)) {
+            throw 'WPR reported success but etw-heap.etl was not created'
+          }
+          Get-Item etw-heap.etl | Format-List Name,Length,LastWriteTime | Tee-Object -FilePath etw-probe-etl-info.log
+
+      - name: Decode ETL for coverage evidence
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & tracerpt.exe etw-heap.etl -of CSV -o etw-heap.csv -y 2>&1 | Tee-Object -FilePath etw-tracerpt-csv.log
+          if ($LASTEXITCODE -ne 0) {
+            throw "tracerpt CSV decode failed with exit $LASTEXITCODE"
+          }
+          & tracerpt.exe etw-heap.etl -of XML -o etw-heap.xml -y 2>&1 | Tee-Object -FilePath etw-tracerpt-xml.log
+          if ($LASTEXITCODE -ne 0) {
+            throw "tracerpt XML decode failed with exit $LASTEXITCODE"
+          }
+
+          $csvInfo = Get-Item etw-heap.csv
+          $xmlInfo = Get-Item etw-heap.xml
+          "csv_bytes=$($csvInfo.Length) xml_bytes=$($xmlInfo.Length)" | Tee-Object -FilePath etw-decode-summary.log
+
+          $patterns = @('HeapTraceProvider', 'HeapAlloc', 'HeapFree', 'HeapReAlloc', 'Heap')
+          foreach ($pattern in $patterns) {
+            $count = (Select-String -Path etw-heap.xml -SimpleMatch $pattern | Measure-Object).Count
+            "xml_pattern=$pattern matches=$count" | Tee-Object -FilePath etw-decode-summary.log -Append
+          }
+
+          Get-Content etw-heap.csv -TotalCount 8 | Tee-Object -FilePath etw-csv-head.log
+          Get-Content etw-fixture.log | Tee-Object -FilePath etw-fixture-evidence.log
+
+      - name: Upload ETW feasibility evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: windows-etw-heap-probe-${{ github.sha }}
+          path: |
+            etw-heap.etl
+            etw-heap.csv
+            etw-heap.xml
+            etw-*.log
+          if-no-files-found: warn
+          compression-level: 6
