@@ -9,6 +9,7 @@
 #include <cassert>
 #include <cstdint>
 #include <cstring>
+#include <iomanip>
 #include <iostream>
 #include <string>
 
@@ -38,8 +39,10 @@ public:
         page_ = static_cast<std::uint8_t *>(
             ::VirtualAlloc(nullptr, 64 * 1024, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE));
         assert(page_ != nullptr);
+        // Five complete bytes precede RET so funchook takes its normal bounded
+        // relocation path instead of the unusual <5-byte short-function fallback.
         constexpr std::array<std::uint8_t, 16> code{
-            0x8D, 0x41, 0x01, 0xC3, 0x90, 0x90, 0x90, 0x90,
+            0x8D, 0x41, 0x01, 0x66, 0x90, 0xC3, 0x90, 0x90,
             0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
         };
         std::memcpy(page_, code.data(), code.size());
@@ -62,10 +65,59 @@ private:
     std::uint8_t *page_ = nullptr;
 };
 
+void dumpMemory(const char *label, const void *address)
+{
+    MEMORY_BASIC_INFORMATION memory{};
+    const SIZE_T queried = ::VirtualQuery(address, &memory, sizeof(memory));
+    std::cerr << label << ": address=0x" << std::hex << reinterpret_cast<std::uintptr_t>(address) << std::dec
+              << " query=" << queried;
+    if (queried != 0) {
+        std::cerr << " base=0x" << std::hex << reinterpret_cast<std::uintptr_t>(memory.BaseAddress)
+                  << " allocbase=0x" << reinterpret_cast<std::uintptr_t>(memory.AllocationBase) << std::dec
+                  << " size=" << memory.RegionSize << " state=0x" << std::hex << memory.State
+                  << " protect=0x" << memory.Protect << " allocprotect=0x" << memory.AllocationProtect << std::dec;
+    }
+    std::cerr << " bytes=";
+    const auto *bytes = static_cast<const std::uint8_t *>(address);
+    for (std::size_t i = 0; i < 32; ++i) {
+        std::cerr << std::hex << std::setw(2) << std::setfill('0') << static_cast<unsigned>(bytes[i]);
+    }
+    std::cerr << std::dec << '\n';
+}
+
+void dumpMitigations()
+{
+    PROCESS_MITIGATION_CONTROL_FLOW_GUARD_POLICY cfg{};
+    const BOOL cfg_ok = ::GetProcessMitigationPolicy(::GetCurrentProcess(), ProcessControlFlowGuardPolicy, &cfg,
+                                                     static_cast<SIZE_T>(sizeof(cfg)));
+    std::cerr << "mitigation: cfg_query=" << (cfg_ok != FALSE) << " cfg_enable=" << cfg.EnableControlFlowGuard
+              << " cfg_strict=" << cfg.StrictMode << " cfg_export_suppression=" << cfg.EnableExportSuppression << '\n';
+
+    PROCESS_MITIGATION_DYNAMIC_CODE_POLICY dynamic{};
+    const BOOL dynamic_ok = ::GetProcessMitigationPolicy(::GetCurrentProcess(), ProcessDynamicCodePolicy, &dynamic,
+                                                         static_cast<SIZE_T>(sizeof(dynamic)));
+    std::cerr << "mitigation: dynamic_query=" << (dynamic_ok != FALSE)
+              << " prohibit_dynamic=" << dynamic.ProhibitDynamicCode
+              << " allow_thread_optout=" << dynamic.AllowThreadOptOut << '\n';
+}
+
+int callTrampolineWithSeh(SyntheticFn function, int value, DWORD &exception_code) noexcept
+{
+    exception_code = ERROR_SUCCESS;
+    __try {
+        return function(value);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        exception_code = static_cast<DWORD>(::GetExceptionCode());
+        return -123456;
+    }
+}
+
 }  // namespace
 
 int main()
 {
+    dumpMitigations();
     SyntheticCode target;
     SyntheticFn function = target.function();
     assert(function(10) == 11);
@@ -82,8 +134,20 @@ int main()
     std::cerr << "lifecycle-probe: prepare-pass trampoline=0x" << std::hex
               << reinterpret_cast<std::uintptr_t>(hook.trampoline()) << " relay=0x"
               << reinterpret_cast<std::uintptr_t>(hook.relay()) << std::dec << '\n';
-    g_trampoline.store(hook.trampoline(), std::memory_order_release);
+    dumpMemory("trampoline", hook.trampoline());
+    dumpMemory("relay", hook.relay());
 
+    DWORD trampoline_exception = ERROR_SUCCESS;
+    std::cerr << "lifecycle-probe: direct-trampoline-enter\n";
+    const int direct_trampoline = callTrampolineWithSeh(reinterpret_cast<SyntheticFn>(hook.trampoline()), 11,
+                                                        trampoline_exception);
+    std::cerr << "lifecycle-probe: direct-trampoline-return result=" << direct_trampoline << " exception=0x" << std::hex
+              << trampoline_exception << std::dec << '\n';
+    if (trampoline_exception != ERROR_SUCCESS || direct_trampoline != 12) {
+        return 7;
+    }
+
+    g_trampoline.store(hook.trampoline(), std::memory_order_release);
     std::cerr << "lifecycle-probe: direct-hook-enter\n";
     const int direct_hook_result = lifecycleHook(12);
     std::cerr << "lifecycle-probe: direct-hook-return result=" << direct_hook_result
