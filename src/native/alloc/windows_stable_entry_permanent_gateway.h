@@ -62,7 +62,11 @@ public:
     // an address inside the unloadable Spark image after detach.
     [[nodiscard]] bool containsAddressInRange(std::uintptr_t begin, std::uintptr_t end) const noexcept;
 
-private:
+    // Experimental binding payload. These are non-owning addresses into the
+    // process-lifetime allocation and are exposed only so the standalone
+    // rediscovery probe can reconstruct a handle without introducing any
+    // Spark-owned object into permanent state. Tighten this surface before
+    // production integration; changing/destroying a handle never frees them.
     void *entry_ = nullptr;
     void *gateway_ = nullptr;
     void *state_ = nullptr;
