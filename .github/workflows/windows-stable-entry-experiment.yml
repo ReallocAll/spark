@@ -1,11 +1,19 @@
 name: Windows Stable Entry Experiment
 
 on:
+  push:
+    branches:
+      - "exp/windows-stable-entry-hooks"
+    paths:
+      - "src/native/alloc/windows_stable_entry_*"
+      - "tests/native/alloc/windows_stable_entry_*"
+      - "tests/native/alloc/stable_entry/**"
+      - ".github/workflows/windows-stable-entry-experiment.yml"
   pull_request:
     paths:
-      - "src/native/alloc/windows_stable_entry_experiment.*"
-      - "src/native/alloc/windows_stable_entry_resolver.cpp"
-      - "tests/native/alloc/windows_stable_entry_*_test.cpp"
+      - "src/native/alloc/windows_stable_entry_*"
+      - "tests/native/alloc/windows_stable_entry_*"
+      - "tests/native/alloc/stable_entry/**"
       - ".github/workflows/windows-stable-entry-experiment.yml"
   workflow_dispatch:
 
@@ -26,8 +34,17 @@ jobs:
           -o windows_stable_entry_experiment_test
       - name: Run fail-closed state-machine tests
         run: ./windows_stable_entry_experiment_test
+      - name: Compile atomic encoding tests
+        run: >-
+          c++ -std=c++20 -Wall -Wextra -Werror -pedantic
+          -Isrc
+          src/native/alloc/windows_stable_entry_atomic.cpp
+          tests/native/alloc/windows_stable_entry_atomic_encoding_test.cpp
+          -o windows_stable_entry_atomic_encoding_test
+      - name: Run atomic encoding tests
+        run: ./windows_stable_entry_atomic_encoding_test
 
-  native-windows-resolution:
+  native-windows-atomic:
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v7
@@ -35,16 +52,15 @@ jobs:
         uses: TheMrMilchmann/setup-msvc-dev@v4
         with:
           arch: x64
-      - name: Compile native allocator resolver probe
+      - name: Configure standalone atomic stable-entry experiment
         shell: pwsh
-        run: |
-          $clang = "C:\Program Files\LLVM\bin\clang-cl.exe"
-          & $clang /nologo /std:c++20 /EHsc /W4 /WX /I src `
-            src/native/alloc/windows_stable_entry_experiment.cpp `
-            src/native/alloc/windows_stable_entry_resolver.cpp `
-            tests/native/alloc/windows_stable_entry_resolver_test.cpp `
-            /Fe:windows_stable_entry_resolver_test.exe
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Resolve real allocator entries and mitigation policy
+        run: cmake -S tests/native/alloc/stable_entry -B build/stable-entry -A x64
+      - name: Build native atomic and resolver probes
         shell: pwsh
-        run: .\windows_stable_entry_resolver_test.exe
+        run: cmake --build build/stable-entry --config Release --parallel
+      - name: Report real allocator entry alignment
+        shell: pwsh
+        run: .\build\stable-entry\Release\windows_stable_entry_alignment_test.exe
+      - name: Run atomic patch, UCRT, and 1000-cycle lifecycle stress
+        shell: pwsh
+        run: .\build\stable-entry\Release\windows_stable_entry_atomic_test.exe
