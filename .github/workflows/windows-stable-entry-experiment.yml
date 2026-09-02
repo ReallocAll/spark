@@ -95,6 +95,9 @@ jobs:
       - name: Fail closed under ProcessDynamicCodePolicy
         shell: pwsh
         run: .\build\stable-entry\Release\windows_stable_entry_atomic_test.exe dynamic-code
+      - name: Run process-lifetime permanent gateway stress
+        shell: pwsh
+        run: .\build\stable-entry\Release\windows_stable_entry_permanent_gateway_test.exe
       - name: Classify reclaim lifetime faults across generations
         shell: pwsh
         run: .\build\stable-entry\Release\windows_stable_entry_reclaim_diagnostic_test.exe
