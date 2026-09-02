@@ -84,6 +84,19 @@ int main()
               << reinterpret_cast<std::uintptr_t>(hook.relay()) << std::dec << '\n';
     g_trampoline.store(hook.trampoline(), std::memory_order_release);
 
+    std::cerr << "lifecycle-probe: direct-hook-enter\n";
+    const int direct_hook_result = lifecycleHook(12);
+    std::cerr << "lifecycle-probe: direct-hook-return result=" << direct_hook_result
+              << " calls=" << g_calls.load(std::memory_order_relaxed) << '\n';
+    assert(direct_hook_result == 13);
+
+    std::cerr << "lifecycle-probe: direct-relay-enter\n";
+    auto *relay = reinterpret_cast<SyntheticFn>(hook.relay());
+    const int direct_relay_result = relay(14);
+    std::cerr << "lifecycle-probe: direct-relay-return result=" << direct_relay_result
+              << " calls=" << g_calls.load(std::memory_order_relaxed) << '\n';
+    assert(direct_relay_result == 15);
+
     std::cerr << "lifecycle-probe: install-enter\n";
     if (!hook.install(error)) {
         std::cerr << "lifecycle-probe: install-fail: " << error << '\n';
@@ -91,12 +104,12 @@ int main()
     }
     std::cerr << "lifecycle-probe: install-pass\n";
 
-    std::cerr << "lifecycle-probe: first-call-enter\n";
+    std::cerr << "lifecycle-probe: patched-entry-call-enter\n";
     const int hooked_result = function(20);
-    std::cerr << "lifecycle-probe: first-call-return result=" << hooked_result
+    std::cerr << "lifecycle-probe: patched-entry-call-return result=" << hooked_result
               << " calls=" << g_calls.load(std::memory_order_relaxed) << '\n';
     assert(hooked_result == 21);
-    assert(g_calls.load(std::memory_order_relaxed) == 1);
+    assert(g_calls.load(std::memory_order_relaxed) == 3);
 
     std::cerr << "lifecycle-probe: restore-enter\n";
     if (!hook.restore(error)) {
