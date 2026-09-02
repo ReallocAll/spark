@@ -9,6 +9,7 @@
 #include <cassert>
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
@@ -32,10 +33,38 @@ std::atomic<std::uint64_t> g_synthetic_hook_calls{0};
 std::atomic<std::uint64_t> g_synthetic_stale_calls{0};
 std::atomic<bool> g_hold_pre_guard{false};
 std::atomic<bool> g_pre_guard_entered{false};
+std::atomic<std::uint64_t> g_stress_cycle{0};
+std::atomic<unsigned> g_stress_phase{0};
 
 std::atomic<void *> g_malloc_trampoline{nullptr};
 std::atomic<std::uint64_t> g_malloc_active{0};
 std::atomic<std::uint64_t> g_malloc_hook_calls{0};
+
+LONG WINAPI stressUnhandledExceptionFilter(EXCEPTION_POINTERS *exception) noexcept
+{
+    const DWORD code = exception != nullptr && exception->ExceptionRecord != nullptr
+                           ? exception->ExceptionRecord->ExceptionCode
+                           : 0;
+    const void *address = exception != nullptr && exception->ExceptionRecord != nullptr
+                              ? exception->ExceptionRecord->ExceptionAddress
+                              : nullptr;
+    std::uintptr_t instruction = 0;
+#if defined(_M_X64)
+    if (exception != nullptr && exception->ContextRecord != nullptr) {
+        instruction = static_cast<std::uintptr_t>(exception->ContextRecord->Rip);
+    }
+#endif
+    std::fprintf(stderr,
+                 "stage=synthetic-stress exception code=0x%08lx address=%p rip=0x%llx cycle=%llu phase=%u active=%llu "
+                 "trampoline=%p\n",
+                 static_cast<unsigned long>(code), address, static_cast<unsigned long long>(instruction),
+                 static_cast<unsigned long long>(g_stress_cycle.load(std::memory_order_relaxed)),
+                 g_stress_phase.load(std::memory_order_relaxed),
+                 static_cast<unsigned long long>(g_synthetic_active.load(std::memory_order_relaxed)),
+                 g_synthetic_trampoline.load(std::memory_order_relaxed));
+    std::fflush(stderr);
+    return EXCEPTION_CONTINUE_SEARCH;
+}
 
 extern "C" __declspec(noinline) int __cdecl syntheticHook(int value) noexcept
 {
@@ -190,31 +219,39 @@ void runSyntheticCycle(ExecutableSyntheticFunction &target, std::size_t cycle)
     SyntheticFn function = target.function();
     AtomicEntryHook hook;
     std::string error;
+    g_stress_cycle.store(cycle, std::memory_order_release);
+    g_stress_phase.store(1, std::memory_order_release);  // prepare
     if (!hook.prepare(target.address(), reinterpret_cast<void *>(&syntheticHook), error)) {
         std::cerr << "prepare failed at cycle " << cycle << ": " << error << '\n';
         std::abort();
     }
     g_synthetic_trampoline.store(hook.trampoline(), std::memory_order_release);
+    g_stress_phase.store(2, std::memory_order_release);  // install transaction
     if (!hook.install(error)) {
         std::cerr << "install failed at cycle " << cycle << ": " << error << '\n';
         std::abort();
     }
+    g_stress_phase.store(3, std::memory_order_release);  // installed calls
     for (int i = 0; i < 32; ++i) {
         assert(function(i) == i + 1);
     }
+    g_stress_phase.store(4, std::memory_order_release);  // restore transaction
     if (!hook.restore(error)) {
         std::cerr << "restore failed at cycle " << cycle << ": " << error << '\n';
         std::abort();
     }
+    g_stress_phase.store(5, std::memory_order_release);  // post-restore quiescence
     if (!hook.proveQuiescence(g_synthetic_active, 5000, error)) {
         std::cerr << "quiescence failed at cycle " << cycle << ": " << error << '\n';
         std::abort();
     }
+    g_stress_phase.store(6, std::memory_order_release);  // destroy
     if (!hook.destroy(error)) {
         std::cerr << "destroy failed at cycle " << cycle << ": " << error << '\n';
         std::abort();
     }
     g_synthetic_trampoline.store(nullptr, std::memory_order_release);
+    g_stress_phase.store(7, std::memory_order_release);  // restored baseline
     assert(function(9) == 10);
 }
 
@@ -238,17 +275,27 @@ void testSyntheticLifecycleStress()
     SyntheticFn function = target.function();
     assert(function(41) == 42);
 
+    LPTOP_LEVEL_EXCEPTION_FILTER previous_filter = ::SetUnhandledExceptionFilter(&stressUnhandledExceptionFilter);
     std::atomic<bool> stop{false};
     std::atomic<std::uint64_t> worker_calls{0};
     constexpr std::size_t kWorkers = 8;
     std::vector<std::thread> workers;
     workers.reserve(kWorkers);
     for (std::size_t worker = 0; worker < kWorkers; ++worker) {
-        workers.emplace_back([&] {
+        workers.emplace_back([&, worker] {
             int value = 1;
             while (!stop.load(std::memory_order_acquire)) {
                 const int result = function(value);
                 if (result != value + 1) {
+                    std::fprintf(stderr,
+                                 "stage=synthetic-stress mismatch worker=%llu cycle=%llu phase=%u value=%d result=%d "
+                                 "active=%llu trampoline=%p\n",
+                                 static_cast<unsigned long long>(worker),
+                                 static_cast<unsigned long long>(g_stress_cycle.load(std::memory_order_relaxed)),
+                                 g_stress_phase.load(std::memory_order_relaxed), value, result,
+                                 static_cast<unsigned long long>(g_synthetic_active.load(std::memory_order_relaxed)),
+                                 g_synthetic_trampoline.load(std::memory_order_relaxed));
+                    std::fflush(stderr);
                     std::abort();
                 }
                 value = (value + 1) & 0x7fff;
@@ -260,7 +307,7 @@ void testSyntheticLifecycleStress()
     constexpr std::size_t kCycles = 1000;
     for (std::size_t cycle = 0; cycle < kCycles; ++cycle) {
         runSyntheticCycle(target, cycle);
-        if ((cycle + 1) % 100 == 0) {
+        if ((cycle + 1) % 25 == 0) {
             std::cerr << "stage=synthetic-stress progress=" << (cycle + 1) << '/' << kCycles << '\n';
         }
     }
@@ -269,6 +316,7 @@ void testSyntheticLifecycleStress()
     for (auto &worker : workers) {
         worker.join();
     }
+    (void)::SetUnhandledExceptionFilter(previous_filter);
     assert(g_synthetic_hook_calls.load(std::memory_order_relaxed) != 0);
     assert(g_synthetic_stale_calls.load(std::memory_order_relaxed) == 0);
     assert(worker_calls.load(std::memory_order_relaxed) != 0);
