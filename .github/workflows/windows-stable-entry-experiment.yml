@@ -94,6 +94,9 @@ jobs:
       - name: Fail closed under ProcessDynamicCodePolicy
         shell: pwsh
         run: .\build\stable-entry\Release\windows_stable_entry_atomic_test.exe dynamic-code
+      - name: Classify retired executable faults under concurrent reclaim stress
+        shell: pwsh
+        run: .\build\stable-entry\Release\windows_stable_entry_retired_fault_probe.exe
       - name: Run concurrent 1000-cycle executable entry stress
         shell: pwsh
         run: .\build\stable-entry\Release\windows_stable_entry_atomic_test.exe synthetic-stress
