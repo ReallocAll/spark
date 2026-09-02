@@ -82,6 +82,18 @@ jobs:
       - name: Run single-thread executable entry lifecycle
         shell: pwsh
         run: .\build\stable-entry\Release\windows_stable_entry_atomic_test.exe synthetic-single
+      - name: Fail closed when original ownership changes before install
+        shell: pwsh
+        run: .\build\stable-entry\Release\windows_stable_entry_atomic_test.exe ownership-install
+      - name: Fail closed when third party replaces installed entry
+        shell: pwsh
+        run: .\build\stable-entry\Release\windows_stable_entry_atomic_test.exe ownership-restore
+      - name: Reject false quiescence in pre-guard corridor
+        shell: pwsh
+        run: .\build\stable-entry\Release\windows_stable_entry_atomic_test.exe pre-guard-rip
+      - name: Fail closed under ProcessDynamicCodePolicy
+        shell: pwsh
+        run: .\build\stable-entry\Release\windows_stable_entry_atomic_test.exe dynamic-code
       - name: Run concurrent 1000-cycle executable entry stress
         shell: pwsh
         run: .\build\stable-entry\Release\windows_stable_entry_atomic_test.exe synthetic-stress
