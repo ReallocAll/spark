@@ -4,6 +4,14 @@
 #error "windows_stable_entry_permanent_gateway_test.cpp is Windows-only"
 #endif
 
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+
 #include <array>
 #include <atomic>
 #include <cassert>
@@ -51,8 +59,6 @@ public:
             ::VirtualAlloc(nullptr, 64 * 1024, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE));
         assert(page_ != nullptr);
         assert((reinterpret_cast<std::uintptr_t>(page_) & 7U) == 0);
-        // lea eax,[rcx+1]; 2-byte nop; ret; padding. The bounded relocator
-        // therefore owns five bytes, inside the gateway's atomic eight-byte CAS.
         constexpr std::array<std::uint8_t, 16> code{
             0x8D, 0x41, 0x01, 0x66, 0x90, 0xC3, 0x90, 0x90,
             0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
@@ -66,8 +72,6 @@ public:
     ~ExecutableSyntheticFunction()
     {
         if (page_ != nullptr) {
-            // The test target itself is not process-lifetime production state;
-            // workers are joined before teardown.
             ::VirtualFree(page_, 0, MEM_RELEASE);
         }
     }
@@ -130,15 +134,11 @@ void proveDetachWaitsForAdmittedCallback(PermanentGateway &gateway, SyntheticFn 
         }
         std::this_thread::yield();
     }
-    // The admitted callback is still executing. Detach must not clear the
-    // handler or complete while its active token remains outstanding.
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
     if (detach_done.load(std::memory_order_acquire) || gateway.handler() == nullptr || gateway.activeCount() == 0) {
         fail("blocking-detach-returned-early", gateway, "handler lifetime escaped active-token drain");
     }
 
-    // New calls after closure must bypass the blocked handler and use the
-    // permanent original trampoline immediately.
     assert(function(20) == 21);
     assert(g_block_entered.load(std::memory_order_acquire) == 1);
 
@@ -248,8 +248,6 @@ int main()
         assert(gateway.drained());
         assert(gateway.handler() == nullptr);
 
-        // Simulate a freshly loaded Spark generation which has no C++ object
-        // from the previous generation: rediscover exclusively from entry bytes.
         PermanentGateway rediscovered;
         if (!PermanentGateway::installOrRediscover(target.address(), PermanentGatewayArity::UpToFourIntegerArgs,
                                                    rediscovered, error)) {
@@ -261,7 +259,6 @@ int main()
         }
         gateway = rediscovered;
 
-        // Closed mode must remain safe and semantically identical to original.
         for (int i = 0; i < 32; ++i) {
             assert(function(i) == i + 1);
         }
