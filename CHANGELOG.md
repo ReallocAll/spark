@@ -31,12 +31,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from Spark's live rolling statistics. Spark continues normally when PAPI is not
   installed or active.
 - Support Java-compatible Spark configuration environment variables.
+- Attribute execution samples to Endstone Python plugin source chains on CPython
+  3.11-3.14 using PEP 669 execution-state monitoring, with bounded callback state
+  and native-only fallback when a Python frame cannot be proven.
 
 ### Changed
 
-- **BREAKING**: Temporarily disable Windows native allocation profiling in v0.6;
-  `--alloc` now reports that safe allocator entry patching is unavailable. Linux
-  x86-64 allocation profiling remains supported.
+- Keep Windows x86-64 native allocation profiling available while moving its
+  import redirections to the process-lifetime `spark_allocation_shim.dll`.
+  Per-session callbacks are drained and cleared before plugin unload so any
+  surviving shim redirection remains a harmless allocator pass-through.
+- Reduce Linux PEP 669 callback overhead by caching the native thread identity once
+  per callback thread instead of issuing `gettid` for every monitored event.
 
 ### Fixed
 
@@ -63,6 +69,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Encode sampler tick-length thresholds in the upstream protocol's microsecond unit.
 - Match Java spark's tick-duration placeholder windows and percentile ranks, and
   avoid rebuilding unrelated rolling statistics for each placeholder value.
+- Preserve the real Linux allocation caller frame before hook/control frames are
+  removed so allocation samples do not shift attribution above the true caller.
 
 ## [0.5.3][0.5.3] - 2026-08-14
 
