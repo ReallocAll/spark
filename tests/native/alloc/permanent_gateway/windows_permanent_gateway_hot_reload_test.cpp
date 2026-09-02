@@ -241,8 +241,8 @@ int main()
         if (module_range.begin == 0 || module_range.end <= module_range.begin) {
             fail("handler DLL image range parse failed");
         }
-        auto configure = reinterpret_cast<ConfigureFn *>(::GetProcAddress(module, "configure_gateway_handler"));
-        auto handler = reinterpret_cast<HandlerFn *>(::GetProcAddress(module, "gateway_test_handler"));
+        auto configure = reinterpret_cast<ConfigureFn>(::GetProcAddress(module, "configure_gateway_handler"));
+        auto handler = reinterpret_cast<HandlerFn>(::GetProcAddress(module, "gateway_test_handler"));
         if (configure == nullptr || handler == nullptr) {
             fail("handler DLL exports missing");
         }
