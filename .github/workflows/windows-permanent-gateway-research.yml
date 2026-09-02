@@ -1,0 +1,49 @@
+name: Windows Permanent Gateway Research
+
+on:
+  push:
+    branches:
+      - "exp/windows-permanent-gateway"
+    paths:
+      - "src/native/alloc/windows_stable_entry_*"
+      - "tests/native/alloc/permanent_gateway/**"
+      - ".github/workflows/windows-permanent-gateway-research.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  p0-reclamation-diagnostic:
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        attempt: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up MSVC environment
+        uses: TheMrMilchmann/setup-msvc-dev@v4
+        with:
+          arch: x64
+      - name: Configure P0 diagnostic
+        shell: pwsh
+        run: cmake -S tests/native/alloc/permanent_gateway -B build/permanent-gateway -A x64
+      - name: Build P0 diagnostic
+        shell: pwsh
+        run: cmake --build build/permanent-gateway --config Release --parallel
+      - name: Reproduce and classify reclaim race
+        shell: pwsh
+        run: |
+          & .\build\permanent-gateway\Release\windows_stable_entry_p0_diagnostic.exe 2>&1 |
+            Tee-Object -FilePath "p0-attempt-${{ matrix.attempt }}.log"
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+      - name: Upload P0 diagnostic log
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: p0-reclamation-diagnostic-${{ matrix.attempt }}
+          path: p0-attempt-${{ matrix.attempt }}.log
+          if-no-files-found: error
