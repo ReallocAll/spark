@@ -24,17 +24,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Report samples discarded from the unfinished terminal tick separately from
   genuine incomplete-data drops for execution and allocation profiles.
 - Add native memory and per-interface packet-rate details to `health show`.
-- Include current Endstone game-rule values in exported Spark world metadata.
+- Export current Bedrock game-rule values with canonical names, runtime/API-first
+  defaults plus safe fallbacks, and locatorBar-to-playerWaypoints migration metadata.
 - Register Spark's native backend with bStats using service ID 33350.
 - Register an optional `spark` expansion with Endstone PlaceholderAPI, exposing
   Java spark-compatible TPS, tick-duration, and process/system CPU placeholders
   from Spark's live rolling statistics. Spark continues normally when PAPI is not
   installed or active.
 - Support Java-compatible Spark configuration environment variables.
+- Add cached BlockActor/tile-entity world statistics with availability semantics.
+- Export a reviewed safe subset of `server.properties`, with sensitive-name guards
+  and administrator opt-in for additional safe keys.
+- Preserve player initiator UUID metadata across profiler, health, activity, upload,
+  and recovery paths.
+- Export active Bedrock behavior-pack metadata without depending on internal
+  `ResourcePackStack` ABI details.
+- Add a one-hour native process-memory curve, including cgroup v2 and Windows Job
+  Object limits when available.
+- Add process-wide native allocation-rate metrics and 1m/5m/15m rolling rates on
+  Linux and Windows.
+- Attribute sampled Python plugin call chains on CPython 3.12+ using a bounded PEP
+  669 shadow stack while keeping sampling native; CPython 3.11 remains native-only.
 
 - Add Windows x64 native allocation profiling through a process-lifetime pinned
   shim and IAT redirection, with fail-closed callback draining and ownership-safe
   teardown before unloadable Spark plugin code is detached.
+
+### Changed
+
+- Reduce allocation-profiler hot-path contention with sharded lifecycle/statistics
+  state and bounded retries while preserving fail-closed drop reporting.
+- Cache the native Linux thread ID per PEP 669 callback thread instead of issuing a
+  `gettid` syscall for every Python execution event.
 
 ### Fixed
 
@@ -61,6 +82,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Encode sampler tick-length thresholds in the upstream protocol's microsecond unit.
 - Match Java spark's tick-duration placeholder windows and percentile ranks, and
   avoid rebuilding unrelated rolling statistics for each placeholder value.
+- Journal newly observed module definitions before recovered execution samples can
+  reference them, preserving crash replay across multi-session hard kills.
+- Prevent the spark viewer's process-memory denominator from decoding as zero while
+  keeping native RSS/committed-memory semantics strict.
+- Skip unsafe device-metadata ping polling for unauthenticated headless BDS clients.
+- Preserve a completed allocation profile until serialization finishes before
+  persistent allocation-rate counting resumes.
+- Canonicalize Python plugin identities and filter only Spark's observer bridge
+  frames without hiding unrelated user ctypes/libffi/native paths.
+- Preserve the real Linux allocation caller frame by correcting the cpptrace stack
+  skip count used by allocation hooks.
 
 ## [0.5.3][0.5.3] - 2026-08-14
 
