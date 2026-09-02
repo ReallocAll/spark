@@ -29,6 +29,7 @@ using spark::stable_entry_experiment::discoverPermanentGateway;
 using spark::stable_entry_experiment::installPermanentGateway;
 using spark::stable_entry_experiment::permanentGatewayActive;
 using spark::stable_entry_experiment::permanentGatewayAdmissionOpen;
+using spark::stable_entry_experiment::permanentGatewayGeneration;
 using spark::stable_entry_experiment::permanentGatewayHandler;
 
 namespace {
@@ -181,7 +182,16 @@ int main()
                 std::abort();
             }
         });
+        const std::uint64_t entry_deadline = ::GetTickCount64() + kTimeoutMs;
         while (entered() == 0 || permanentGatewayActive(gateway) == 0) {
+            if (::GetTickCount64() >= entry_deadline) {
+                std::cerr << "gateway-unload handler-entry timeout cycle=" << cycle
+                          << " gate=" << permanentGatewayAdmissionOpen(gateway)
+                          << " active=" << permanentGatewayActive(gateway)
+                          << " generation=" << permanentGatewayGeneration(gateway)
+                          << " handler=" << permanentGatewayHandler(gateway) << '\n';
+                std::abort();
+            }
             std::this_thread::yield();
         }
 

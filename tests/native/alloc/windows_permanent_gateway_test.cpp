@@ -122,6 +122,7 @@ void assertRediscovery(void *entry, void *expected_gateway, void *expected_state
 
 void proveHandlerReturnIsInsideDrain(SyntheticFn function)
 {
+    std::cerr << "stage=permanent-gateway-v2 return-drain-proof begin\n";
     std::string error;
     g_handler_entered.store(false, std::memory_order_release);
     g_hold_handler.store(true, std::memory_order_release);
@@ -131,7 +132,16 @@ void proveHandlerReturnIsInsideDrain(SyntheticFn function)
     }
 
     std::thread held([&] { assert(function(17) == 18); });
+    const std::uint64_t deadline = ::GetTickCount64() + kTimeoutMs;
     while (!g_handler_entered.load(std::memory_order_acquire)) {
+        if (::GetTickCount64() >= deadline) {
+            std::cerr << "permanent-gateway return-proof handler-entry timeout"
+                      << " gate=" << permanentGatewayAdmissionOpen(g_gateway)
+                      << " active=" << permanentGatewayActive(g_gateway)
+                      << " generation=" << permanentGatewayGeneration(g_gateway)
+                      << " handler=" << permanentGatewayHandler(g_gateway) << '\n';
+            std::abort();
+        }
         std::this_thread::yield();
     }
     assert(permanentGatewayActive(g_gateway) != 0);
@@ -155,6 +165,7 @@ void proveHandlerReturnIsInsideDrain(SyntheticFn function)
     detacher.join();
     assert(detach_finished.load(std::memory_order_acquire));
     assert(permanentGatewayHandler(g_gateway) == nullptr);
+    std::cerr << "stage=permanent-gateway-v2 return-drain-proof pass\n";
 }
 
 }  // namespace
@@ -193,6 +204,7 @@ int main()
 
     proveHandlerReturnIsInsideDrain(function);
 
+    std::cerr << "stage=permanent-gateway-v2 five-arg-abi begin\n";
     // ABI probe for the only stack-argument shape in the current 19-target set.
     // mov rax, rcx; add rax,rdx; add rax,r8; add rax,r9; add rax,[rsp+40]; ret
     ExecutableFunction five_arg_target({
@@ -226,7 +238,9 @@ int main()
         return 5;
     }
     assert(five(10, 20, 30, 40, 50) == 150);
+    std::cerr << "stage=permanent-gateway-v2 five-arg-abi pass\n";
 
+    std::cerr << "stage=permanent-gateway-v2 lifecycle-stress begin cycles=" << kCycles << '\n';
     std::atomic<bool> stop{false};
     std::vector<std::thread> workers;
     workers.reserve(kWorkers);

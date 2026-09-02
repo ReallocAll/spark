@@ -52,6 +52,7 @@ jobs:
 
   native-windows-atomic:
     runs-on: windows-2022
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
       - name: Set up MSVC environment
