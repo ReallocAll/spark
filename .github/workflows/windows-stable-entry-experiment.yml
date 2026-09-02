@@ -50,7 +50,7 @@ jobs:
       - name: Run atomic encoding tests
         run: ./windows_stable_entry_atomic_encoding_test
 
-  native-windows-atomic:
+  native-windows-core:
     runs-on: windows-2022
     timeout-minutes: 20
     steps:
@@ -59,10 +59,10 @@ jobs:
         uses: TheMrMilchmann/setup-msvc-dev@v4
         with:
           arch: x64
-      - name: Configure standalone atomic stable-entry experiment
+      - name: Configure standalone stable-entry experiment
         shell: pwsh
         run: cmake -S tests/native/alloc/stable_entry -B build/stable-entry -A x64
-      - name: Build native atomic and resolver probes
+      - name: Build native stable-entry probes
         shell: pwsh
         run: cmake --build build/stable-entry --config Release --parallel
       - name: Report real allocator entry alignment and hotpatch padding
@@ -107,12 +107,60 @@ jobs:
       - name: Prove permanent gateway safe after third-party entry ownership loss
         shell: pwsh
         run: .\build\stable-entry\Release\windows_permanent_gateway_third_party_test.exe
+
+  permanent-gateway-synthetic:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up MSVC environment
+        uses: TheMrMilchmann/setup-msvc-dev@v4
+        with:
+          arch: x64
+      - name: Configure standalone permanent-gateway experiment
+        shell: pwsh
+        run: cmake -S tests/native/alloc/stable_entry -B build/stable-entry -A x64
+      - name: Build permanent-gateway probes
+        shell: pwsh
+        run: cmake --build build/stable-entry --config Release --parallel
       - name: Run permanent gateway 1000-cycle admission/reuse stress
         shell: pwsh
         run: .\build\stable-entry\Release\windows_permanent_gateway_test.exe
+
+  permanent-gateway-dll-unload:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up MSVC environment
+        uses: TheMrMilchmann/setup-msvc-dev@v4
+        with:
+          arch: x64
+      - name: Configure standalone permanent-gateway experiment
+        shell: pwsh
+        run: cmake -S tests/native/alloc/stable_entry -B build/stable-entry -A x64
+      - name: Build permanent-gateway DLL unload stress
+        shell: pwsh
+        run: cmake --build build/stable-entry --config Release --parallel
       - name: Run true DLL unload/reload permanent gateway stress
         shell: pwsh
         run: .\build\stable-entry\Release\windows_permanent_gateway_unload_test.exe
+
+  legacy-reclaim-evidence:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up MSVC environment
+        uses: TheMrMilchmann/setup-msvc-dev@v4
+        with:
+          arch: x64
+      - name: Configure standalone stable-entry reclaim experiment
+        shell: pwsh
+        run: cmake -S tests/native/alloc/stable_entry -B build/stable-entry -A x64
+      - name: Build stable-entry reclaim probes
+        shell: pwsh
+        run: cmake --build build/stable-entry --config Release --parallel
       - name: Classify retired executable faults under concurrent reclaim stress
         shell: pwsh
         run: .\build\stable-entry\Release\windows_stable_entry_retired_fault_probe.exe
