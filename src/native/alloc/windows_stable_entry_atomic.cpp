@@ -321,6 +321,34 @@ bool AtomicEntryHook::prepareRelocation(std::string &error)
         error = failure_.data();
         return false;
     }
+
+    // Upstream funchook makes prepared trampoline pages executable only from
+    // funchook_install(). Stable Entry must never call that installer because it
+    // publishes the target JMP with a normal memcpy. Convert just the prepared
+    // trampoline allocation to RX here, before the pointer is published, while
+    // Spark still owns the executable transaction and lifecycle boundary.
+    MEMORY_BASIC_INFORMATION trampoline_memory{};
+    if (::VirtualQuery(callable, &trampoline_memory, sizeof(trampoline_memory)) == 0 ||
+        trampoline_memory.BaseAddress == nullptr || trampoline_memory.RegionSize == 0 ||
+        trampoline_memory.State != MEM_COMMIT) {
+        const DWORD failure = ::GetLastError();
+        (void)funchook_destroy(relocator);
+        return markFailure("VirtualQuery prepared stable-entry trampoline failed", failure, error);
+    }
+    DWORD old_protection = 0;
+    if (::VirtualProtect(trampoline_memory.BaseAddress, trampoline_memory.RegionSize, PAGE_EXECUTE_READ,
+                         &old_protection) == FALSE) {
+        const DWORD failure = ::GetLastError();
+        (void)funchook_destroy(relocator);
+        return markFailure("VirtualProtect prepared stable-entry trampoline executable failed", failure, error);
+    }
+    if (::FlushInstructionCache(::GetCurrentProcess(), trampoline_memory.BaseAddress, trampoline_memory.RegionSize) ==
+        FALSE) {
+        const DWORD failure = ::GetLastError();
+        (void)funchook_destroy(relocator);
+        return markFailure("FlushInstructionCache prepared stable-entry trampoline failed", failure, error);
+    }
+
     relocator_ = relocator;
     trampoline_ = callable;
     return true;
