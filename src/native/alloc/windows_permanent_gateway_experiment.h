@@ -40,6 +40,16 @@ public:
     static bool installOrRediscover(void *entry, std::uint32_t stack_argument_count, PermanentGateway &gateway,
                                     bool &created, std::string &error);
 
+    // Internal POD-view adoption used only after all rediscovery validation has
+    // succeeded. It owns nothing: process-lifetime island/state remain resident.
+    void adoptValidatedView(void *entry, void *island, void *state, std::size_t code_size) noexcept
+    {
+        entry_ = entry;
+        island_ = island;
+        state_ = state;
+        code_size_ = code_size;
+    }
+
     // handler must point into the currently loaded Spark/handler image. The
     // owner cookie is generation-local and is cleared only after close+drain.
     bool attach(void *handler, std::uint64_t owner_cookie, std::string &error) noexcept;
