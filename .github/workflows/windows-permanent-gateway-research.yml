@@ -15,7 +15,11 @@ permissions:
   contents: read
 
 jobs:
+  # P0 is now evidence collection, not a promotion gate. It intentionally races
+  # the already-rejected reclaimable publisher and may terminate with AV. Keep it
+  # available for manual reproduction without burning four runners on every P1 push.
   p0-entry-transition-context:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: windows-2022
     strategy:
       fail-fast: false
@@ -47,4 +51,64 @@ jobs:
         with:
           name: p0-entry-context-${{ matrix.attempt }}
           path: p0-context-${{ matrix.attempt }}.log
+          if-no-files-found: error
+
+  p1-initial-publication:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up MSVC environment
+        uses: TheMrMilchmann/setup-msvc-dev@v4
+        with:
+          arch: x64
+      - name: Configure permanent-gateway research
+        shell: pwsh
+        run: cmake -S tests/native/alloc/permanent_gateway -B build/permanent-gateway -A x64
+      - name: Build guarded publisher and lifecycle tests
+        shell: pwsh
+        run: cmake --build build/permanent-gateway --config Release --parallel
+      - name: Run 1000-cycle live initial publication stress
+        shell: pwsh
+        run: |
+          & .\build\permanent-gateway\Release\windows_permanent_gateway_initial_publish_stress.exe 2>&1 |
+            Tee-Object -FilePath permanent-gateway-initial-publish.log
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+      - name: Upload initial publication log
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: permanent-gateway-initial-publication
+          path: permanent-gateway-initial-publish.log
+          if-no-files-found: error
+
+  p1-true-hot-reload:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up MSVC environment
+        uses: TheMrMilchmann/setup-msvc-dev@v4
+        with:
+          arch: x64
+      - name: Configure permanent-gateway research
+        shell: pwsh
+        run: cmake -S tests/native/alloc/permanent_gateway -B build/permanent-gateway -A x64
+      - name: Build gateway and unloadable handler DLL
+        shell: pwsh
+        run: cmake --build build/permanent-gateway --config Release --parallel
+      - name: Run 1000-cycle LoadLibrary FreeLibrary handler stress
+        shell: pwsh
+        run: |
+          & .\build\permanent-gateway\Release\windows_permanent_gateway_hot_reload_test.exe 2>&1 |
+            Tee-Object -FilePath permanent-gateway-hot-reload.log
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+      - name: Upload hot reload log
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: permanent-gateway-hot-reload
+          path: permanent-gateway-hot-reload.log
           if-no-files-found: error
