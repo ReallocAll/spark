@@ -6,6 +6,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(ENDSTONE_SPARK_BUILD_SELFTEST "Build the offline sampler self-test tool" ON)
+option(ENDSTONE_SPARK_WINDOWS_SHIMLESS_GATEWAY
+       "Build the experimental Windows permanent-gateway allocation backend without spark_allocation_shim.dll" OFF)
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
@@ -26,10 +28,17 @@ include(FetchContent)
 # --- x86-64 instruction decoder ---
 # funchook 1.1.3 is not available from Conan Center. Fetch the same upstream
 # version used by Endstone. Its small distorm dependency provides the strict
-# instruction-boundary decoder used by both native symbol guessers.
+# instruction-boundary decoder used by both native symbol guessers. The
+# experimental shimless Windows backend also links a symbol-renamed static copy
+# solely as a bounded instruction relocator; Spark's public funchook-compatible
+# facade remains project-owned.
 if (WIN32 OR (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64"))
     set(FUNCHOOK_BUILD_SHARED OFF CACHE BOOL "" FORCE)
-    set(FUNCHOOK_BUILD_STATIC OFF CACHE BOOL "" FORCE)
+    if (WIN32 AND ENDSTONE_SPARK_WINDOWS_SHIMLESS_GATEWAY)
+        set(FUNCHOOK_BUILD_STATIC ON CACHE BOOL "" FORCE)
+    else ()
+        set(FUNCHOOK_BUILD_STATIC OFF CACHE BOOL "" FORCE)
+    endif ()
     set(FUNCHOOK_BUILD_TESTS OFF CACHE BOOL "" FORCE)
     set(FUNCHOOK_INSTALL OFF CACHE BOOL "" FORCE)
     set(FUNCHOOK_DISASM distorm CACHE STRING "" FORCE)
@@ -72,9 +81,9 @@ if (WIN32)
     add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
 endif ()
 
-# The Windows allocation profiler patches IAT slots to this process-lifetime
-# trampoline module instead of pointing them directly into the unloadable plugin.
-if (WIN32)
+# Pinned production baseline. The experimental shimless configuration omits this
+# target entirely so CI can prove the candidate artifact set has no sidecar.
+if (WIN32 AND NOT ENDSTONE_SPARK_WINDOWS_SHIMLESS_GATEWAY)
     add_library(spark_allocation_shim SHARED
             src/native/alloc/windows_allocation_shim.cpp)
     target_include_directories(spark_allocation_shim PRIVATE src)
@@ -114,10 +123,19 @@ if (WIN32)
             src/native/symbol/symbol_guess_windows_misc.cpp
             src/native/sampler/capture_windows.cpp
             src/native/alloc/allocation_sampler_windows.cpp
-            src/native/alloc/windows_iat_funchook_compat.cpp
-            src/native/alloc/windows_iat_hooks.cpp
-            src/native/alloc/windows_iat_hooks_windows.cpp
             src/native/alloc/windows_thread_suspension.cpp)
+    if (ENDSTONE_SPARK_WINDOWS_SHIMLESS_GATEWAY)
+        target_sources(spark_native PRIVATE
+                src/native/alloc/windows_allocation_gateway_funchook_compat.cpp
+                src/native/alloc/windows_stable_entry_atomic.cpp
+                src/native/alloc/windows_permanent_gateway_guarded_publish.cpp
+                src/native/alloc/windows_permanent_gateway_experiment.cpp)
+    else ()
+        target_sources(spark_native PRIVATE
+                src/native/alloc/windows_iat_funchook_compat.cpp
+                src/native/alloc/windows_iat_hooks.cpp
+                src/native/alloc/windows_iat_hooks_windows.cpp)
+    endif ()
 elseif (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
     target_sources(spark_native PRIVATE
             src/native/sampler/capture_linux.cpp
@@ -138,7 +156,29 @@ if (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Cl
 endif ()
 if (WIN32)
     target_include_directories(spark_native PRIVATE "${funchook_SOURCE_DIR}/distorm/include")
-    target_link_libraries(spark_native PUBLIC dbghelp psapi advapi32 distorm)
+    if (ENDSTONE_SPARK_WINDOWS_SHIMLESS_GATEWAY)
+        # Avoid colliding with the project-owned funchook compatibility facade.
+        # The renamed upstream symbols are used only by permanent-gateway
+        # preparation/relocation and are never reachable from process-lifetime
+        # gateway code after Spark unload.
+        set(SPARK_RELOCATOR_RENAMES
+                funchook_create=spark_relocator_funchook_create
+                funchook_prepare=spark_relocator_funchook_prepare
+                funchook_install=spark_relocator_funchook_install
+                funchook_uninstall=spark_relocator_funchook_uninstall
+                funchook_destroy=spark_relocator_funchook_destroy
+                funchook_error_message=spark_relocator_funchook_error_message)
+        target_compile_definitions(funchook-static PRIVATE ${SPARK_RELOCATOR_RENAMES})
+        set_source_files_properties(
+                src/native/alloc/windows_stable_entry_atomic.cpp
+                PROPERTIES COMPILE_DEFINITIONS "funchook_create=spark_relocator_funchook_create;funchook_prepare=spark_relocator_funchook_prepare;funchook_install=spark_relocator_funchook_install;funchook_uninstall=spark_relocator_funchook_uninstall;funchook_destroy=spark_relocator_funchook_destroy;funchook_error_message=spark_relocator_funchook_error_message")
+        set_source_files_properties(
+                src/native/alloc/windows_permanent_gateway_experiment.cpp
+                PROPERTIES COMPILE_DEFINITIONS "atomicCompareExchange8=atomicCompareExchange8Quiesced;funchook_create=spark_relocator_funchook_create;funchook_prepare=spark_relocator_funchook_prepare;funchook_install=spark_relocator_funchook_install;funchook_uninstall=spark_relocator_funchook_uninstall;funchook_destroy=spark_relocator_funchook_destroy;funchook_error_message=spark_relocator_funchook_error_message")
+        target_link_libraries(spark_native PUBLIC dbghelp psapi advapi32 distorm funchook-static)
+    else ()
+        target_link_libraries(spark_native PUBLIC dbghelp psapi advapi32 distorm)
+    endif ()
 elseif (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
     target_include_directories(spark_native PRIVATE "${funchook_SOURCE_DIR}/distorm/include")
     target_link_libraries(spark_native PUBLIC distorm ${CMAKE_DL_LIBS})
