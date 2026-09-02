@@ -229,7 +229,7 @@ int main()
 
     std::atomic<ULONG> process_status{ERROR_SUCCESS};
     std::thread consumer_thread([&] {
-        const TRACEHANDLE handle = consumer;
+        TRACEHANDLE handle = consumer;
         process_status.store(::ProcessTrace(&handle, 1, nullptr, nullptr), std::memory_order_release);
     });
 
