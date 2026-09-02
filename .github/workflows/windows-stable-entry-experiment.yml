@@ -58,9 +58,21 @@ jobs:
       - name: Build native atomic and resolver probes
         shell: pwsh
         run: cmake --build build/stable-entry --config Release --parallel
-      - name: Report real allocator entry alignment
+      - name: Report real allocator entry alignment and hotpatch padding
         shell: pwsh
         run: .\build\stable-entry\Release\windows_stable_entry_alignment_test.exe
+      - name: Prove prepare-only bounded relocation
+        shell: pwsh
+        run: .\build\stable-entry\Release\windows_stable_entry_relocation_probe.exe
+      - name: Dump relocation diagnostics
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path funchook-stable-entry.log) {
+            Get-Content funchook-stable-entry.log
+          } else {
+            Write-Host "no funchook relocation log produced"
+          }
       - name: Prove CMPXCHG16B data atomicity under contention
         shell: pwsh
         run: .\build\stable-entry\Release\windows_stable_entry_atomic_test.exe cmpxchg16
