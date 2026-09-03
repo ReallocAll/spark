@@ -105,14 +105,15 @@ public:
         if (api_.gil_ensure != nullptr && api_.gil_release != nullptr && api_.run_simple_string != nullptr &&
             (api_.is_initialized == nullptr || api_.is_initialized() != 0)) {
             const int gil_state = api_.gil_ensure();
-            static constexpr char kStopScript[] = "import sys\n"
-                                                  "_spark_m = sys.modules.get('_endstone_spark_monitor')\n"
-                                                  "if _spark_m is None:\n"
-                                                  "    raise RuntimeError('Spark PEP 669 monitor module disappeared before cleanup')\n"
-                                                  "_spark_m.stop()\n"
-                                                  "if _spark_m._tool_id is not None:\n"
-                                                  "    raise RuntimeError('Spark PEP 669 cleanup left its tool id active')\n"
-                                                  "sys.modules.pop('_endstone_spark_monitor', None)\n";
+            static constexpr char kStopScript[] =
+                "import sys\n"
+                "_spark_m = sys.modules.get('_endstone_spark_monitor')\n"
+                "if _spark_m is None:\n"
+                "    raise RuntimeError('Spark PEP 669 monitor module disappeared before cleanup')\n"
+                "_spark_m.stop()\n"
+                "if _spark_m._tool_id is not None:\n"
+                "    raise RuntimeError('Spark PEP 669 cleanup left its tool id active')\n"
+                "sys.modules.pop('_endstone_spark_monitor', None)\n";
             const int result = api_.run_simple_string(kStopScript, nullptr);
             api_.gil_release(gil_state);
             if (result != 0 || monitoring_active_.load(std::memory_order_acquire)) {
