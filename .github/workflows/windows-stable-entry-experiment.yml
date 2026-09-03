@@ -161,7 +161,9 @@ jobs:
       - name: Build stable-entry reclaim probes
         shell: pwsh
         run: cmake --build build/stable-entry --config Release --parallel
-      - name: Classify retired executable faults under concurrent reclaim stress
+      - name: Classify retired executable faults under concurrent reclaim stress (negative evidence)
+        id: legacy-retired-fault
+        continue-on-error: true
         shell: pwsh
         run: .\build\stable-entry\Release\windows_stable_entry_retired_fault_probe.exe
       - name: Run concurrent 1000-cycle executable entry stress (negative evidence)
@@ -173,12 +175,16 @@ jobs:
         if: always()
         shell: pwsh
         run: |
-          if ("${{ steps.legacy-reclaim-stress.outcome }}" -eq "failure") {
+          $retired = "${{ steps.legacy-retired-fault.outcome }}"
+          $stress = "${{ steps.legacy-reclaim-stress.outcome }}"
+          Write-Host "legacy retired-fault outcome=$retired"
+          Write-Host "legacy 1000-cycle stress outcome=$stress"
+          if ($retired -eq "failure" -or $stress -eq "failure") {
             Write-Host "legacy reclaim route reproduced the known executable-retirement fault; retained as negative evidence"
-          } elseif ("${{ steps.legacy-reclaim-stress.outcome }}" -eq "success") {
-            Write-Host "legacy reclaim stress did not reproduce the historical fault in this bounded run; route remains rejected by prior evidence"
+          } elseif ($retired -eq "success" -and $stress -eq "success") {
+            Write-Host "legacy reclaim probes did not reproduce the historical fault in this bounded run; route remains rejected by prior evidence"
           } else {
-            Write-Error "legacy reclaim stress did not produce a usable outcome: ${{ steps.legacy-reclaim-stress.outcome }}"
+            Write-Error "legacy reclaim probes did not produce usable outcomes"
           }
       - name: Run real UCRT malloc entry probe
         shell: pwsh
