@@ -81,8 +81,12 @@ constexpr ULONG kMaximumWalkSteps = 256;
     if (teb == nullptr) {
         return false;
     }
-    low = reinterpret_cast<std::uintptr_t>(teb->NtTib.StackLimit);
-    high = reinterpret_cast<std::uintptr_t>(teb->NtTib.StackBase);
+    // NT_TIB is the architectural prefix of TEB on Windows. Recent public SDK
+    // definitions intentionally hide the NtTib field on _TEB, so inspect the
+    // documented prefix layout rather than depending on that private member.
+    const auto *tib = reinterpret_cast<const NT_TIB *>(teb);
+    low = reinterpret_cast<std::uintptr_t>(tib->StackLimit);
+    high = reinterpret_cast<std::uintptr_t>(tib->StackBase);
     return low != 0 && high > low;
 }
 
