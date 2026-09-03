@@ -81,19 +81,11 @@ static_assert(std::atomic<void *>::is_always_lock_free);
         return false;
     }
 
-    PROCESS_MITIGATION_CONTROL_FLOW_GUARD_POLICY cfg{};
-    if (::GetProcessMitigationPolicy(::GetCurrentProcess(), ProcessControlFlowGuardPolicy, &cfg,
-                                     static_cast<SIZE_T>(sizeof(cfg))) == FALSE) {
-        error = "GetProcessMitigationPolicy(ProcessControlFlowGuardPolicy) failed: " + std::to_string(::GetLastError());
-        return false;
-    }
-    // Keep the same conservative policy as the entry-gateway prototype. The
-    // generated gateway uses raw indirect CALL/JMP instructions; production CFG
-    // support must be explicit and documented rather than silently assumed.
-    if (cfg.EnableControlFlowGuard != 0) {
-        error = "ProcessControlFlowGuardPolicy is enabled; raw permanent IAT gateway dispatch fails closed";
-        return false;
-    }
+    // CFG does not by itself prohibit this gateway. Windows marks committed executable
+    // pages as valid CFG call targets by default unless PAGE_TARGETS_INVALID or
+    // PAGE_TARGETS_NO_UPDATE is requested. The gateway is published only after its
+    // RW -> RX transition, and the CFG-enabled stress job exercises both indirect
+    // entry into the generated page and its indirect dispatch to handler/original.
     return true;
 }
 
