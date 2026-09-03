@@ -107,12 +107,21 @@ public:
             const int gil_state = api_.gil_ensure();
             static constexpr char kStopScript[] = "import sys\n"
                                                   "_spark_m = sys.modules.get('_endstone_spark_monitor')\n"
-                                                  "if _spark_m is not None:\n"
-                                                  "    _spark_m.stop()\n"
-                                                  "    sys.modules.pop('_endstone_spark_monitor', None)\n";
-            (void)api_.run_simple_string(kStopScript, nullptr);
-            code_id_helper_ = nullptr;
+                                                  "if _spark_m is None:\n"
+                                                  "    raise RuntimeError('Spark PEP 669 monitor module disappeared before cleanup')\n"
+                                                  "_spark_m.stop()\n"
+                                                  "if _spark_m._tool_id is not None:\n"
+                                                  "    raise RuntimeError('Spark PEP 669 cleanup left its tool id active')\n"
+                                                  "sys.modules.pop('_endstone_spark_monitor', None)\n";
+            const int result = api_.run_simple_string(kStopScript, nullptr);
             api_.gil_release(gil_state);
+            if (result != 0 || monitoring_active_.load(std::memory_order_acquire)) {
+                // Unloading Spark while sys.monitoring still owns ctypes callbacks
+                // into this image would leave callable stale code pointers. Match
+                // the profiler-backend unload contract and fail-stop instead.
+                std::abort();
+            }
+            code_id_helper_ = nullptr;
         }
         monitoring_active_.store(false, std::memory_order_release);
         if (active_backend_.load(std::memory_order_acquire) == this) {
@@ -489,6 +498,38 @@ def _bootstrap():
             _bootstrap_frame(native_id, frame)
 
 
+def _monitoring_events(monitoring):
+    events = monitoring.events
+    return (
+        events.PY_START,
+        events.PY_RESUME,
+        events.PY_THROW,
+        events.PY_RETURN,
+        events.PY_YIELD,
+        events.PY_UNWIND,
+    )
+
+
+def _cleanup_monitoring(monitoring, tool_id):
+    failures = []
+    try:
+        monitoring.set_events(tool_id, 0)
+    except BaseException as exc:
+        failures.append(exc)
+    for event in _monitoring_events(monitoring):
+        try:
+            monitoring.register_callback(tool_id, event, None)
+        except BaseException as exc:
+            failures.append(exc)
+    try:
+        monitoring.free_tool_id(tool_id)
+    except BaseException as exc:
+        failures.append(exc)
+    for exc in failures:
+        _FAILURE(str(exc).encode('utf-8', 'replace'))
+    return not failures
+
+
 def start():
     global _tool_id
     monitoring = getattr(sys, 'monitoring', None)
@@ -507,14 +548,14 @@ def start():
         _STATUS(-1, b'no free sys.monitoring tool id (tried 2, 3, 4)')
         return
 
-    callbacks = (
-        (monitoring.events.PY_START, _PY_START),
-        (monitoring.events.PY_RESUME, _PY_RESUME),
-        (monitoring.events.PY_THROW, _PY_THROW),
-        (monitoring.events.PY_RETURN, _PY_RETURN),
-        (monitoring.events.PY_YIELD, _PY_YIELD),
-        (monitoring.events.PY_UNWIND, _PY_UNWIND),
-    )
+    callbacks = tuple(zip(_monitoring_events(monitoring), (
+        _PY_START,
+        _PY_RESUME,
+        _PY_THROW,
+        _PY_RETURN,
+        _PY_YIELD,
+        _PY_UNWIND,
+    )))
     try:
         _SET_CODE_HELPER(_code_id)
         for event, callback in callbacks:
@@ -525,14 +566,11 @@ def start():
             mask |= event
         monitoring.set_events(_tool_id, mask)
     except BaseException as exc:
-        try:
-            monitoring.set_events(_tool_id, 0)
-        except BaseException:
-            pass
-        try:
-            monitoring.free_tool_id(_tool_id)
-        except BaseException:
-            pass
+        cleanup_ok = _cleanup_monitoring(monitoring, _tool_id)
+        if not cleanup_ok:
+            # A partially registered ctypes callback points into the unloadable
+            # Spark image. Continuing would make a later plugin unload unsafe.
+            os.abort()
         _tool_id = None
         _STATUS(-1, str(exc).encode('utf-8', 'replace'))
         return
@@ -544,21 +582,10 @@ def stop():
     if _tool_id is None:
         return
     monitoring = sys.monitoring
-    events = monitoring.events
-    try:
-        monitoring.set_events(_tool_id, 0)
-        for event in (
-            events.PY_START,
-            events.PY_RESUME,
-            events.PY_THROW,
-            events.PY_RETURN,
-            events.PY_YIELD,
-            events.PY_UNWIND,
-        ):
-            monitoring.register_callback(_tool_id, event, None)
-        monitoring.free_tool_id(_tool_id)
-    except BaseException as exc:
-        _FAILURE(str(exc).encode('utf-8', 'replace'))
+    if not _cleanup_monitoring(monitoring, _tool_id):
+        # Never return control to the unload path with a callable old-DLL thunk
+        # still owned by sys.monitoring.
+        os.abort()
     _tool_id = None
     _cache.clear()
     _module_files.clear()
