@@ -6,6 +6,11 @@ on:
       - "exp/windows-stable-entry-hooks"
     paths:
       - ".github/workflows/pr49-format-snapshot.yml"
+  pull_request:
+    branches:
+      - develop
+    paths:
+      - ".github/workflows/pr49-format-snapshot.yml"
 
 permissions:
   contents: read
