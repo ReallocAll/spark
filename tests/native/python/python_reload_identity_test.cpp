@@ -113,6 +113,24 @@ del _first_code, _second_code, _first, _second
 gc.collect()
 )PY";
 
+    static constexpr char kCaptureMonitoringTool[] = R"PY(
+import builtins
+import sys
+_m = sys.modules.get('_endstone_spark_monitor')
+assert _m is not None
+assert _m._tool_id is not None
+builtins._spark_previous_monitoring_tool_id = _m._tool_id
+)PY";
+
+    static constexpr char kVerifyMonitoringCleanup[] = R"PY(
+import builtins
+import sys
+_tool_id = builtins._spark_previous_monitoring_tool_id
+assert '_endstone_spark_monitor' not in sys.modules
+assert sys.monitoring.get_tool(_tool_id) is None
+del builtins._spark_previous_monitoring_tool_id
+)PY";
+
     ok &= expect(runtime.run(kScript) == 0, "reload identity Python workload failed");
     const PythonAttributionExport state = bridge.exportState();
     const auto reload_codes = static_cast<std::size_t>(std::ranges::count_if(
@@ -126,8 +144,11 @@ gc.collect()
     ok &= expect(after_unload.depth == 0, "plugin unload left stale frames on the current-thread shadow stack");
     ok &= expect(bridge.active(), "monitoring unexpectedly stopped during plugin unload");
 
+    ok &= expect(runtime.run(kCaptureMonitoringTool) == 0, "could not capture active monitoring tool id");
     bridge.stop();
     ok &= expect(!bridge.active(), "bridge remained active after stop");
+    ok &= expect(runtime.run(kVerifyMonitoringCleanup) == 0,
+                 "stop left the monitor module or sys.monitoring tool ownership behind");
     bridge.stop();
     ok &= expect(!bridge.active(), "repeated stop was not idempotent");
 
@@ -136,8 +157,11 @@ gc.collect()
     ok &= expect(bridge.active(), "bridge did not become active after restart");
     const PythonAttributionExport restarted = bridge.exportState();
     ok &= expect(restarted.diagnostics.monitoring_active, "restart diagnostics do not report active monitoring");
+    ok &= expect(runtime.run(kCaptureMonitoringTool) == 0, "could not capture restarted monitoring tool id");
     bridge.stop();
     ok &= expect(!bridge.active(), "bridge remained active after restarted session stop");
+    ok &= expect(runtime.run(kVerifyMonitoringCleanup) == 0,
+                 "restarted stop left the monitor module or sys.monitoring tool ownership behind");
 
     ok &= expect(runtime.finalize() == 0, "Py_FinalizeEx failed");
     return ok ? 0 : 1;
