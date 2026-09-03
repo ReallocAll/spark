@@ -41,6 +41,7 @@ using EnteredFn = int(__cdecl *)();
 constexpr std::size_t kWorkers = 4;
 constexpr std::size_t kUnloadCycles = 1000;
 constexpr std::uint64_t kTimeoutMs = 5000;
+constexpr int kHeldValue = 0x60000000;
 constexpr wchar_t kHandlerName[] = L"windows_iat_gateway_test_handler.dll";
 
 std::atomic<std::size_t> g_cycle{0};
@@ -194,8 +195,9 @@ int main()
 
         TargetFn handler = requiredExport<TargetFn>(module, "windowsGatewayTestHandler");
         SetHoldFn set_hold = requiredExport<SetHoldFn>(module, "windowsGatewayTestSetHold");
-        ResetEnteredFn reset_entered = requiredExport<ResetEnteredFn>(module, "windowsGatewayTestResetEntered");
-        EnteredFn entered = requiredExport<EnteredFn>(module, "windowsGatewayTestEntered");
+        ResetEnteredFn reset_special_entered =
+            requiredExport<ResetEnteredFn>(module, "windowsGatewayTestResetSpecialEntered");
+        EnteredFn special_entered = requiredExport<EnteredFn>(module, "windowsGatewayTestSpecialEntered");
 
         g_phase.store(2, std::memory_order_release);
         if (!bindPermanentIatGateway(gateway, reinterpret_cast<void *>(handler), kTimeoutMs, error)) {
@@ -208,16 +210,18 @@ int main()
             fail("bound-state-invariant");
         }
 
-        reset_entered();
+        // Worker calls can enter the same handler concurrently, so only the
+        // sentinel held call is allowed to satisfy the admission oracle.
+        reset_special_entered();
         set_hold(1);
         std::thread held_call([&] {
-            const int result = cached_gateway(17);
-            if (result != 1017) {
+            const int result = cached_gateway(kHeldValue);
+            if (result != kHeldValue + 1000) {
                 fail("held-handler-result");
             }
         });
         const std::uint64_t entry_deadline = ::GetTickCount64() + kTimeoutMs;
-        while (entered() == 0 || permanentIatGatewayActive(gateway) == 0) {
+        while (special_entered() == 0 || permanentIatGatewayActive(gateway) == 0) {
             if (::GetTickCount64() >= entry_deadline) {
                 fail("handler-entry-timeout");
             }
