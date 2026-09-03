@@ -139,8 +139,7 @@ int main()
         ErrorFn backend_error = requiredExport<ErrorFn>(plugin, "windowsPermanentIatBackendError");
         CallsFn calls = requiredExport<CallsFn>(plugin, "windowsPermanentIatBackendCalls");
         SetHoldFn set_hold = requiredExport<SetHoldFn>(plugin, "windowsPermanentIatBackendSetHold");
-        ResetEnteredFn reset_entered =
-            requiredExport<ResetEnteredFn>(plugin, "windowsPermanentIatBackendResetEntered");
+        ResetEnteredFn reset_entered = requiredExport<ResetEnteredFn>(plugin, "windowsPermanentIatBackendResetEntered");
         EnteredFn entered = requiredExport<EnteredFn>(plugin, "windowsPermanentIatBackendEntered");
 
         g_phase.store(2, std::memory_order_release);

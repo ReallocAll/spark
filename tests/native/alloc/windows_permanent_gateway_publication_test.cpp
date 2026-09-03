@@ -49,8 +49,9 @@ std::atomic<void *> g_gateway{nullptr};
 [[noreturn]] void failInvariant(const char *invariant, std::size_t round, const void *entry = nullptr,
                                 const void *gateway = nullptr)
 {
-    std::fprintf(stderr, "stage=permanent-gateway-publication invariant-failure invariant=%s round=%zu phase=%u "
-                         "entry=%p gateway=%p\n",
+    std::fprintf(stderr,
+                 "stage=permanent-gateway-publication invariant-failure invariant=%s round=%zu phase=%u "
+                 "entry=%p gateway=%p\n",
                  invariant, round, g_phase.load(std::memory_order_relaxed), entry, gateway);
     std::fflush(stderr);
     std::abort();
@@ -325,11 +326,10 @@ void runPublicationRound(std::size_t round)
         failInvariant("thread-churn-call-count", round, entry, handle.gateway);
     }
     if ((round + 1) % 8 == 0) {
-        std::fprintf(stderr,
-                     "stage=permanent-gateway-publication progress=%zu/%zu long_lived_calls=%llu churn_calls=%llu\n",
-                     round + 1, kPublicationRounds,
-                     static_cast<unsigned long long>(calls.load(std::memory_order_relaxed)),
-                     static_cast<unsigned long long>(churn_calls.load(std::memory_order_relaxed)));
+        std::fprintf(
+            stderr, "stage=permanent-gateway-publication progress=%zu/%zu long_lived_calls=%llu churn_calls=%llu\n",
+            round + 1, kPublicationRounds, static_cast<unsigned long long>(calls.load(std::memory_order_relaxed)),
+            static_cast<unsigned long long>(churn_calls.load(std::memory_order_relaxed)));
         std::fflush(stderr);
     }
 }

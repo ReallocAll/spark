@@ -28,9 +28,9 @@ using spark::permanent_iat_gateway_experiment::discoverPermanentIatGateway;
 using spark::permanent_iat_gateway_experiment::permanentIatGatewayActive;
 using spark::permanent_iat_gateway_experiment::permanentIatGatewayAdmissionOpen;
 using spark::permanent_iat_gateway_experiment::permanentIatGatewayGeneration;
+using spark::permanent_iat_gateway_experiment::PermanentIatGatewayHandle;
 using spark::permanent_iat_gateway_experiment::permanentIatGatewayHandler;
 using spark::permanent_iat_gateway_experiment::permanentIatGatewayOriginal;
-using spark::permanent_iat_gateway_experiment::PermanentIatGatewayHandle;
 
 namespace {
 
@@ -59,24 +59,21 @@ std::atomic<std::uintptr_t> g_slot{0};
     return a + 3 * b + 5 * c + 7 * d + 11 * e;
 }
 
-extern "C" __declspec(noinline) std::uint64_t __cdecl originalFive(std::uint64_t a, std::uint64_t b,
-                                                                    std::uint64_t c, std::uint64_t d,
-                                                                    std::uint64_t e) noexcept
+extern "C" __declspec(noinline) std::uint64_t __cdecl originalFive(std::uint64_t a, std::uint64_t b, std::uint64_t c,
+                                                                   std::uint64_t d, std::uint64_t e) noexcept
 {
     return baseValue(a, b, c, d, e);
 }
 
-extern "C" __declspec(noinline) std::uint64_t __cdecl handlerFive(std::uint64_t a, std::uint64_t b,
-                                                                   std::uint64_t c, std::uint64_t d,
-                                                                   std::uint64_t e) noexcept
+extern "C" __declspec(noinline) std::uint64_t __cdecl handlerFive(std::uint64_t a, std::uint64_t b, std::uint64_t c,
+                                                                  std::uint64_t d, std::uint64_t e) noexcept
 {
     g_handler_calls.fetch_add(1, std::memory_order_relaxed);
     return baseValue(a, b, c, d, e) + kHandlerBias;
 }
 
-extern "C" __declspec(noinline) std::uint64_t __cdecl foreignFive(std::uint64_t a, std::uint64_t b,
-                                                                   std::uint64_t c, std::uint64_t d,
-                                                                   std::uint64_t e) noexcept
+extern "C" __declspec(noinline) std::uint64_t __cdecl foreignFive(std::uint64_t a, std::uint64_t b, std::uint64_t c,
+                                                                  std::uint64_t d, std::uint64_t e) noexcept
 {
     return baseValue(a, b, c, d, e) + kForeignBias;
 }
@@ -93,12 +90,12 @@ extern "C" __declspec(noinline) std::uint64_t __cdecl foreignFive(std::uint64_t 
 
 [[noreturn]] void fail(const char *reason)
 {
-    std::fprintf(stderr,
-                 "stage=permanent-iat-gateway failure=%s round=%zu phase=%u slot=0x%llx gateway=%p handler_calls=%llu\n",
-                 reason, g_round.load(std::memory_order_relaxed), g_phase.load(std::memory_order_relaxed),
-                 static_cast<unsigned long long>(g_slot.load(std::memory_order_relaxed)),
-                 g_gateway.load(std::memory_order_relaxed),
-                 static_cast<unsigned long long>(g_handler_calls.load(std::memory_order_relaxed)));
+    std::fprintf(
+        stderr, "stage=permanent-iat-gateway failure=%s round=%zu phase=%u slot=0x%llx gateway=%p handler_calls=%llu\n",
+        reason, g_round.load(std::memory_order_relaxed), g_phase.load(std::memory_order_relaxed),
+        static_cast<unsigned long long>(g_slot.load(std::memory_order_relaxed)),
+        g_gateway.load(std::memory_order_relaxed),
+        static_cast<unsigned long long>(g_handler_calls.load(std::memory_order_relaxed)));
     std::fflush(stderr);
     std::abort();
 }
@@ -240,7 +237,8 @@ void runPublicationRound(std::size_t round)
         std::fflush(stderr);
         std::abort();
     }
-    if (discovered.gateway != handle.gateway || discovered.state != handle.state || discovered.original != handle.original) {
+    if (discovered.gateway != handle.gateway || discovered.state != handle.state ||
+        discovered.original != handle.original) {
         fail("discovered-handle-mismatch");
     }
 
@@ -398,9 +396,9 @@ void runReloadReuseStress()
 int main()
 {
     ::SetUnhandledExceptionFilter(&unhandledExceptionFilter);
-    std::fprintf(stderr,
-                 "stage=permanent-iat-gateway begin publication_rounds=%zu workers=%zu churners=%zu reload_cycles=%zu\n",
-                 kPublicationRounds, kWorkers, kChurners, kReloadCycles);
+    std::fprintf(
+        stderr, "stage=permanent-iat-gateway begin publication_rounds=%zu workers=%zu churners=%zu reload_cycles=%zu\n",
+        kPublicationRounds, kWorkers, kChurners, kReloadCycles);
     std::fflush(stderr);
 
     for (std::size_t round = 0; round < kPublicationRounds; ++round) {
@@ -409,7 +407,8 @@ int main()
     runReloadReuseStress();
 
     g_phase.store(8, std::memory_order_release);
-    std::fprintf(stderr, "stage=permanent-iat-gateway pass publication_rounds=%zu reload_cycles=%zu handler_calls=%llu\n",
+    std::fprintf(stderr,
+                 "stage=permanent-iat-gateway pass publication_rounds=%zu reload_cycles=%zu handler_calls=%llu\n",
                  kPublicationRounds, kReloadCycles,
                  static_cast<unsigned long long>(g_handler_calls.load(std::memory_order_relaxed)));
     std::fflush(stderr);

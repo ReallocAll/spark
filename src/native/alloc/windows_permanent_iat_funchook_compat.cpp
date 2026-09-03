@@ -355,7 +355,8 @@ extern "C" int funchook_uninstall(funchook_t *funchook, int flags)
     if (funchook->hooks != nullptr) {
         std::string detach_error;
         if (!funchook->hooks->uninstall(detach_error) && funchook->error.empty()) {
-            funchook->error = "Windows allocation IAT detach left safe permanent gateway entries active: " + detach_error;
+            funchook->error =
+                "Windows allocation IAT detach left safe permanent gateway entries active: " + detach_error;
         }
     }
     funchook->installed = false;

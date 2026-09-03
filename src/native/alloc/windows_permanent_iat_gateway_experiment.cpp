@@ -313,8 +313,7 @@ bool createPermanentIatGateway(void *original, std::uint32_t stack_argument_coun
         error = "VirtualAlloc permanent IAT gateway state failed: " + std::to_string(::GetLastError());
         return false;
     }
-    void *code_memory_raw =
-        ::VirtualAlloc(nullptr, kGatewayAllocationSize, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    void *code_memory_raw = ::VirtualAlloc(nullptr, kGatewayAllocationSize, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
     if (code_memory_raw == nullptr) {
         const DWORD failure = ::GetLastError();
         ::VirtualFree(state_memory_raw, 0, MEM_RELEASE);
@@ -388,8 +387,7 @@ bool discoverPermanentIatGateway(void *gateway, PermanentIatGatewayHandle &handl
     const auto gateway_value = reinterpret_cast<std::uintptr_t>(gateway);
     const auto code_region_end = reinterpret_cast<std::uintptr_t>(code_memory.BaseAddress) + code_memory.RegionSize;
     auto *code = static_cast<std::uint8_t *>(gateway);
-    if (gateway_value > code_region_end || code_region_end - gateway_value < 10 || code[0] != 0x49 ||
-        code[1] != 0xBB) {
+    if (gateway_value > code_region_end || code_region_end - gateway_value < 10 || code[0] != 0x49 || code[1] != 0xBB) {
         error = "permanent IAT gateway does not contain the expected state signature";
         return false;
     }

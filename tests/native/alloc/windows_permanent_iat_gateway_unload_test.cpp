@@ -28,8 +28,8 @@ using spark::permanent_iat_gateway_experiment::discoverPermanentIatGateway;
 using spark::permanent_iat_gateway_experiment::permanentIatGatewayActive;
 using spark::permanent_iat_gateway_experiment::permanentIatGatewayAdmissionOpen;
 using spark::permanent_iat_gateway_experiment::permanentIatGatewayGeneration;
-using spark::permanent_iat_gateway_experiment::permanentIatGatewayHandler;
 using spark::permanent_iat_gateway_experiment::PermanentIatGatewayHandle;
+using spark::permanent_iat_gateway_experiment::permanentIatGatewayHandler;
 
 namespace {
 
@@ -66,7 +66,8 @@ extern "C" __declspec(noinline) int __cdecl originalTarget(int value) noexcept
 
 [[noreturn]] void fail(const char *reason)
 {
-    std::fprintf(stderr, "stage=permanent-iat-gateway-dll-unload failure=%s cycle=%zu phase=%u slot=0x%llx gateway=%p\n",
+    std::fprintf(stderr,
+                 "stage=permanent-iat-gateway-dll-unload failure=%s cycle=%zu phase=%u slot=0x%llx gateway=%p\n",
                  reason, g_cycle.load(std::memory_order_relaxed), g_phase.load(std::memory_order_relaxed),
                  static_cast<unsigned long long>(g_slot.load(std::memory_order_relaxed)),
                  g_gateway.load(std::memory_order_relaxed));
@@ -292,8 +293,8 @@ int main()
                          cycle + 1, kUnloadCycles,
                          static_cast<unsigned long long>(worker_calls.load(std::memory_order_relaxed)),
                          static_cast<unsigned long long>(permanentIatGatewayGeneration(gateway)),
-                         static_cast<unsigned long long>(permanentIatGatewayActive(gateway)), gateway.permanent_rx_bytes,
-                         gateway.permanent_rw_bytes);
+                         static_cast<unsigned long long>(permanentIatGatewayActive(gateway)),
+                         gateway.permanent_rx_bytes, gateway.permanent_rw_bytes);
             std::fflush(stderr);
         }
     }

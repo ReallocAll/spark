@@ -23,8 +23,8 @@ using spark::permanent_iat_gateway_experiment::detachPermanentIatGateway;
 using spark::permanent_iat_gateway_experiment::permanentIatGatewayActive;
 using spark::permanent_iat_gateway_experiment::permanentIatGatewayAdmissionOpen;
 using spark::permanent_iat_gateway_experiment::permanentIatGatewayGeneration;
-using spark::permanent_iat_gateway_experiment::permanentIatGatewayHandler;
 using spark::permanent_iat_gateway_experiment::PermanentIatGatewayHandle;
+using spark::permanent_iat_gateway_experiment::permanentIatGatewayHandler;
 
 namespace {
 
@@ -40,16 +40,14 @@ constexpr std::uint64_t kBias = 0x100000000ULL;
     return a + 3 * b + 5 * c + 7 * d + 11 * e;
 }
 
-extern "C" __declspec(noinline) std::uint64_t __cdecl originalFive(std::uint64_t a, std::uint64_t b,
-                                                                    std::uint64_t c, std::uint64_t d,
-                                                                    std::uint64_t e) noexcept
+extern "C" __declspec(noinline) std::uint64_t __cdecl originalFive(std::uint64_t a, std::uint64_t b, std::uint64_t c,
+                                                                   std::uint64_t d, std::uint64_t e) noexcept
 {
     return baseValue(a, b, c, d, e);
 }
 
-extern "C" __declspec(noinline) std::uint64_t __cdecl handlerFive(std::uint64_t a, std::uint64_t b,
-                                                                   std::uint64_t c, std::uint64_t d,
-                                                                   std::uint64_t e) noexcept
+extern "C" __declspec(noinline) std::uint64_t __cdecl handlerFive(std::uint64_t a, std::uint64_t b, std::uint64_t c,
+                                                                  std::uint64_t d, std::uint64_t e) noexcept
 {
     return baseValue(a, b, c, d, e) + kBias;
 }
@@ -138,8 +136,8 @@ int main()
                          "active=%llu rx=%zu rw=%zu\n",
                          cycle + 1, kReloads, observed.gateway, observed.state,
                          static_cast<unsigned long long>(permanentIatGatewayGeneration(observed)),
-                         static_cast<unsigned long long>(permanentIatGatewayActive(observed)), observed.permanent_rx_bytes,
-                         observed.permanent_rw_bytes);
+                         static_cast<unsigned long long>(permanentIatGatewayActive(observed)),
+                         observed.permanent_rx_bytes, observed.permanent_rw_bytes);
             std::fflush(stderr);
         }
     }

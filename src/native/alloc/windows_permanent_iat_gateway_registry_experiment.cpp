@@ -117,13 +117,13 @@ static_assert(sizeof(RegistryRecord) < kRegistryBytes);
     }
 }
 
-[[nodiscard]] bool validatePublishedRecord(RegistryRecord *record, void *original,
-                                           std::uint32_t stack_argument_count, std::string &error)
+[[nodiscard]] bool validatePublishedRecord(RegistryRecord *record, void *original, std::uint32_t stack_argument_count,
+                                           std::string &error)
 {
     if (record->magic != kRegistryMagic || record->abi_version != kRegistryAbiVersion ||
         record->struct_size != sizeof(RegistryRecord) || record->process_id != ::GetCurrentProcessId() ||
-        record->original != original || record->stack_argument_count != stack_argument_count || record->gateway == nullptr ||
-        record->state == nullptr || record->fingerprint != registryFingerprint(*record)) {
+        record->original != original || record->stack_argument_count != stack_argument_count ||
+        record->gateway == nullptr || record->state == nullptr || record->fingerprint != registryFingerprint(*record)) {
         error = "permanent IAT gateway registry identity/fingerprint validation failed";
         return false;
     }
@@ -153,7 +153,8 @@ bool acquirePermanentIatGateway(void *original, std::uint32_t stack_argument_cou
     }
 
     const std::wstring name = registryName(original);
-    HANDLE mapping = ::CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0, kRegistryBytes, name.c_str());
+    HANDLE mapping =
+        ::CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0, kRegistryBytes, name.c_str());
     if (mapping == nullptr) {
         error = "CreateFileMappingW permanent IAT gateway registry failed: " + std::to_string(::GetLastError());
         return false;

@@ -22,8 +22,8 @@ struct PermanentIatGatewayHandle {
 // becomes reachable until the caller atomically publishes handle.gateway into
 // an IAT/function-pointer slot. Successful gateway/state allocations are never
 // reclaimed before process exit.
-bool createPermanentIatGateway(void *original, std::uint32_t stack_argument_count,
-                               PermanentIatGatewayHandle &handle, std::string &error);
+bool createPermanentIatGateway(void *original, std::uint32_t stack_argument_count, PermanentIatGatewayHandle &handle,
+                               std::string &error);
 
 // Reload path: recover and validate the process-lifetime state directly from a
 // gateway pointer already stored in an IAT slot. No Spark DLL global is needed.
