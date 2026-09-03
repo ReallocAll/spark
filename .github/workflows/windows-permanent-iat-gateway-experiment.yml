@@ -1,0 +1,41 @@
+name: Windows Permanent IAT Gateway Experiment
+
+on:
+  push:
+    branches:
+      - "exp/windows-stable-entry-hooks"
+    paths:
+      - "src/native/alloc/windows_permanent_iat_gateway_experiment.*"
+      - "tests/native/alloc/windows_permanent_iat_gateway_test.cpp"
+      - ".github/workflows/windows-permanent-iat-gateway-experiment.yml"
+  pull_request:
+    paths:
+      - "src/native/alloc/windows_permanent_iat_gateway_experiment.*"
+      - "tests/native/alloc/windows_permanent_iat_gateway_test.cpp"
+      - ".github/workflows/windows-permanent-iat-gateway-experiment.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  atomic-iat-publication:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up MSVC environment
+        uses: TheMrMilchmann/setup-msvc-dev@v4
+        with:
+          arch: x64
+      - name: Compile permanent IAT gateway experiment
+        shell: pwsh
+        run: >-
+          cl.exe /nologo /std:c++20 /EHsc /O2 /W4 /WX
+          /DWIN32_LEAN_AND_MEAN /DNOMINMAX /Isrc
+          src\native\alloc\windows_permanent_iat_gateway_experiment.cpp
+          tests\native\alloc\windows_permanent_iat_gateway_test.cpp
+          /Fe:windows_permanent_iat_gateway_test.exe
+      - name: Stress atomic IAT publication and process-lifetime gateway reuse
+        shell: pwsh
+        run: .\windows_permanent_iat_gateway_test.exe
