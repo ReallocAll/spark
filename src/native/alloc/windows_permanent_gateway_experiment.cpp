@@ -320,8 +320,7 @@ void populateHandle(GatewayState *state, MEMORY_BASIC_INFORMATION code_memory, M
         spark::SuspendedProcessThreads threads;
         std::string suspend_error;
         if (!threads.suspendStable(suspend_error)) {
-            error = "could not suspend a stable process thread set for permanent gateway publication: " +
-                    suspend_error;
+            error = "could not suspend a stable process thread set for permanent gateway publication: " + suspend_error;
             return false;
         }
 
