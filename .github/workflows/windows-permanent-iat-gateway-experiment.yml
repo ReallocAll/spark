@@ -44,15 +44,16 @@ jobs:
         uses: TheMrMilchmann/setup-msvc-dev@v4
         with:
           arch: x64
-      - name: Compile permanent IAT gateway experiment
+      - name: Compile permanent IAT gateway experiment with CFG
         shell: pwsh
         run: >-
-          cl.exe /nologo /std:c++20 /EHsc /O2 /W4 /WX
+          cl.exe /nologo /std:c++20 /EHsc /O2 /W4 /WX /guard:cf
           /DWIN32_LEAN_AND_MEAN /DNOMINMAX /Isrc
           src\native\alloc\windows_permanent_iat_gateway_experiment.cpp
           tests\native\alloc\windows_permanent_iat_gateway_test.cpp
           /Fe:windows_permanent_iat_gateway_test.exe
-      - name: Stress atomic IAT publication and process-lifetime gateway reuse
+          /link /guard:cf
+      - name: Stress atomic IAT publication and process-lifetime gateway reuse under CFG
         shell: pwsh
         run: .\windows_permanent_iat_gateway_test.exe
 
