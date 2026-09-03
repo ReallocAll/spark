@@ -178,6 +178,21 @@ int main()
             std::this_thread::yield();
         }
 
+        // Construct the uninstall thread while allocation handlers are still
+        // free-running. The host executable is itself part of the IAT scan, so
+        // constructing std::thread after hold=true could block in its allocator
+        // before the thread that performs detach even exists.
+        std::atomic<bool> begin_uninstall{false};
+        std::atomic<bool> uninstall_finished{false};
+        int uninstall_result = 0;
+        std::thread uninstaller([&] {
+            while (!begin_uninstall.load(std::memory_order_acquire)) {
+                std::this_thread::yield();
+            }
+            uninstall_result = uninstall();
+            uninstall_finished.store(true, std::memory_order_release);
+        });
+
         g_phase.store(3, std::memory_order_release);
         reset_entered();
         set_hold(1);
@@ -189,12 +204,7 @@ int main()
             std::this_thread::yield();
         }
 
-        std::atomic<bool> uninstall_finished{false};
-        int uninstall_result = 0;
-        std::thread uninstaller([&] {
-            uninstall_result = uninstall();
-            uninstall_finished.store(true, std::memory_order_release);
-        });
+        begin_uninstall.store(true, std::memory_order_release);
         ::Sleep(1);
         if (uninstall_finished.load(std::memory_order_acquire)) {
             fail("uninstall-finished-before-held-handler-return");
