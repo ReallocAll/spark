@@ -118,13 +118,13 @@ jobs:
       - name: Compile allocator client DLL
         shell: pwsh
         run: >-
-          cl.exe /nologo /std:c++20 /EHsc /O2 /W4 /WX /LD
+          cl.exe /nologo /std:c++20 /EHsc /O2 /W4 /WX /MD /LD
           tests\native\alloc\windows_permanent_iat_backend_client.cpp
           /Fe:windows_permanent_iat_backend_client.dll
       - name: Compile unloadable no-shim backend plugin DLL
         shell: pwsh
         run: >-
-          cl.exe /nologo /std:c++20 /EHsc /O2 /W4 /WX /LD
+          cl.exe /nologo /std:c++20 /EHsc /O2 /W4 /WX /MD /LD
           /DWIN32_LEAN_AND_MEAN /DNOMINMAX /Isrc
           src\native\alloc\windows_permanent_iat_gateway_experiment.cpp
           src\native\alloc\windows_permanent_iat_gateway_registry_experiment.cpp
@@ -137,7 +137,7 @@ jobs:
       - name: Compile backend hot-reload host
         shell: pwsh
         run: >-
-          cl.exe /nologo /std:c++20 /EHsc /O2 /W4 /WX
+          cl.exe /nologo /std:c++20 /EHsc /O2 /W4 /WX /MD
           /DWIN32_LEAN_AND_MEAN /DNOMINMAX
           tests\native\alloc\windows_permanent_iat_backend_reload_test.cpp
           /Fe:windows_permanent_iat_backend_reload_test.exe
