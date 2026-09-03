@@ -11,6 +11,7 @@ on:
       - "src/native/alloc/windows_iat_hooks.*"
       - "src/native/alloc/windows_iat_hooks_windows.cpp"
       - "tests/native/alloc/windows_permanent_iat_gateway_test.cpp"
+      - "tests/native/alloc/windows_permanent_iat_gateway_unwind_test.cpp"
       - "tests/native/alloc/windows_permanent_iat_gateway_registry_test.cpp"
       - "tests/native/alloc/windows_permanent_iat_gateway_unload_test.cpp"
       - "tests/native/alloc/windows_permanent_iat_backend_*.cpp"
@@ -24,6 +25,7 @@ on:
       - "src/native/alloc/windows_iat_hooks.*"
       - "src/native/alloc/windows_iat_hooks_windows.cpp"
       - "tests/native/alloc/windows_permanent_iat_gateway_test.cpp"
+      - "tests/native/alloc/windows_permanent_iat_gateway_unwind_test.cpp"
       - "tests/native/alloc/windows_permanent_iat_gateway_registry_test.cpp"
       - "tests/native/alloc/windows_permanent_iat_gateway_unload_test.cpp"
       - "tests/native/alloc/windows_permanent_iat_backend_*.cpp"
@@ -56,6 +58,28 @@ jobs:
       - name: Stress atomic IAT publication and process-lifetime gateway reuse under CFG
         shell: pwsh
         run: .\windows_permanent_iat_gateway_test.exe
+
+  stack-unwind-correctness:
+    runs-on: windows-2022
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up MSVC environment
+        uses: TheMrMilchmann/setup-msvc-dev@v4
+        with:
+          arch: x64
+      - name: Compile permanent IAT gateway unwind probe with CFG
+        shell: pwsh
+        run: >-
+          cl.exe /nologo /std:c++20 /EHsc /O2 /W4 /WX /guard:cf
+          /DWIN32_LEAN_AND_MEAN /DNOMINMAX /Isrc
+          src\native\alloc\windows_permanent_iat_gateway_experiment.cpp
+          tests\native\alloc\windows_permanent_iat_gateway_unwind_test.cpp
+          /Fe:windows_permanent_iat_gateway_unwind_test.exe
+          /link /guard:cf
+      - name: Require stack unwind through generated gateway
+        shell: pwsh
+        run: .\windows_permanent_iat_gateway_unwind_test.exe
 
   registry-reload-reuse:
     runs-on: windows-2022
