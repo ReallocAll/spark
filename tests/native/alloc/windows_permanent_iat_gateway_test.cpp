@@ -228,8 +228,8 @@ void runPublicationRound(std::size_t round)
     }
     g_gateway.store(handle.gateway, std::memory_order_release);
     requireGatewayMemoryPolicy(handle);
-    if (handle.original != reinterpret_cast<void *>(&originalFive) || handle.gateway == nullptr || handle.state == nullptr ||
-        handle.stack_argument_count != 1 || permanentIatGatewayAdmissionOpen(handle) ||
+    if (handle.original != reinterpret_cast<void *>(&originalFive) || handle.gateway == nullptr ||
+        handle.state == nullptr || handle.stack_argument_count != 1 || permanentIatGatewayAdmissionOpen(handle) ||
         permanentIatGatewayHandler(handle) != nullptr || permanentIatGatewayActive(handle) != 0) {
         fail("created-handle-invariant");
     }
@@ -282,8 +282,13 @@ void runPublicationRound(std::size_t round)
         std::fflush(stderr);
         std::abort();
     }
-    if (permanentIatGatewayAdmissionOpen(discovered) || permanentIatGatewayHandler(discovered) != nullptr ||
-        permanentIatGatewayActive(discovered) != 0) {
+    // active may pulse after detach observes zero: a caller can have read the
+    // old open gate before close and only increment active afterwards. The
+    // changed generation and closed gate force that delayed caller to rollback
+    // in permanent code before it can load/call handler. Unload safety therefore
+    // requires closed admission + cleared handler here, not permanently-zero
+    // active while arbitrary callers keep arriving.
+    if (permanentIatGatewayAdmissionOpen(discovered) || permanentIatGatewayHandler(discovered) != nullptr) {
         fail("detached-state-invariant");
     }
     for (std::size_t call = 0; call < 256; ++call) {
@@ -314,6 +319,10 @@ void runPublicationRound(std::size_t round)
     }
     for (std::thread &churner : churners) {
         churner.join();
+    }
+    if (permanentIatGatewayActive(discovered) != 0 || permanentIatGatewayHandler(discovered) != nullptr ||
+        permanentIatGatewayAdmissionOpen(discovered)) {
+        fail("post-caller-quiescence-invariant");
     }
 
     if ((round + 1) % 8 == 0) {
