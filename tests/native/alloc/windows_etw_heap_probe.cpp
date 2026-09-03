@@ -8,9 +8,11 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
+// clang-format off: Windows SDK tracing headers require windows.h first.
+#include <windows.h>
 #include <evntcons.h>
 #include <evntrace.h>
-#include <windows.h>
+// clang-format on
 
 #include <array>
 #include <atomic>
