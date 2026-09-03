@@ -17,6 +17,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <initializer_list>
 #include <limits>
 #include <new>
 #include <string>
@@ -25,9 +26,11 @@ namespace spark::permanent_iat_gateway_experiment {
 namespace {
 
 constexpr std::uint64_t kGatewayMagic = 0x3154414947504B53ULL;  // "SKPGIAT1" marker.
-constexpr std::uint32_t kGatewayAbiVersion = 1;
+constexpr std::uint32_t kGatewayAbiVersion = 2;
 constexpr std::size_t kGatewayCodeCapacity = 128;
+constexpr std::size_t kGatewayImageCapacity = 256;
 constexpr std::size_t kGatewayAllocationSize = 4096;
+constexpr std::size_t kGatewayUnwindInfoSize = 8;
 constexpr std::uint64_t kGateClosed = 0;
 constexpr std::uint64_t kGateOpen = 1;
 constexpr std::uint32_t kMaxStackArguments = 1;
@@ -45,6 +48,17 @@ struct GatewayState {
     std::uint64_t code_hash = 0;
     std::uint32_t code_size = 0;
     std::uint32_t stack_argument_count = 0;
+    std::uint32_t call_stub_offset = 0;
+    std::uint32_t unwind_info_offset = 0;
+    RUNTIME_FUNCTION runtime_function{};
+};
+
+struct GatewayImageLayout {
+    std::size_t code_size = 0;
+    std::size_t call_stub_offset = 0;
+    std::size_t unwind_info_offset = 0;
+    std::size_t image_size = 0;
+    RUNTIME_FUNCTION runtime_function{};
 };
 
 static_assert(offsetof(GatewayState, generation) == 16);
@@ -54,6 +68,11 @@ static_assert(offsetof(GatewayState, handler) == 40);
 static_assert(offsetof(GatewayState, original) == 48);
 static_assert(std::atomic<std::uint64_t>::is_always_lock_free);
 static_assert(std::atomic<void *>::is_always_lock_free);
+
+[[nodiscard]] constexpr std::size_t alignUp(std::size_t value, std::size_t alignment) noexcept
+{
+    return (value + alignment - 1) & ~(alignment - 1);
+}
 
 [[nodiscard]] std::uint64_t hashBytes(const void *data, std::size_t size) noexcept
 {
@@ -89,23 +108,23 @@ static_assert(std::atomic<void *>::is_always_lock_free);
     return true;
 }
 
-[[nodiscard]] bool emit(std::array<std::uint8_t, kGatewayCodeCapacity> &code, std::size_t &out,
+[[nodiscard]] bool emit(std::array<std::uint8_t, kGatewayImageCapacity> &image, std::size_t &out,
                         std::initializer_list<std::uint8_t> bytes, std::string &error)
 {
-    if (out + bytes.size() > code.size()) {
+    if (out + bytes.size() > kGatewayCodeCapacity) {
         error = "permanent IAT gateway machine-code buffer capacity exceeded";
         return false;
     }
     for (const std::uint8_t byte : bytes) {
-        code[out++] = byte;
+        image[out++] = byte;
     }
     return true;
 }
 
-[[nodiscard]] bool patchRel8(std::array<std::uint8_t, kGatewayCodeCapacity> &code, std::size_t branch_offset,
+[[nodiscard]] bool patchRel8(std::array<std::uint8_t, kGatewayImageCapacity> &image, std::size_t branch_offset,
                              std::size_t target, std::string &error)
 {
-    if (branch_offset + 2 > code.size() || target > code.size()) {
+    if (branch_offset + 2 > kGatewayCodeCapacity || target > kGatewayCodeCapacity) {
         error = "permanent IAT gateway branch patch is outside code buffer";
         return false;
     }
@@ -114,100 +133,152 @@ static_assert(std::atomic<void *>::is_always_lock_free);
         error = "permanent IAT gateway branch exceeds rel8 range";
         return false;
     }
-    code[branch_offset + 1] = static_cast<std::uint8_t>(static_cast<std::int8_t>(delta));
+    image[branch_offset + 1] = static_cast<std::uint8_t>(static_cast<std::int8_t>(delta));
     return true;
 }
 
-[[nodiscard]] bool buildGatewayCode(GatewayState *state, std::array<std::uint8_t, kGatewayCodeCapacity> &code,
-                                    std::size_t &code_size, std::string &error)
+[[nodiscard]] bool sameRuntimeFunction(const RUNTIME_FUNCTION &left, const RUNTIME_FUNCTION &right) noexcept
 {
-    code = {};
-    code_size = 0;
+    return left.BeginAddress == right.BeginAddress && left.EndAddress == right.EndAddress &&
+           left.UnwindData == right.UnwindData;
+}
+
+[[nodiscard]] bool buildGatewayImage(GatewayState *state, std::array<std::uint8_t, kGatewayImageCapacity> &image,
+                                     GatewayImageLayout &layout, std::string &error)
+{
+    image = {};
+    layout = {};
     if (state == nullptr || state->stack_argument_count > kMaxStackArguments) {
         error = "unsupported permanent IAT gateway stack-argument count";
         return false;
     }
 
-    // This is intentionally the same admission ABI as Permanent Gateway v2.
-    // Before publication the code is unreachable. Once an IAT slot points at
-    // it, no executable byte is modified again. The only publication operation
-    // required by the caller is an atomic pointer-slot exchange.
+    // The entry/admission block is a true leaf: it never changes RSP and reaches
+    // the original allocator via a tail jump. Only the dedicated call stub below
+    // owns a stack frame. Keeping these ranges separate lets the Windows x64
+    // unwinder treat entry/fallback as leaf code and apply one precise dynamic
+    // RUNTIME_FUNCTION to the call stub.
+    std::size_t code_size = 0;
     const std::uint64_t state_address = reinterpret_cast<std::uint64_t>(state);
-    if (!emit(code, code_size, {0x49, 0xBB}, error)) {  // mov r11,state
+    if (!emit(image, code_size, {0x49, 0xBB}, error)) {  // mov r11,state
         return false;
     }
-    if (code_size + sizeof(state_address) > code.size()) {
+    if (code_size + sizeof(state_address) > kGatewayCodeCapacity) {
         error = "permanent IAT gateway state immediate exceeds code buffer";
         return false;
     }
-    std::memcpy(code.data() + code_size, &state_address, sizeof(state_address));
+    std::memcpy(image.data() + code_size, &state_address, sizeof(state_address));
     code_size += sizeof(state_address);
 
-    if (!emit(code, code_size, {0x49, 0x83, 0x7B, 0x18, 0x00}, error)) {  // cmp [r11+gate],0
+    if (!emit(image, code_size, {0x49, 0x83, 0x7B, 0x18, 0x00}, error)) {  // cmp [r11+gate],0
         return false;
     }
     const std::size_t initial_fallback = code_size;
-    if (!emit(code, code_size, {0x74, 0x00}, error) ||                    // je fallback
-        !emit(code, code_size, {0x4D, 0x8B, 0x53, 0x10}, error) ||        // mov r10,[r11+generation]
-        !emit(code, code_size, {0xF0, 0x49, 0xFF, 0x43, 0x20}, error) ||  // lock inc [r11+active]
-        !emit(code, code_size, {0x49, 0x83, 0x7B, 0x18, 0x00}, error)) {  // cmp [r11+gate],0
+    if (!emit(image, code_size, {0x74, 0x00}, error) ||                    // je fallback
+        !emit(image, code_size, {0x4D, 0x8B, 0x53, 0x10}, error) ||        // mov r10,[r11+generation]
+        !emit(image, code_size, {0xF0, 0x49, 0xFF, 0x43, 0x20}, error) ||  // lock inc [r11+active]
+        !emit(image, code_size, {0x49, 0x83, 0x7B, 0x18, 0x00}, error)) {  // cmp [r11+gate],0
         return false;
     }
     const std::size_t closed_rollback = code_size;
-    if (!emit(code, code_size, {0x74, 0x00}, error) ||              // je rollback
-        !emit(code, code_size, {0x4D, 0x3B, 0x53, 0x10}, error)) {  // cmp r10,[r11+generation]
+    if (!emit(image, code_size, {0x74, 0x00}, error) ||              // je rollback
+        !emit(image, code_size, {0x4D, 0x3B, 0x53, 0x10}, error)) {  // cmp r10,[r11+generation]
         return false;
     }
     const std::size_t generation_rollback = code_size;
-    if (!emit(code, code_size, {0x75, 0x00}, error) ||              // jne rollback
-        !emit(code, code_size, {0x4D, 0x8B, 0x53, 0x28}, error) ||  // mov r10,[r11+handler]
-        !emit(code, code_size, {0x4D, 0x85, 0xD2}, error)) {        // test r10,r10
+    if (!emit(image, code_size, {0x75, 0x00}, error) ||              // jne rollback
+        !emit(image, code_size, {0x4D, 0x8B, 0x53, 0x28}, error) ||  // mov r10,[r11+handler]
+        !emit(image, code_size, {0x4D, 0x85, 0xD2}, error)) {        // test r10,r10
         return false;
     }
     const std::size_t null_rollback = code_size;
-    if (!emit(code, code_size, {0x74, 0x00}, error)) {  // je rollback
+    if (!emit(image, code_size, {0x74, 0x00}, error)) {  // je rollback
         return false;
     }
 
+    // Preserve the fifth Windows x64 argument before the call stub allocates its
+    // own 32-byte home area. RAX is volatile and does not carry an allocator input.
     if (state->stack_argument_count == 1 &&
-        !emit(code, code_size, {0x4C, 0x8B, 0x5C, 0x24, 0x28}, error)) {  // mov r11,[rsp+40]
+        !emit(image, code_size, {0x48, 0x8B, 0x44, 0x24, 0x28}, error)) {  // mov rax,[rsp+40]
         return false;
     }
-    if (!emit(code, code_size, {0x48, 0x83, 0xEC, 0x28}, error)) {  // sub rsp,40
-        return false;
-    }
-    if (state->stack_argument_count == 1 &&
-        !emit(code, code_size, {0x4C, 0x89, 0x5C, 0x24, 0x20}, error)) {  // mov [rsp+32],r11
-        return false;
-    }
-    if (!emit(code, code_size, {0x41, 0xFF, 0xD2}, error) ||        // call r10
-        !emit(code, code_size, {0x48, 0x83, 0xC4, 0x28}, error) ||  // add rsp,40
-        !emit(code, code_size, {0x49, 0xBB}, error)) {              // mov r11,state
-        return false;
-    }
-    if (code_size + sizeof(state_address) > code.size()) {
-        error = "permanent IAT gateway post-call state immediate exceeds code buffer";
-        return false;
-    }
-    std::memcpy(code.data() + code_size, &state_address, sizeof(state_address));
-    code_size += sizeof(state_address);
-    if (!emit(code, code_size, {0xF0, 0x49, 0xFF, 0x4B, 0x20}, error) ||  // lock dec [r11+active]
-        !emit(code, code_size, {0xC3}, error)) {                          // ret original caller
+    const std::size_t call_stub_jump = code_size;
+    if (!emit(image, code_size, {0xEB, 0x00}, error)) {  // jmp call_stub
         return false;
     }
 
     const std::size_t rollback = code_size;
-    if (!emit(code, code_size, {0xF0, 0x49, 0xFF, 0x4B, 0x20}, error)) {  // lock dec [r11+active]
+    if (!emit(image, code_size, {0xF0, 0x49, 0xFF, 0x4B, 0x20}, error)) {  // lock dec [r11+active]
         return false;
     }
     const std::size_t fallback = code_size;
-    if (!emit(code, code_size, {0x4D, 0x8B, 0x53, 0x30}, error) ||  // mov r10,[r11+original]
-        !emit(code, code_size, {0x41, 0xFF, 0xE2}, error)) {        // jmp r10
+    if (!emit(image, code_size, {0x4D, 0x8B, 0x53, 0x30}, error) ||  // mov r10,[r11+original]
+        !emit(image, code_size, {0x41, 0xFF, 0xE2}, error)) {        // jmp r10
         return false;
     }
 
-    return patchRel8(code, initial_fallback, fallback, error) && patchRel8(code, closed_rollback, rollback, error) &&
-           patchRel8(code, generation_rollback, rollback, error) && patchRel8(code, null_rollback, rollback, error);
+    // This is the only non-leaf range. Its four-byte stack-allocation prologue
+    // is described by the dynamic UNWIND_INFO emitted after the machine code.
+    const std::size_t call_stub = code_size;
+    if (!emit(image, code_size, {0x48, 0x83, 0xEC, 0x28}, error)) {  // sub rsp,40
+        return false;
+    }
+    if (state->stack_argument_count == 1 &&
+        !emit(image, code_size, {0x48, 0x89, 0x44, 0x24, 0x20}, error)) {  // mov [rsp+32],rax
+        return false;
+    }
+    if (!emit(image, code_size, {0x41, 0xFF, 0xD2}, error) ||  // call r10
+        !emit(image, code_size, {0x49, 0xBB}, error)) {        // mov r11,state
+        return false;
+    }
+    if (code_size + sizeof(state_address) > kGatewayCodeCapacity) {
+        error = "permanent IAT gateway post-call state immediate exceeds code buffer";
+        return false;
+    }
+    std::memcpy(image.data() + code_size, &state_address, sizeof(state_address));
+    code_size += sizeof(state_address);
+    if (!emit(image, code_size, {0xF0, 0x49, 0xFF, 0x4B, 0x20}, error) ||  // lock dec [r11+active]
+        !emit(image, code_size, {0x48, 0x83, 0xC4, 0x28}, error) ||        // add rsp,40
+        !emit(image, code_size, {0xC3}, error)) {                          // ret original caller
+        return false;
+    }
+
+    if (!patchRel8(image, initial_fallback, fallback, error) ||
+        !patchRel8(image, closed_rollback, rollback, error) ||
+        !patchRel8(image, generation_rollback, rollback, error) ||
+        !patchRel8(image, null_rollback, rollback, error) ||
+        !patchRel8(image, call_stub_jump, call_stub, error)) {
+        return false;
+    }
+
+    const std::size_t unwind_info = alignUp(code_size, 4);
+    if (unwind_info + kGatewayUnwindInfoSize > image.size()) {
+        error = "permanent IAT gateway unwind metadata exceeds image capacity";
+        return false;
+    }
+
+    // UNWIND_INFO version=1, flags=0, prologue=4, one unwind code,
+    // no frame register. UWOP_ALLOC_SMALL with OpInfo=4 represents 40 bytes:
+    // size = OpInfo * 8 + 8 = 40. The final two zero bytes keep the structure
+    // four-byte aligned as required by the x64 unwind format.
+    const std::array<std::uint8_t, kGatewayUnwindInfoSize> unwind_bytes{
+        0x01, 0x04, 0x01, 0x00, 0x04, 0x42, 0x00, 0x00};
+    std::memcpy(image.data() + unwind_info, unwind_bytes.data(), unwind_bytes.size());
+
+    if (call_stub > (std::numeric_limits<DWORD>::max)() || code_size > (std::numeric_limits<DWORD>::max)() ||
+        unwind_info > (std::numeric_limits<DWORD>::max)()) {
+        error = "permanent IAT gateway unwind RVA exceeds x64 runtime-function range";
+        return false;
+    }
+
+    layout.code_size = code_size;
+    layout.call_stub_offset = call_stub;
+    layout.unwind_info_offset = unwind_info;
+    layout.image_size = unwind_info + unwind_bytes.size();
+    layout.runtime_function.BeginAddress = static_cast<DWORD>(call_stub);
+    layout.runtime_function.EndAddress = static_cast<DWORD>(code_size);
+    layout.runtime_function.UnwindData = static_cast<DWORD>(unwind_info);
+    return true;
 }
 
 [[nodiscard]] bool isExecutableReadOnly(DWORD protection) noexcept
@@ -243,8 +314,30 @@ static_assert(std::atomic<void *>::is_always_lock_free);
     if (state == nullptr || state->magic != kGatewayMagic || state->abi_version != kGatewayAbiVersion ||
         state->struct_size != sizeof(GatewayState) || state->gateway != gateway || state->original == nullptr ||
         state->stack_argument_count > kMaxStackArguments || state->code_size == 0 ||
-        state->code_size > kGatewayCodeCapacity) {
+        state->code_size > kGatewayCodeCapacity || state->call_stub_offset >= state->code_size ||
+        state->unwind_info_offset < state->code_size ||
+        static_cast<std::size_t>(state->unwind_info_offset) + kGatewayUnwindInfoSize > kGatewayAllocationSize ||
+        state->runtime_function.BeginAddress != state->call_stub_offset ||
+        state->runtime_function.EndAddress != state->code_size ||
+        state->runtime_function.UnwindData != state->unwind_info_offset) {
         error = "permanent IAT gateway state identity/ABI validation failed";
+        return false;
+    }
+    return true;
+}
+
+[[nodiscard]] bool validateUnwindRegistration(GatewayState *state, std::string &error) noexcept
+{
+    if (state == nullptr || state->gateway == nullptr) {
+        error = "permanent IAT gateway unwind validation received null state";
+        return false;
+    }
+    const DWORD64 gateway_base = reinterpret_cast<DWORD64>(state->gateway);
+    const DWORD64 control_pc = gateway_base + state->call_stub_offset + 4;
+    DWORD64 image_base = 0;
+    PRUNTIME_FUNCTION found = ::RtlLookupFunctionEntry(control_pc, &image_base, nullptr);
+    if (found == nullptr || image_base != gateway_base || !sameRuntimeFunction(*found, state->runtime_function)) {
+        error = "permanent IAT gateway dynamic unwind table lookup failed";
         return false;
     }
     return true;
@@ -318,15 +411,18 @@ bool createPermanentIatGateway(void *original, std::uint32_t stack_argument_coun
     state->gateway = code_memory_raw;
     state->stack_argument_count = stack_argument_count;
 
-    std::array<std::uint8_t, kGatewayCodeCapacity> code{};
-    std::size_t code_size = 0;
-    if (!buildGatewayCode(state, code, code_size, error)) {
+    std::array<std::uint8_t, kGatewayImageCapacity> image{};
+    GatewayImageLayout layout;
+    if (!buildGatewayImage(state, image, layout, error)) {
         ::VirtualFree(code_memory_raw, 0, MEM_RELEASE);
         ::VirtualFree(state_memory_raw, 0, MEM_RELEASE);
         return false;
     }
-    state->code_size = static_cast<std::uint32_t>(code_size);
-    std::memcpy(code_memory_raw, code.data(), code_size);
+    state->code_size = static_cast<std::uint32_t>(layout.code_size);
+    state->call_stub_offset = static_cast<std::uint32_t>(layout.call_stub_offset);
+    state->unwind_info_offset = static_cast<std::uint32_t>(layout.unwind_info_offset);
+    state->runtime_function = layout.runtime_function;
+    std::memcpy(code_memory_raw, image.data(), layout.image_size);
 
     DWORD old_code_protection = 0;
     if (::VirtualProtect(code_memory_raw, kGatewayAllocationSize, PAGE_EXECUTE_READ, &old_code_protection) == FALSE) {
@@ -343,7 +439,7 @@ bool createPermanentIatGateway(void *original, std::uint32_t stack_argument_coun
         error = "FlushInstructionCache permanent IAT gateway failed: " + std::to_string(failure);
         return false;
     }
-    state->code_hash = hashBytes(code_memory_raw, code_size);
+    state->code_hash = hashBytes(code_memory_raw, layout.image_size);
 
     MEMORY_BASIC_INFORMATION code_memory{};
     MEMORY_BASIC_INFORMATION state_memory{};
@@ -355,9 +451,28 @@ bool createPermanentIatGateway(void *original, std::uint32_t stack_argument_coun
         return false;
     }
 
+    // The runtime-function entry and its UNWIND_INFO are process-lifetime just
+    // like the gateway code/state. No successful gateway calls
+    // RtlDeleteFunctionTable: doing so on plugin unload would recreate the same
+    // stale-executable/unwind-metadata hazard this architecture is designed to
+    // eliminate.
+    if (::RtlAddFunctionTable(&state->runtime_function, 1, reinterpret_cast<DWORD64>(code_memory_raw)) == FALSE) {
+        ::VirtualFree(code_memory_raw, 0, MEM_RELEASE);
+        ::VirtualFree(state_memory_raw, 0, MEM_RELEASE);
+        error = "RtlAddFunctionTable permanent IAT gateway failed";
+        return false;
+    }
+    if (!validateUnwindRegistration(state, error)) {
+        (void)::RtlDeleteFunctionTable(&state->runtime_function);
+        ::VirtualFree(code_memory_raw, 0, MEM_RELEASE);
+        ::VirtualFree(state_memory_raw, 0, MEM_RELEASE);
+        return false;
+    }
+
     // This is the lifetime boundary for successful construction. The caller may
     // publish gateway into arbitrary process IAT slots immediately after return,
-    // so successful code/state is process-lifetime and has no destroy API.
+    // so successful code/state/unwind metadata is process-lifetime and has no
+    // destroy API.
     populateHandle(state, code_memory, state_memory, handle);
     return true;
 }
@@ -396,14 +511,21 @@ bool discoverPermanentIatGateway(void *gateway, PermanentIatGatewayHandle &handl
         return false;
     }
 
-    std::array<std::uint8_t, kGatewayCodeCapacity> expected_code{};
-    std::size_t expected_size = 0;
-    if (!buildGatewayCode(state, expected_code, expected_size, error) || expected_size != state->code_size ||
-        std::memcmp(gateway, expected_code.data(), expected_size) != 0 ||
-        state->code_hash != hashBytes(gateway, expected_size)) {
+    std::array<std::uint8_t, kGatewayImageCapacity> expected_image{};
+    GatewayImageLayout expected_layout;
+    if (!buildGatewayImage(state, expected_image, expected_layout, error) ||
+        expected_layout.code_size != state->code_size ||
+        expected_layout.call_stub_offset != state->call_stub_offset ||
+        expected_layout.unwind_info_offset != state->unwind_info_offset ||
+        !sameRuntimeFunction(expected_layout.runtime_function, state->runtime_function) ||
+        std::memcmp(gateway, expected_image.data(), expected_layout.image_size) != 0 ||
+        state->code_hash != hashBytes(gateway, expected_layout.image_size)) {
         if (error.empty()) {
-            error = "permanent IAT gateway code signature/hash validation failed";
+            error = "permanent IAT gateway code/unwind signature validation failed";
         }
+        return false;
+    }
+    if (!validateUnwindRegistration(state, error)) {
         return false;
     }
 
