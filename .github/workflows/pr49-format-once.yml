@@ -1,0 +1,54 @@
+name: PR49 Format Once
+
+on:
+  push:
+    branches: [exp/windows-stable-entry-hooks]
+    paths:
+      - .github/workflows/pr49-format-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout experiment branch
+        uses: actions/checkout@v7
+        with:
+          ref: exp/windows-stable-entry-hooks
+          fetch-depth: 0
+
+      - name: Select clang-format 20
+        shell: pwsh
+        run: |
+          $llvmBin = "C:\Program Files\LLVM\bin"
+          $llvmBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          $version = & "$llvmBin\clang-format.exe" --version
+          $version
+          if (-not ($version | Select-String "version 20\.")) {
+            throw "clang-format 20 is required"
+          }
+
+      - name: Format tracked C++ sources
+        shell: pwsh
+        run: |
+          $files = git ls-files '*.cpp' '*.h'
+          foreach ($file in $files) {
+            & clang-format -i $file
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          git diff --check
+
+      - name: Commit formatting if needed
+        shell: pwsh
+        run: |
+          if (-not (git status --porcelain)) {
+            Write-Host "No formatting changes required."
+            exit 0
+          }
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- '*.cpp' '*.h'
+          git commit -m "style: apply clang-format to Windows gateway experiments"
+          git push origin HEAD:exp/windows-stable-entry-hooks
