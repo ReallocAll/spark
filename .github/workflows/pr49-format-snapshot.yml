@@ -1,0 +1,43 @@
+name: PR49 Format Snapshot
+
+on:
+  push:
+    branches:
+      - "exp/windows-stable-entry-hooks"
+    paths:
+      - ".github/workflows/pr49-format-snapshot.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  format-snapshot:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Clang 20
+        run: |
+          wget -qO /tmp/llvm.sh https://apt.llvm.org/llvm.sh
+          chmod +x /tmp/llvm.sh
+          sudo /tmp/llvm.sh 20
+          sudo apt-get install -y clang-format-20
+      - name: Format tracked C++ sources
+        run: |
+          git ls-files -z '*.cpp' '*.h' | xargs -0 clang-format-20 -i
+          git diff --name-only -- '*.cpp' '*.h' > formatted-files.txt
+          if [ ! -s formatted-files.txt ]; then
+            echo "No clang-format changes produced" >&2
+            exit 1
+          fi
+          tar -czf formatted-files.tar.gz -T formatted-files.txt
+          echo "Changed files:"
+          cat formatted-files.txt
+      - name: Upload formatted snapshot
+        uses: actions/upload-artifact@v6
+        with:
+          name: pr49-clang-format-20
+          path: |
+            formatted-files.txt
+            formatted-files.tar.gz
+          if-no-files-found: error
+          retention-days: 1
