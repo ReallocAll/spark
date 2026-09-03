@@ -20,9 +20,11 @@
 #include <limits>
 #include <new>
 #include <string>
+#include <vector>
 
 #include "native/alloc/windows_stable_entry_atomic.h"
 #include "native/alloc/windows_stable_entry_relocator.h"
+#include "native/alloc/windows_thread_suspension.h"
 
 namespace spark::stable_entry_experiment {
 namespace {
@@ -34,6 +36,7 @@ constexpr std::size_t kGatewayCodeCapacity = 128;
 constexpr std::uint64_t kGateClosed = 0;
 constexpr std::uint64_t kGateOpen = 1;
 constexpr std::uint32_t kMaxStackArguments = 1;
+constexpr std::uint64_t kPublicationQuiescenceTimeoutMs = 5000;
 
 struct GatewayState {
     std::uint64_t magic = kGatewayMagic;
@@ -298,6 +301,101 @@ void populateHandle(GatewayState *state, MEMORY_BASIC_INFORMATION code_memory, M
     handle.stack_argument_count = state->stack_argument_count;
 }
 
+[[nodiscard]] bool publishEntryAfterQuiescence(void *entry, const std::array<std::uint8_t, 16> &original,
+                                               const std::array<std::uint8_t, 16> &installed, bool &published,
+                                               std::string &error)
+{
+    published = false;
+    const auto entry_value = reinterpret_cast<std::uintptr_t>(entry);
+    std::vector<spark::WindowsCodeRange> protected_ranges;
+    protected_ranges.reserve(1);
+    protected_ranges.push_back({entry_value, entry_value + kAtomicEntryWidth8});
+    const std::uint64_t deadline = ::GetTickCount64() + kPublicationQuiescenceTimeoutMs;
+
+    while (true) {
+        // The suspension object reserves all bookkeeping storage before it
+        // suspends the first thread. From suspendStable() through resume(), this
+        // path performs no intentional user-heap allocation. That matters when
+        // the target entry is itself an allocator primitive.
+        spark::SuspendedProcessThreads threads;
+        std::string suspend_error;
+        if (!threads.suspendStable(suspend_error)) {
+            error = "could not suspend a stable process thread set for permanent gateway publication: " +
+                    suspend_error;
+            return false;
+        }
+
+        bool protected_rip = false;
+        std::uint32_t inspection_failure = 0;
+        std::uint32_t failed_thread = 0;
+        if (!threads.anyInstructionPointerInRanges(protected_ranges, protected_rip, inspection_failure,
+                                                   failed_thread)) {
+            std::string resume_error;
+            (void)threads.resume(resume_error);
+            error = "could not inspect suspended thread " + std::to_string(failed_thread) +
+                    " before permanent gateway publication (error=" + std::to_string(inspection_failure) + ")";
+            return false;
+        }
+
+        if (protected_rip) {
+            std::string resume_error;
+            (void)threads.resume(resume_error);
+            if (::GetTickCount64() >= deadline) {
+                error = "timed out waiting for allocator entry publication range to become quiescent";
+                return false;
+            }
+            (void)::SwitchToThread();
+            continue;
+        }
+
+        DWORD old_entry_protection = 0;
+        if (::VirtualProtect(entry, kAtomicEntryWidth8, PAGE_EXECUTE_READWRITE, &old_entry_protection) == FALSE) {
+            const DWORD failure = ::GetLastError();
+            std::string resume_error;
+            (void)threads.resume(resume_error);
+            error = "VirtualProtect permanent entry transaction failed: " + std::to_string(failure);
+            return false;
+        }
+
+        const AtomicCompareResult transaction = atomicCompareExchange8(entry, original, installed);
+        published = transaction.exchanged;
+
+        DWORD flush_failure = ERROR_SUCCESS;
+        if (published && ::FlushInstructionCache(::GetCurrentProcess(), entry, kAtomicEntryWidth8) == FALSE) {
+            flush_failure = ::GetLastError();
+        }
+        DWORD ignored_entry_protection = 0;
+        const BOOL protection_restored =
+            ::VirtualProtect(entry, kAtomicEntryWidth8, old_entry_protection, &ignored_entry_protection);
+        const DWORD restore_failure = protection_restored != FALSE ? ERROR_SUCCESS : ::GetLastError();
+
+        std::string resume_error;
+        (void)threads.resume(resume_error);
+
+        if (!published) {
+            if (restore_failure != ERROR_SUCCESS) {
+                error = "permanent gateway install lost original entry ownership and protection restoration failed: " +
+                        std::to_string(restore_failure);
+            }
+            else {
+                error = "permanent gateway install lost original entry ownership";
+            }
+            return false;
+        }
+
+        // The entry is now a process-lifetime publication boundary. A failure
+        // after the CAS cannot be repaired by restoring bytes or reclaiming the
+        // gateway, because another core may already have observed the new JMP.
+        if (flush_failure != ERROR_SUCCESS || restore_failure != ERROR_SUCCESS) {
+            error = "permanent gateway entry published but cache/protection restoration failed; resources pinned "
+                    "fail-closed (flush_error=" +
+                    std::to_string(flush_failure) + ", protection_error=" + std::to_string(restore_failure) + ")";
+            return false;
+        }
+        return true;
+    }
+}
+
 }  // namespace
 
 bool installPermanentGateway(void *entry, std::uint32_t stack_argument_count, PermanentGatewayHandle &handle,
@@ -406,32 +504,12 @@ bool installPermanentGateway(void *entry, std::uint32_t stack_argument_count, Pe
     std::memcpy(state->installed_bytes.data(), installed.data(), state->installed_bytes.size());
     state->installed_hash = hashBytesLocal(state->installed_bytes.data(), state->installed_bytes.size());
 
-    DWORD old_entry_protection = 0;
-    if (::VirtualProtect(entry, 8, PAGE_EXECUTE_READWRITE, &old_entry_protection) == FALSE) {
-        const DWORD failure = ::GetLastError();
-        ::VirtualFree(state_memory_raw, 0, MEM_RELEASE);
-        releaseBoundedRelocation(relocation);
-        error = "VirtualProtect permanent entry transaction failed: " + std::to_string(failure);
-        return false;
-    }
-
-    const AtomicCompareResult transaction = atomicCompareExchange8(entry, original, installed);
-    const BOOL flushed = transaction.exchanged ? ::FlushInstructionCache(::GetCurrentProcess(), entry, 8) : TRUE;
-    DWORD ignored_entry_protection = 0;
-    const BOOL protection_restored = ::VirtualProtect(entry, 8, old_entry_protection, &ignored_entry_protection);
-
-    if (!transaction.exchanged) {
-        ::VirtualFree(state_memory_raw, 0, MEM_RELEASE);
-        releaseBoundedRelocation(relocation);
-        error = "permanent gateway install lost original entry ownership";
-        return false;
-    }
-
-    // Publication is the lifetime boundary. Never reclaim the code/state after
-    // the entry CAS succeeds, even if a later diagnostic check fails.
-    if (flushed == FALSE || protection_restored == FALSE) {
-        error =
-            "permanent gateway entry published but cache/protection restoration failed; resources pinned fail-closed";
+    bool entry_published = false;
+    if (!publishEntryAfterQuiescence(entry, original, installed, entry_published, error)) {
+        if (!entry_published) {
+            ::VirtualFree(state_memory_raw, 0, MEM_RELEASE);
+            releaseBoundedRelocation(relocation);
+        }
         return false;
     }
 
