@@ -8,6 +8,16 @@
 #include <string>
 #include <vector>
 
+#if defined(ENDSTONE_SPARK_WINDOWS_PERMANENT_IAT_EXPERIMENT)
+#include "native/alloc/windows_dynamic_stack_capture.h"
+// allocation_sampler_windows.cpp includes this header after the Windows SDK.
+// Keep the production shim backend on the native fast walker, while the
+// permanent-IAT experiment substitutes a walker that honors dynamic unwind
+// tables. The leading global scope in ::RtlCaptureStackBackTrace expands to a
+// valid ::spark::captureDynamicAwareStackBackTrace call.
+#define RtlCaptureStackBackTrace spark::captureDynamicAwareStackBackTrace
+#endif
+
 namespace spark {
 
 struct WindowsCodeRange {
