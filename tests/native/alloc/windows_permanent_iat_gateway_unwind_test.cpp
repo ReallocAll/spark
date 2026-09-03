@@ -1,3 +1,4 @@
+#include "native/alloc/windows_dynamic_stack_capture.h"
 #include "native/alloc/windows_permanent_iat_gateway_experiment.h"
 
 #ifndef _WIN32
@@ -19,6 +20,7 @@
 #include <cstdlib>
 #include <string>
 
+using spark::captureDynamicAwareStackBackTrace;
 using spark::permanent_iat_gateway_experiment::bindPermanentIatGateway;
 using spark::permanent_iat_gateway_experiment::createPermanentIatGateway;
 using spark::permanent_iat_gateway_experiment::detachPermanentIatGateway;
@@ -51,7 +53,7 @@ extern "C" __declspec(noinline) std::uint64_t __cdecl capturingHandler(
     std::uint64_t a, std::uint64_t b, std::uint64_t c, std::uint64_t d, std::uint64_t e) noexcept
 {
     g_frames.fill(nullptr);
-    g_depth = ::RtlCaptureStackBackTrace(0, static_cast<ULONG>(g_frames.size()), g_frames.data(), nullptr);
+    g_depth = captureDynamicAwareStackBackTrace(0, static_cast<ULONG>(g_frames.size()), g_frames.data(), nullptr);
     return baseValue(a, b, c, d, e) + kHandlerBias;
 }
 
@@ -105,7 +107,7 @@ int main()
     if (knownCaller(gateway) != expected) {
         fail("handler-result");
     }
-    if (g_depth < 3) {
+    if (g_depth < 2) {
         fail("stack-too-shallow");
     }
 
@@ -130,8 +132,8 @@ int main()
             saw_known_caller = true;
         }
     }
-    if (!saw_gateway_frame) {
-        fail("gateway-frame-missing");
+    if (saw_gateway_frame) {
+        fail("gateway-instrumentation-frame-leaked");
     }
     if (!saw_known_caller) {
         fail("caller-frame-missing-after-gateway");
