@@ -32,7 +32,8 @@ set(PERMANENT_GATEWAY_ENGINE_SOURCES
         "${SPARK_ROOT}/src/native/alloc/windows_stable_entry_experiment.cpp"
         "${SPARK_ROOT}/src/native/alloc/windows_stable_entry_atomic.cpp"
         "${SPARK_ROOT}/src/native/alloc/windows_stable_entry_relocator.cpp"
-        "${SPARK_ROOT}/src/native/alloc/windows_permanent_gateway_experiment.cpp")
+        "${SPARK_ROOT}/src/native/alloc/windows_permanent_gateway_experiment.cpp"
+        "${SPARK_ROOT}/src/native/alloc/windows_thread_suspension.cpp")
 
 add_executable(windows_stable_entry_atomic_test
         ${STABLE_ENTRY_ENGINE_SOURCES}
