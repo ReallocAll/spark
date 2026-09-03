@@ -1,18 +1,6 @@
 name: Windows No-Shim Real Plugin Experiment
 
 on:
-  push:
-    branches:
-      - "exp/windows-stable-entry-hooks"
-    paths:
-      - "CMakeLists.txt"
-      - "src/native/alloc/allocation_sampler_windows.cpp"
-      - "src/native/alloc/windows_iat_hooks.*"
-      - "src/native/alloc/windows_iat_hooks_windows.cpp"
-      - "src/native/alloc/windows_permanent_iat_gateway_experiment.*"
-      - "src/native/alloc/windows_permanent_iat_gateway_registry_experiment.*"
-      - "src/native/alloc/windows_permanent_iat_funchook_compat.cpp"
-      - ".github/workflows/windows-no-shim-real-plugin-experiment.yml"
   pull_request:
     paths:
       - "CMakeLists.txt"
@@ -77,8 +65,18 @@ jobs:
           -DENDSTONE_SPARK_BUILD_SELFTEST=OFF
           -DENDSTONE_SPARK_WINDOWS_PERMANENT_IAT_EXPERIMENT=ON
 
-      - name: Build endstone_spark.dll
-        run: cmake --build --preset conan-relwithdebinfo --target spark
+      - name: Verify shim target is absent
+        shell: pwsh
+        run: |
+          $targets = & cmake --build --preset conan-relwithdebinfo --target help
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $targets | Out-File -FilePath "build/RelWithDebInfo/no-shim-targets.txt" -Encoding utf8
+          if ($targets | Select-String -SimpleMatch "spark_allocation_shim") {
+            throw "no-shim configuration still exposes the spark_allocation_shim target"
+          }
+
+      - name: Build complete no-shim target graph
+        run: cmake --build --preset conan-relwithdebinfo
 
       - name: Verify permanent-IAT backend selection and no shim payload
         shell: pwsh
@@ -97,8 +95,11 @@ jobs:
           if (-not (Select-String -Path $commands -SimpleMatch "windows_permanent_iat_funchook_compat.cpp")) {
             throw "real Spark target did not compile the permanent-IAT compat source"
           }
-          if (Select-String -Path $commands -SimpleMatch "/windows_iat_funchook_compat.cpp") {
+          if (Select-String -Path $commands -SimpleMatch "windows_iat_funchook_compat.cpp") {
             throw "real Spark target still compiled the pinned-shim compat source"
+          }
+          if (Select-String -Path $commands -SimpleMatch "windows_allocation_shim.cpp") {
+            throw "no-shim target graph still compiled the pinned shim source"
           }
 
           $shimFiles = @(Get-ChildItem $build -Recurse -File -Filter "spark_allocation_shim.*")
@@ -108,6 +109,7 @@ jobs:
           }
 
           $dependents = & dumpbin.exe /dependents $plugin
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $dependents | Out-File -FilePath "$build/endstone_spark-dependents.txt" -Encoding utf8
           if ($dependents | Select-String -SimpleMatch "spark_allocation_shim.dll") {
             throw "endstone_spark.dll still has a dynamic dependency on spark_allocation_shim.dll"
@@ -119,10 +121,11 @@ jobs:
       - name: Upload real no-shim plugin artifact
         uses: actions/upload-artifact@v7
         with:
-          name: spark-windows-no-shim-${{ github.sha }}
+          name: spark-windows-no-shim-${{ github.event.pull_request.head.sha || github.sha }}
           path: |
             build/RelWithDebInfo/endstone_spark.dll
             build/RelWithDebInfo/endstone_spark.pdb
             build/RelWithDebInfo/endstone_spark-dependents.txt
+            build/RelWithDebInfo/no-shim-targets.txt
           if-no-files-found: error
           retention-days: 14
