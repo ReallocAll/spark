@@ -14,6 +14,7 @@
 
 #include <atomic>
 #include <cstddef>
+#include <cstdint>
 #include <cstdio>
 
 namespace {
