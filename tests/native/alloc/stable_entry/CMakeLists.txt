@@ -58,6 +58,14 @@ target_compile_definitions(windows_permanent_gateway_test PRIVATE NOMINMAX WIN32
 target_compile_options(windows_permanent_gateway_test PRIVATE /W4 /WX /UNDEBUG)
 target_link_libraries(windows_permanent_gateway_test PRIVATE funchook-static distorm)
 
+add_executable(windows_permanent_gateway_publication_test
+        ${PERMANENT_GATEWAY_ENGINE_SOURCES}
+        "${SPARK_ROOT}/tests/native/alloc/windows_permanent_gateway_publication_test.cpp")
+target_include_directories(windows_permanent_gateway_publication_test PRIVATE "${SPARK_ROOT}/src")
+target_compile_definitions(windows_permanent_gateway_publication_test PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_compile_options(windows_permanent_gateway_publication_test PRIVATE /W4 /WX /UNDEBUG)
+target_link_libraries(windows_permanent_gateway_publication_test PRIVATE funchook-static distorm)
+
 add_executable(windows_permanent_gateway_registry_test
         ${PERMANENT_GATEWAY_ENGINE_SOURCES}
         "${SPARK_ROOT}/src/native/alloc/windows_permanent_gateway_registry_experiment.cpp"

@@ -127,6 +127,25 @@ jobs:
         shell: pwsh
         run: .\build\stable-entry\Release\windows_permanent_gateway_test.exe
 
+  permanent-gateway-publication:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up MSVC environment
+        uses: TheMrMilchmann/setup-msvc-dev@v4
+        with:
+          arch: x64
+      - name: Configure standalone permanent-gateway experiment
+        shell: pwsh
+        run: cmake -S tests/native/alloc/stable_entry -B build/stable-entry -A x64
+      - name: Build concurrent publication probe
+        shell: pwsh
+        run: cmake --build build/stable-entry --config Release --parallel --target windows_permanent_gateway_publication_test
+      - name: Stress one-time entry publication under concurrent callers and thread churn
+        shell: pwsh
+        run: .\build\stable-entry\Release\windows_permanent_gateway_publication_test.exe
+
   permanent-gateway-dll-unload:
     runs-on: windows-2022
     timeout-minutes: 30
