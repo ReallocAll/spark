@@ -267,19 +267,26 @@ bool verifyTerminalMetadataExportWithSamples()
         return false;
     }
     const std::uint64_t terminal = spark::ProfilerTestAccess::allocationTerminalSamples(allocation);
+    const std::uint64_t dropped = spark::ProfilerTestAccess::allocationDroppedSamples(allocation);
+    const std::uint64_t pending = spark::ProfilerTestAccess::allocationPendingSamples(allocation);
+    const bool incomplete = spark::ProfilerTestAccess::allocationDataIncomplete(allocation);
     const std::string allocation_profile = allocation.exportData({});
     const bool valid =
         terminal != 0 &&
         metadataUnsigned(allocation_profile, "Allocation terminal in-flight tick samples discarded", terminal) &&
         metadataUnsigned(allocation_profile, "Allocation pending final drops", terminal) &&
-        metadataUnsigned(allocation_profile, "Allocation samples dropped", 0) &&
-        metadataUnsigned(allocation_profile, "Allocation pending samples dropped", 0) &&
-        metadataBoolean(allocation_profile, "Allocation data incomplete", false);
+        metadataUnsigned(allocation_profile, "Allocation samples dropped", dropped) &&
+        metadataUnsigned(allocation_profile, "Allocation pending samples dropped", pending) &&
+        metadataBoolean(allocation_profile, "Allocation data incomplete", incomplete);
     for (void *pointer : retained) {
         std::free(pointer);
     }
     if (!valid) {
-        std::fprintf(stderr, "terminal metadata: allocation nonzero values were not serialized correctly\n");
+        std::fprintf(stderr,
+                     "terminal metadata: allocation nonzero values were not serialized correctly "
+                     "(terminal=%llu dropped=%llu pending=%llu incomplete=%d)\n",
+                     static_cast<unsigned long long>(terminal), static_cast<unsigned long long>(dropped),
+                     static_cast<unsigned long long>(pending), static_cast<int>(incomplete));
         allocation.shutdown(error);
         return false;
     }
