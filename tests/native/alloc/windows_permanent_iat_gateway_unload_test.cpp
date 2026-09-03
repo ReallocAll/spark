@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <iterator>
 #include <string>
 #include <thread>
 #include <vector>
@@ -202,7 +203,8 @@ int main()
                          error.c_str());
             std::abort();
         }
-        if (!permanentIatGatewayAdmissionOpen(gateway) || permanentIatGatewayHandler(gateway) != handler) {
+        if (!permanentIatGatewayAdmissionOpen(gateway) ||
+            permanentIatGatewayHandler(gateway) != reinterpret_cast<void *>(handler)) {
             fail("bound-state-invariant");
         }
 
