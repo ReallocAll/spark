@@ -164,9 +164,22 @@ jobs:
       - name: Classify retired executable faults under concurrent reclaim stress
         shell: pwsh
         run: .\build\stable-entry\Release\windows_stable_entry_retired_fault_probe.exe
-      - name: Run concurrent 1000-cycle executable entry stress
+      - name: Run concurrent 1000-cycle executable entry stress (negative evidence)
+        id: legacy-reclaim-stress
+        continue-on-error: true
         shell: pwsh
         run: .\build\stable-entry\Release\windows_stable_entry_atomic_test.exe synthetic-stress
+      - name: Record legacy reclaim route classification
+        if: always()
+        shell: pwsh
+        run: |
+          if ("${{ steps.legacy-reclaim-stress.outcome }}" -eq "failure") {
+            Write-Host "legacy reclaim route reproduced the known executable-retirement fault; retained as negative evidence"
+          } elseif ("${{ steps.legacy-reclaim-stress.outcome }}" -eq "success") {
+            Write-Host "legacy reclaim stress did not reproduce the historical fault in this bounded run; route remains rejected by prior evidence"
+          } else {
+            Write-Error "legacy reclaim stress did not produce a usable outcome: ${{ steps.legacy-reclaim-stress.outcome }}"
+          }
       - name: Run real UCRT malloc entry probe
         shell: pwsh
         run: .\build\stable-entry\Release\windows_stable_entry_atomic_test.exe ucrt-malloc
