@@ -7,11 +7,15 @@ on:
     paths:
       - "src/native/alloc/windows_permanent_iat_gateway_experiment.*"
       - "tests/native/alloc/windows_permanent_iat_gateway_test.cpp"
+      - "tests/native/alloc/windows_permanent_iat_gateway_unload_test.cpp"
+      - "tests/native/alloc/windows_gateway_test_handler.cpp"
       - ".github/workflows/windows-permanent-iat-gateway-experiment.yml"
   pull_request:
     paths:
       - "src/native/alloc/windows_permanent_iat_gateway_experiment.*"
       - "tests/native/alloc/windows_permanent_iat_gateway_test.cpp"
+      - "tests/native/alloc/windows_permanent_iat_gateway_unload_test.cpp"
+      - "tests/native/alloc/windows_gateway_test_handler.cpp"
       - ".github/workflows/windows-permanent-iat-gateway-experiment.yml"
   workflow_dispatch:
 
@@ -39,3 +43,31 @@ jobs:
       - name: Stress atomic IAT publication and process-lifetime gateway reuse
         shell: pwsh
         run: .\windows_permanent_iat_gateway_test.exe
+
+  true-dll-unload:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up MSVC environment
+        uses: TheMrMilchmann/setup-msvc-dev@v4
+        with:
+          arch: x64
+      - name: Compile unloadable handler DLL
+        shell: pwsh
+        run: >-
+          cl.exe /nologo /std:c++20 /EHsc /O2 /W4 /WX /LD
+          /DWIN32_LEAN_AND_MEAN /DNOMINMAX
+          tests\native\alloc\windows_gateway_test_handler.cpp
+          /Fe:windows_iat_gateway_test_handler.dll
+      - name: Compile permanent IAT gateway unload stress
+        shell: pwsh
+        run: >-
+          cl.exe /nologo /std:c++20 /EHsc /O2 /W4 /WX
+          /DWIN32_LEAN_AND_MEAN /DNOMINMAX /Isrc
+          src\native\alloc\windows_permanent_iat_gateway_experiment.cpp
+          tests\native\alloc\windows_permanent_iat_gateway_unload_test.cpp
+          /Fe:windows_permanent_iat_gateway_unload_test.exe
+      - name: Run 1000-cycle true handler DLL unload/reload stress
+        shell: pwsh
+        run: .\windows_permanent_iat_gateway_unload_test.exe
