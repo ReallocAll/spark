@@ -18,10 +18,12 @@
 // Keep Win32 declarations in the global namespace. The implementation includes
 // these headers again after opening the experiment namespace; the SDK/header
 // guards deliberately make those later includes no-ops.
-#include <funchook.h>
-#include <intrin.h>
-#include <tlhelp32.h>
+// clang-format off: Windows SDK headers require windows.h before tlhelp32.h.
 #include <windows.h>
+#include <tlhelp32.h>
+#include <intrin.h>
+#include <funchook.h>
+// clang-format on
 #endif
 
 #include "native/alloc/windows_stable_entry_experiment.h"
