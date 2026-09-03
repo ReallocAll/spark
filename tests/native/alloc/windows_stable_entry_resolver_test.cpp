@@ -10,10 +10,10 @@
 #include <string>
 #include <vector>
 
+using spark::stable_entry_experiment::resolveWindowsAllocatorTargets;
 using spark::stable_entry_experiment::State;
 using spark::stable_entry_experiment::StateMachine;
 using spark::stable_entry_experiment::TargetRecord;
-using spark::stable_entry_experiment::resolveWindowsAllocatorTargets;
 
 int main()
 {

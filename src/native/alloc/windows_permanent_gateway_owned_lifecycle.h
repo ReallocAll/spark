@@ -1,9 +1,9 @@
 #pragma once
 
-#include "native/alloc/windows_permanent_gateway_experiment.h"
-
 #include <cstdint>
 #include <string>
+
+#include "native/alloc/windows_permanent_gateway_experiment.h"
 
 namespace spark::stable_entry_experiment {
 

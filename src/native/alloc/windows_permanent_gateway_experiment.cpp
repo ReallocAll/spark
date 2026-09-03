@@ -12,9 +12,6 @@
 #endif
 #include <windows.h>
 
-#include "native/alloc/windows_stable_entry_atomic.h"
-#include "native/alloc/windows_stable_entry_relocator.h"
-
 #include <array>
 #include <atomic>
 #include <cstddef>
@@ -23,6 +20,9 @@
 #include <limits>
 #include <new>
 #include <string>
+
+#include "native/alloc/windows_stable_entry_atomic.h"
+#include "native/alloc/windows_stable_entry_relocator.h"
 
 namespace spark::stable_entry_experiment {
 namespace {
@@ -81,8 +81,7 @@ static_assert(std::atomic<void *>::is_always_lock_free);
     PROCESS_MITIGATION_DYNAMIC_CODE_POLICY dynamic_code{};
     if (::GetProcessMitigationPolicy(::GetCurrentProcess(), ProcessDynamicCodePolicy, &dynamic_code,
                                      static_cast<SIZE_T>(sizeof(dynamic_code))) == FALSE) {
-        error = "GetProcessMitigationPolicy(ProcessDynamicCodePolicy) failed: " +
-                std::to_string(::GetLastError());
+        error = "GetProcessMitigationPolicy(ProcessDynamicCodePolicy) failed: " + std::to_string(::GetLastError());
         return false;
     }
     if (dynamic_code.ProhibitDynamicCode != 0) {
@@ -93,8 +92,7 @@ static_assert(std::atomic<void *>::is_always_lock_free);
     PROCESS_MITIGATION_CONTROL_FLOW_GUARD_POLICY cfg{};
     if (::GetProcessMitigationPolicy(::GetCurrentProcess(), ProcessControlFlowGuardPolicy, &cfg,
                                      static_cast<SIZE_T>(sizeof(cfg))) == FALSE) {
-        error = "GetProcessMitigationPolicy(ProcessControlFlowGuardPolicy) failed: " +
-                std::to_string(::GetLastError());
+        error = "GetProcessMitigationPolicy(ProcessControlFlowGuardPolicy) failed: " + std::to_string(::GetLastError());
         return false;
     }
     // The v2 probe emits a raw indirect CALL/JMP. Do not silently bypass a
@@ -120,15 +118,14 @@ static_assert(std::atomic<void *>::is_always_lock_free);
     return true;
 }
 
-[[nodiscard]] bool patchRel8(std::array<std::uint8_t, kGatewayCodeCapacity> &code,
-                             std::size_t branch_offset, std::size_t target, std::string &error)
+[[nodiscard]] bool patchRel8(std::array<std::uint8_t, kGatewayCodeCapacity> &code, std::size_t branch_offset,
+                             std::size_t target, std::string &error)
 {
     if (branch_offset + 2 > code.size() || target > code.size()) {
         error = "permanent gateway branch patch is outside code buffer";
         return false;
     }
-    const std::intptr_t delta = static_cast<std::intptr_t>(target) -
-                                static_cast<std::intptr_t>(branch_offset + 2);
+    const std::intptr_t delta = static_cast<std::intptr_t>(target) - static_cast<std::intptr_t>(branch_offset + 2);
     if (delta < -128 || delta > 127) {
         error = "permanent gateway branch exceeds rel8 range";
         return false;
@@ -137,8 +134,7 @@ static_assert(std::atomic<void *>::is_always_lock_free);
     return true;
 }
 
-[[nodiscard]] bool buildGatewayCode(GatewayState *state,
-                                    std::array<std::uint8_t, kGatewayCodeCapacity> &code,
+[[nodiscard]] bool buildGatewayCode(GatewayState *state, std::array<std::uint8_t, kGatewayCodeCapacity> &code,
                                     std::size_t &code_size, std::string &error)
 {
     code = {};
@@ -173,19 +169,19 @@ static_assert(std::atomic<void *>::is_always_lock_free);
         return false;
     }
     const std::size_t initial_fallback = code_size;
-    if (!emit(code, code_size, {0x74, 0x00}, error) ||                   // je fallback
-        !emit(code, code_size, {0x4D, 0x8B, 0x53, 0x10}, error) ||       // mov r10,[r11+generation]
-        !emit(code, code_size, {0xF0, 0x49, 0xFF, 0x43, 0x20}, error) || // lock inc [r11+active]
+    if (!emit(code, code_size, {0x74, 0x00}, error) ||                    // je fallback
+        !emit(code, code_size, {0x4D, 0x8B, 0x53, 0x10}, error) ||        // mov r10,[r11+generation]
+        !emit(code, code_size, {0xF0, 0x49, 0xFF, 0x43, 0x20}, error) ||  // lock inc [r11+active]
         !emit(code, code_size, {0x49, 0x83, 0x7B, 0x18, 0x00}, error)) {  // cmp [r11+gate],0
         return false;
     }
     const std::size_t closed_rollback = code_size;
-    if (!emit(code, code_size, {0x74, 0x00}, error) ||             // je rollback
+    if (!emit(code, code_size, {0x74, 0x00}, error) ||              // je rollback
         !emit(code, code_size, {0x4D, 0x3B, 0x53, 0x10}, error)) {  // cmp r10,[r11+generation]
         return false;
     }
     const std::size_t generation_rollback = code_size;
-    if (!emit(code, code_size, {0x75, 0x00}, error) ||             // jne rollback
+    if (!emit(code, code_size, {0x75, 0x00}, error) ||              // jne rollback
         !emit(code, code_size, {0x4D, 0x8B, 0x53, 0x28}, error) ||  // mov r10,[r11+handler]
         !emit(code, code_size, {0x4D, 0x85, 0xD2}, error)) {        // test r10,r10
         return false;
@@ -218,7 +214,7 @@ static_assert(std::atomic<void *>::is_always_lock_free);
     std::memcpy(code.data() + code_size, &state_address, sizeof(state_address));
     code_size += sizeof(state_address);
     if (!emit(code, code_size, {0xF0, 0x49, 0xFF, 0x4B, 0x20}, error) ||  // lock dec [r11+active]
-        !emit(code, code_size, {0xC3}, error)) {                            // ret original caller
+        !emit(code, code_size, {0xC3}, error)) {                          // ret original caller
         return false;
     }
 
@@ -232,10 +228,8 @@ static_assert(std::atomic<void *>::is_always_lock_free);
         return false;
     }
 
-    return patchRel8(code, initial_fallback, fallback, error) &&
-           patchRel8(code, closed_rollback, rollback, error) &&
-           patchRel8(code, generation_rollback, rollback, error) &&
-           patchRel8(code, null_rollback, rollback, error);
+    return patchRel8(code, initial_fallback, fallback, error) && patchRel8(code, closed_rollback, rollback, error) &&
+           patchRel8(code, generation_rollback, rollback, error) && patchRel8(code, null_rollback, rollback, error);
 }
 
 [[nodiscard]] bool isExecutableReadOnly(DWORD protection) noexcept
@@ -253,8 +247,8 @@ static_assert(std::atomic<void *>::is_always_lock_free);
 [[nodiscard]] bool queryCommitted(void *address, MEMORY_BASIC_INFORMATION &memory, std::string &error)
 {
     memory = {};
-    if (address == nullptr || ::VirtualQuery(address, &memory, sizeof(memory)) == 0 ||
-        memory.State != MEM_COMMIT || memory.BaseAddress == nullptr || memory.RegionSize == 0) {
+    if (address == nullptr || ::VirtualQuery(address, &memory, sizeof(memory)) == 0 || memory.State != MEM_COMMIT ||
+        memory.BaseAddress == nullptr || memory.RegionSize == 0) {
         error = "permanent gateway address is not committed memory";
         return false;
     }
@@ -283,16 +277,16 @@ static_assert(std::atomic<void *>::is_always_lock_free);
 {
     if (state == nullptr || state->magic != kGatewayMagic || state->abi_version != kGatewayAbiVersion ||
         state->struct_size != sizeof(GatewayState) || state->entry != entry || state->gateway != gateway ||
-        state->original == nullptr || state->stack_argument_count > kMaxStackArguments ||
-        state->code_size == 0 || state->code_size > kGatewayCodeCapacity) {
+        state->original == nullptr || state->stack_argument_count > kMaxStackArguments || state->code_size == 0 ||
+        state->code_size > kGatewayCodeCapacity) {
         error = "permanent gateway state identity/ABI validation failed";
         return false;
     }
     return true;
 }
 
-void populateHandle(GatewayState *state, MEMORY_BASIC_INFORMATION code_memory,
-                    MEMORY_BASIC_INFORMATION state_memory, PermanentGatewayHandle &handle) noexcept
+void populateHandle(GatewayState *state, MEMORY_BASIC_INFORMATION code_memory, MEMORY_BASIC_INFORMATION state_memory,
+                    PermanentGatewayHandle &handle) noexcept
 {
     handle.entry = state->entry;
     handle.gateway = state->gateway;
@@ -306,8 +300,8 @@ void populateHandle(GatewayState *state, MEMORY_BASIC_INFORMATION code_memory,
 
 }  // namespace
 
-bool installPermanentGateway(void *entry, std::uint32_t stack_argument_count,
-                             PermanentGatewayHandle &handle, std::string &error)
+bool installPermanentGateway(void *entry, std::uint32_t stack_argument_count, PermanentGatewayHandle &handle,
+                             std::string &error)
 {
     handle = {};
     error.clear();
@@ -350,8 +344,7 @@ bool installPermanentGateway(void *entry, std::uint32_t stack_argument_count,
     }
     if (relocation.memory == nullptr || relocation.entry == nullptr ||
         relocation.allocation_size < kGatewayCodeOffset + kGatewayCodeCapacity ||
-        !rel32Reachable(entry_value + 5,
-                        reinterpret_cast<std::uintptr_t>(relocation.memory) + kGatewayCodeOffset)) {
+        !rel32Reachable(entry_value + 5, reinterpret_cast<std::uintptr_t>(relocation.memory) + kGatewayCodeOffset)) {
         releaseBoundedRelocation(relocation);
         error = "bounded relocation did not provide a rel32-reachable permanent code island";
         return false;
@@ -382,7 +375,8 @@ bool installPermanentGateway(void *entry, std::uint32_t stack_argument_count,
     state->code_size = static_cast<std::uint32_t>(code_size);
 
     DWORD old_code_protection = 0;
-    if (::VirtualProtect(relocation.memory, relocation.allocation_size, PAGE_READWRITE, &old_code_protection) == FALSE) {
+    if (::VirtualProtect(relocation.memory, relocation.allocation_size, PAGE_READWRITE, &old_code_protection) ==
+        FALSE) {
         const DWORD failure = ::GetLastError();
         ::VirtualFree(state_memory_raw, 0, MEM_RELEASE);
         releaseBoundedRelocation(relocation);
@@ -391,8 +385,8 @@ bool installPermanentGateway(void *entry, std::uint32_t stack_argument_count,
     }
     std::memcpy(state->gateway, code.data(), code_size);
     DWORD ignored_code_protection = 0;
-    if (::VirtualProtect(relocation.memory, relocation.allocation_size, PAGE_EXECUTE_READ,
-                         &ignored_code_protection) == FALSE ||
+    if (::VirtualProtect(relocation.memory, relocation.allocation_size, PAGE_EXECUTE_READ, &ignored_code_protection) ==
+            FALSE ||
         ::FlushInstructionCache(::GetCurrentProcess(), relocation.memory, relocation.allocation_size) == FALSE) {
         const DWORD failure = ::GetLastError();
         ::VirtualFree(state_memory_raw, 0, MEM_RELEASE);
@@ -436,7 +430,8 @@ bool installPermanentGateway(void *entry, std::uint32_t stack_argument_count,
     // Publication is the lifetime boundary. Never reclaim the code/state after
     // the entry CAS succeeds, even if a later diagnostic check fails.
     if (flushed == FALSE || protection_restored == FALSE) {
-        error = "permanent gateway entry published but cache/protection restoration failed; resources pinned fail-closed";
+        error =
+            "permanent gateway entry published but cache/protection restoration failed; resources pinned fail-closed";
         return false;
     }
 
@@ -480,8 +475,8 @@ bool discoverPermanentGateway(void *entry, PermanentGatewayHandle &handle, std::
     }
     std::int32_t displacement = 0;
     std::memcpy(&displacement, installed.data() + 1, sizeof(displacement));
-    const std::uintptr_t gateway_value = static_cast<std::uintptr_t>(
-        static_cast<std::intptr_t>(entry_value + 5) + static_cast<std::intptr_t>(displacement));
+    const std::uintptr_t gateway_value = static_cast<std::uintptr_t>(static_cast<std::intptr_t>(entry_value + 5) +
+                                                                     static_cast<std::intptr_t>(displacement));
     auto *gateway = reinterpret_cast<std::uint8_t *>(gateway_value);
 
     MEMORY_BASIC_INFORMATION code_memory{};
@@ -490,8 +485,8 @@ bool discoverPermanentGateway(void *entry, PermanentGatewayHandle &handle, std::
         return false;
     }
     const auto code_region_end = reinterpret_cast<std::uintptr_t>(code_memory.BaseAddress) + code_memory.RegionSize;
-    if (gateway_value > code_region_end || code_region_end - gateway_value < 10 ||
-        gateway[0] != 0x49 || gateway[1] != 0xBB) {
+    if (gateway_value > code_region_end || code_region_end - gateway_value < 10 || gateway[0] != 0x49 ||
+        gateway[1] != 0xBB) {
         error = "decoded gateway does not contain the Spark permanent gateway signature";
         return false;
     }
@@ -510,8 +505,7 @@ bool discoverPermanentGateway(void *entry, PermanentGatewayHandle &handle, std::
 
     std::array<std::uint8_t, kGatewayCodeCapacity> expected_code{};
     std::size_t expected_size = 0;
-    if (!buildGatewayCode(state, expected_code, expected_size, error) ||
-        expected_size != state->code_size ||
+    if (!buildGatewayCode(state, expected_code, expected_size, error) || expected_size != state->code_size ||
         std::memcmp(gateway, expected_code.data(), expected_size) != 0 ||
         state->code_hash != hashBytesLocal(gateway, expected_size)) {
         if (error.empty()) {
@@ -536,8 +530,7 @@ bool discoverPermanentGateway(void *entry, PermanentGatewayHandle &handle, std::
     return true;
 }
 
-bool bindPermanentGateway(PermanentGatewayHandle &handle, void *handler, std::uint64_t timeout_ms,
-                          std::string &error)
+bool bindPermanentGateway(PermanentGatewayHandle &handle, void *handler, std::uint64_t timeout_ms, std::string &error)
 {
     error.clear();
     auto *state = stateFromHandle(handle);

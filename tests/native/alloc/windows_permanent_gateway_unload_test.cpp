@@ -22,7 +22,6 @@
 #include <thread>
 #include <vector>
 
-using spark::stable_entry_experiment::PermanentGatewayHandle;
 using spark::stable_entry_experiment::bindPermanentGateway;
 using spark::stable_entry_experiment::detachPermanentGateway;
 using spark::stable_entry_experiment::discoverPermanentGateway;
@@ -30,6 +29,7 @@ using spark::stable_entry_experiment::installPermanentGateway;
 using spark::stable_entry_experiment::permanentGatewayActive;
 using spark::stable_entry_experiment::permanentGatewayAdmissionOpen;
 using spark::stable_entry_experiment::permanentGatewayGeneration;
+using spark::stable_entry_experiment::PermanentGatewayHandle;
 using spark::stable_entry_experiment::permanentGatewayHandler;
 
 namespace {
@@ -49,8 +49,8 @@ class ExecutableFunction {
 public:
     explicit ExecutableFunction(std::array<std::uint8_t, 16> code)
     {
-        page_ = static_cast<std::uint8_t *>(
-            ::VirtualAlloc(nullptr, 64 * 1024, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+        page_ =
+            static_cast<std::uint8_t *>(::VirtualAlloc(nullptr, 64 * 1024, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
         assert(page_ != nullptr);
         assert((reinterpret_cast<std::uintptr_t>(page_) & 7U) == 0);
         std::memcpy(page_, code.data(), code.size());
@@ -115,8 +115,22 @@ int main()
     std::cerr << "stage=permanent-gateway-dll-unload begin cycles=" << kUnloadCycles << '\n';
 
     ExecutableFunction target({
-        0x8D, 0x41, 0x01, 0x66, 0x90, 0xC3, 0x90, 0x90,
-        0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
+        0x8D,
+        0x41,
+        0x01,
+        0x66,
+        0x90,
+        0xC3,
+        0x90,
+        0x90,
+        0x90,
+        0x90,
+        0x90,
+        0x90,
+        0x90,
+        0x90,
+        0x90,
+        0x90,
     });
     TargetFn function = target.function<TargetFn>();
     assert(function(41) == 42);
@@ -142,9 +156,8 @@ int main()
             while (!stop.load(std::memory_order_acquire)) {
                 const int result = function(value);
                 if (result != value + 1 && result != value + 1000) {
-                    std::cerr << "gateway-unload worker mismatch worker=" << worker
-                              << " value=" << value << " result=" << result
-                              << " active=" << permanentGatewayActive(gateway) << '\n';
+                    std::cerr << "gateway-unload worker mismatch worker=" << worker << " value=" << value
+                              << " result=" << result << " active=" << permanentGatewayActive(gateway) << '\n';
                     std::abort();
                 }
                 value = (value + 1) & 0x7fff;
@@ -157,8 +170,7 @@ int main()
     for (std::size_t cycle = 0; cycle < kUnloadCycles; ++cycle) {
         HMODULE module = ::LoadLibraryW(dll_path.c_str());
         if (module == nullptr) {
-            std::cerr << "gateway-unload LoadLibrary failed cycle=" << cycle
-                      << " error=" << ::GetLastError() << '\n';
+            std::cerr << "gateway-unload LoadLibrary failed cycle=" << cycle << " error=" << ::GetLastError() << '\n';
             std::abort();
         }
 
@@ -212,8 +224,7 @@ int main()
         held_call.join();
         detacher.join();
         if (!detach_ok) {
-            std::cerr << "gateway-unload detach failed cycle=" << cycle
-                      << " error=" << detach_error << '\n';
+            std::cerr << "gateway-unload detach failed cycle=" << cycle << " error=" << detach_error << '\n';
             std::abort();
         }
         assert(permanentGatewayActive(gateway) == 0);
@@ -221,8 +232,7 @@ int main()
         assert(permanentGatewayHandler(gateway) == nullptr);
 
         if (::FreeLibrary(module) == FALSE) {
-            std::cerr << "gateway-unload FreeLibrary failed cycle=" << cycle
-                      << " error=" << ::GetLastError() << '\n';
+            std::cerr << "gateway-unload FreeLibrary failed cycle=" << cycle << " error=" << ::GetLastError() << '\n';
             std::abort();
         }
         if (::GetModuleHandleW(kHandlerName) != nullptr) {
@@ -248,8 +258,8 @@ int main()
         ++rediscoveries;
 
         if ((cycle + 1) % 25 == 0) {
-            std::cerr << "stage=permanent-gateway-dll-unload progress=" << (cycle + 1)
-                      << '/' << kUnloadCycles << " active=" << permanentGatewayActive(gateway)
+            std::cerr << "stage=permanent-gateway-dll-unload progress=" << (cycle + 1) << '/' << kUnloadCycles
+                      << " active=" << permanentGatewayActive(gateway)
                       << " worker_calls=" << worker_calls.load(std::memory_order_relaxed) << '\n';
         }
     }
@@ -266,8 +276,7 @@ int main()
     assert(worker_calls.load(std::memory_order_relaxed) != 0);
 
     std::cerr << "stage=permanent-gateway-dll-unload pass cycles=" << kUnloadCycles
-              << " rediscoveries=" << rediscoveries
-              << " worker_calls=" << worker_calls.load(std::memory_order_relaxed)
+              << " rediscoveries=" << rediscoveries << " worker_calls=" << worker_calls.load(std::memory_order_relaxed)
               << " permanent_rx_bytes=" << gateway.permanent_rx_bytes
               << " permanent_rw_bytes=" << gateway.permanent_rw_bytes << '\n';
     return 0;

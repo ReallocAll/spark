@@ -129,9 +129,8 @@ LONG WINAPI stressUnhandledExceptionFilter(EXCEPTION_POINTERS *exception) noexce
     const FaultClassification classification = classifyFaultRip(rip);
     MEMORY_BASIC_INFORMATION memory{};
     const std::uintptr_t query_address = av_target != 0 ? static_cast<std::uintptr_t>(av_target) : rip;
-    const SIZE_T queried = query_address != 0
-                               ? ::VirtualQuery(reinterpret_cast<const void *>(query_address), &memory, sizeof(memory))
-                               : 0;
+    const SIZE_T queried =
+        query_address != 0 ? ::VirtualQuery(reinterpret_cast<const void *>(query_address), &memory, sizeof(memory)) : 0;
 
     std::fprintf(
         stderr,
@@ -182,8 +181,7 @@ public:
             ::VirtualAlloc(nullptr, 64 * 1024, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE));
         assert(page_ != nullptr);
         constexpr std::array<std::uint8_t, 16> code{
-            0x8D, 0x41, 0x01, 0x66, 0x90, 0xC3, 0x90, 0x90,
-            0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
+            0x8D, 0x41, 0x01, 0x66, 0x90, 0xC3, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
         };
         std::memcpy(page_, code.data(), code.size());
         assert(::FlushInstructionCache(::GetCurrentProcess(), page_, code.size()) != FALSE);

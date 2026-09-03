@@ -56,13 +56,14 @@ std::string modulePath(HMODULE module)
     if (length == 0 || length >= buffer.size()) {
         return {};
     }
-    const int bytes = ::WideCharToMultiByte(CP_UTF8, 0, buffer.data(), static_cast<int>(length), nullptr, 0, nullptr, nullptr);
+    const int bytes =
+        ::WideCharToMultiByte(CP_UTF8, 0, buffer.data(), static_cast<int>(length), nullptr, 0, nullptr, nullptr);
     if (bytes <= 0) {
         return {};
     }
     std::string result(static_cast<std::size_t>(bytes), '\0');
-    if (::WideCharToMultiByte(
-            CP_UTF8, 0, buffer.data(), static_cast<int>(length), result.data(), bytes, nullptr, nullptr) != bytes) {
+    if (::WideCharToMultiByte(CP_UTF8, 0, buffer.data(), static_cast<int>(length), result.data(), bytes, nullptr,
+                              nullptr) != bytes) {
         return {};
     }
     return result;
@@ -92,8 +93,8 @@ bool resolveWindowsAllocatorTargets(std::vector<TargetRecord> &targets, bool &dy
     error.clear();
 
     PROCESS_MITIGATION_DYNAMIC_CODE_POLICY policy{};
-    if (!::GetProcessMitigationPolicy(
-            ::GetCurrentProcess(), ProcessDynamicCodePolicy, &policy, static_cast<SIZE_T>(sizeof(policy)))) {
+    if (!::GetProcessMitigationPolicy(::GetCurrentProcess(), ProcessDynamicCodePolicy, &policy,
+                                      static_cast<SIZE_T>(sizeof(policy)))) {
         error = windowsError("GetProcessMitigationPolicy(ProcessDynamicCodePolicy) failed");
         return false;
     }

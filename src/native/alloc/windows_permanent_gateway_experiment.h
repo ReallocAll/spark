@@ -22,16 +22,15 @@ struct PermanentGatewayHandle {
 // Current allocator signatures use at most one stack argument on Windows x64.
 // The prototype rejects larger signatures rather than silently corrupting ABI
 // state while forwarding through the process-lifetime call gateway.
-bool installPermanentGateway(void *entry, std::uint32_t stack_argument_count,
-                             PermanentGatewayHandle &handle, std::string &error);
+bool installPermanentGateway(void *entry, std::uint32_t stack_argument_count, PermanentGatewayHandle &handle,
+                             std::string &error);
 
 // Reload path. Decode the stable rel32 entry, validate process-lifetime gateway
 // identity/ABI/code/original metadata, then reuse the existing allocation.
 bool discoverPermanentGateway(void *entry, PermanentGatewayHandle &handle, std::string &error);
 
 // Admission stays closed until handler and generation are fully published.
-bool bindPermanentGateway(PermanentGatewayHandle &handle, void *handler, std::uint64_t timeout_ms,
-                          std::string &error);
+bool bindPermanentGateway(PermanentGatewayHandle &handle, void *handler, std::uint64_t timeout_ms, std::string &error);
 
 // Close admission, invalidate delayed admissions, drain every callback which
 // can still be executing an unloadable handler, then clear the handler pointer.

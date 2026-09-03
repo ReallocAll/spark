@@ -17,9 +17,9 @@
 #include <thread>
 #include <vector>
 
-using spark::stable_entry_experiment::AtomicEntryHook;
-using spark::stable_entry_experiment::atomicCompareExchange8;
 using spark::stable_entry_experiment::atomicCompareExchange16;
+using spark::stable_entry_experiment::atomicCompareExchange8;
+using spark::stable_entry_experiment::AtomicEntryHook;
 using spark::stable_entry_experiment::cpuSupportsAtomic16;
 
 namespace {
@@ -42,12 +42,11 @@ std::atomic<std::uint64_t> g_malloc_hook_calls{0};
 
 LONG WINAPI stressUnhandledExceptionFilter(EXCEPTION_POINTERS *exception) noexcept
 {
-    const DWORD code = exception != nullptr && exception->ExceptionRecord != nullptr
-                           ? exception->ExceptionRecord->ExceptionCode
-                           : 0;
+    const DWORD code =
+        exception != nullptr && exception->ExceptionRecord != nullptr ? exception->ExceptionRecord->ExceptionCode : 0;
     const void *address = exception != nullptr && exception->ExceptionRecord != nullptr
-                              ? exception->ExceptionRecord->ExceptionAddress
-                              : nullptr;
+                            ? exception->ExceptionRecord->ExceptionAddress
+                            : nullptr;
     std::uintptr_t instruction = 0;
 #if defined(_M_X64)
     if (exception != nullptr && exception->ContextRecord != nullptr) {
@@ -112,8 +111,7 @@ public:
         // Five complete bytes precede RET. This exercises funchook's normal
         // bounded relocation path instead of its special short-function tail.
         constexpr std::array<std::uint8_t, 16> code{
-            0x8D, 0x41, 0x01, 0x66, 0x90, 0xC3, 0x90, 0x90,
-            0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
+            0x8D, 0x41, 0x01, 0x66, 0x90, 0xC3, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
         };
         std::memcpy(page_, code.data(), code.size());
         assert(::FlushInstructionCache(::GetCurrentProcess(), page_, code.size()) != FALSE);
@@ -177,8 +175,8 @@ void testCmpxchg16bNoTornObservers()
         return;
     }
 
-    auto *memory = static_cast<std::uint8_t *>(
-        ::VirtualAlloc(nullptr, 64 * 1024, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+    auto *memory =
+        static_cast<std::uint8_t *>(::VirtualAlloc(nullptr, 64 * 1024, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
     assert(memory != nullptr);
     assert((reinterpret_cast<std::uintptr_t>(memory) & 15U) == 0);
 
@@ -264,8 +262,8 @@ void testSyntheticSingleThreadLifecycle()
     runSyntheticCycle(target, 0);
     assert(g_synthetic_hook_calls.load(std::memory_order_relaxed) != 0);
     assert(g_synthetic_stale_calls.load(std::memory_order_relaxed) == 0);
-    std::cerr << "stage=synthetic-single pass hook_calls="
-              << g_synthetic_hook_calls.load(std::memory_order_relaxed) << '\n';
+    std::cerr << "stage=synthetic-single pass hook_calls=" << g_synthetic_hook_calls.load(std::memory_order_relaxed)
+              << '\n';
 }
 
 void testSyntheticLifecycleStress()

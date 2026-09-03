@@ -77,8 +77,7 @@ static_assert(sizeof(RegistryRecord) < kRegistryBytes);
 
 [[nodiscard]] std::wstring registryName(void *entry)
 {
-    return L"Local\\EndstoneSparkPermanentGatewayRegistryV1-" +
-           std::to_wstring(::GetCurrentProcessId()) + L"-" +
+    return L"Local\\EndstoneSparkPermanentGatewayRegistryV1-" + std::to_wstring(::GetCurrentProcessId()) + L"-" +
            std::to_wstring(reinterpret_cast<std::uintptr_t>(entry));
 }
 
@@ -110,27 +109,26 @@ static_assert(sizeof(RegistryRecord) < kRegistryBytes);
 [[nodiscard]] bool validateRegistryMemory(RegistryRecord *record, std::string &error)
 {
     MEMORY_BASIC_INFORMATION memory{};
-    if (record == nullptr || ::VirtualQuery(record, &memory, sizeof(memory)) == 0 ||
-        memory.State != MEM_COMMIT || memory.RegionSize < sizeof(RegistryRecord)) {
+    if (record == nullptr || ::VirtualQuery(record, &memory, sizeof(memory)) == 0 || memory.State != MEM_COMMIT ||
+        memory.RegionSize < sizeof(RegistryRecord)) {
         error = "permanent gateway registry view is not committed memory";
         return false;
     }
     const DWORD protection = memory.Protect & 0xFFU;
-    if (protection == PAGE_EXECUTE || protection == PAGE_EXECUTE_READ ||
-        protection == PAGE_EXECUTE_READWRITE || protection == PAGE_EXECUTE_WRITECOPY) {
+    if (protection == PAGE_EXECUTE || protection == PAGE_EXECUTE_READ || protection == PAGE_EXECUTE_READWRITE ||
+        protection == PAGE_EXECUTE_WRITECOPY) {
         error = "permanent gateway registry must remain non-executable";
         return false;
     }
     return true;
 }
 
-[[nodiscard]] bool validatePublishedRecord(RegistryRecord *record, void *entry,
-                                           std::uint32_t stack_argument_count, std::string &error)
+[[nodiscard]] bool validatePublishedRecord(RegistryRecord *record, void *entry, std::uint32_t stack_argument_count,
+                                           std::string &error)
 {
     if (record->magic != kRegistryMagic || record->abi_version != kRegistryAbiVersion ||
-        record->struct_size != sizeof(RegistryRecord) ||
-        record->process_id != ::GetCurrentProcessId() || record->entry != entry ||
-        record->stack_argument_count != stack_argument_count || record->gateway == nullptr ||
+        record->struct_size != sizeof(RegistryRecord) || record->process_id != ::GetCurrentProcessId() ||
+        record->entry != entry || record->stack_argument_count != stack_argument_count || record->gateway == nullptr ||
         record->original == nullptr || record->state == nullptr ||
         record->fingerprint != registryFingerprint(*record)) {
         error = "permanent gateway registry identity/fingerprint validation failed";
@@ -168,8 +166,8 @@ void closeTemporaryRegistry(HANDLE mapping, RegistryRecord *record) noexcept
 
 }  // namespace
 
-bool acquirePermanentGateway(void *entry, std::uint32_t stack_argument_count,
-                             PermanentGatewayHandle &handle, std::string &error)
+bool acquirePermanentGateway(void *entry, std::uint32_t stack_argument_count, PermanentGatewayHandle &handle,
+                             std::string &error)
 {
     handle = {};
     error.clear();
@@ -179,8 +177,8 @@ bool acquirePermanentGateway(void *entry, std::uint32_t stack_argument_count,
     }
 
     const std::wstring name = registryName(entry);
-    HANDLE mapping = ::CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0, kRegistryBytes,
-                                          name.c_str());
+    HANDLE mapping =
+        ::CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0, kRegistryBytes, name.c_str());
     if (mapping == nullptr) {
         error = "CreateFileMappingW permanent gateway registry failed: " + std::to_string(::GetLastError());
         return false;
@@ -188,8 +186,8 @@ bool acquirePermanentGateway(void *entry, std::uint32_t stack_argument_count,
     const DWORD mapping_status = ::GetLastError();
     const bool created = mapping_status != ERROR_ALREADY_EXISTS;
 
-    auto *record = static_cast<RegistryRecord *>(
-        ::MapViewOfFile(mapping, FILE_MAP_READ | FILE_MAP_WRITE, 0, 0, kRegistryBytes));
+    auto *record =
+        static_cast<RegistryRecord *>(::MapViewOfFile(mapping, FILE_MAP_READ | FILE_MAP_WRITE, 0, 0, kRegistryBytes));
     if (record == nullptr) {
         const DWORD failure = ::GetLastError();
         (void)::CloseHandle(mapping);
@@ -271,7 +269,8 @@ bool acquirePermanentGateway(void *entry, std::uint32_t stack_argument_count,
     }
     if (current != record->installed_bytes) {
         closeTemporaryRegistry(mapping, record);
-        error = "existing process-lifetime gateway registry found but allocator entry ownership is lost; refusing second island";
+        error = "existing process-lifetime gateway registry found but allocator entry ownership is lost; refusing "
+                "second island";
         return false;
     }
 

@@ -1,9 +1,9 @@
-#include "native/alloc/windows_stable_entry_experiment.h"
-
 #include <cassert>
 #include <iostream>
 #include <string>
 #include <vector>
+
+#include "native/alloc/windows_stable_entry_experiment.h"
 
 using spark::stable_entry_experiment::RendezvousProof;
 using spark::stable_entry_experiment::State;

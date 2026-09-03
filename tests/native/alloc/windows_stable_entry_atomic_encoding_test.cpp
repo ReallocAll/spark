@@ -1,5 +1,3 @@
-#include "native/alloc/windows_stable_entry_atomic.h"
-
 #include <array>
 #include <cassert>
 #include <cstdint>
@@ -7,6 +5,8 @@
 #include <iostream>
 #include <limits>
 #include <string>
+
+#include "native/alloc/windows_stable_entry_atomic.h"
 
 using spark::stable_entry_experiment::encodeAtomic16AbsoluteEntry;
 using spark::stable_entry_experiment::encodeAtomic8RelayEntry;

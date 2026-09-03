@@ -84,8 +84,7 @@ struct OwnershipView {
 
 [[nodiscard]] std::wstring ownershipName(const PermanentGatewayHandle &handle)
 {
-    return L"Local\\EndstoneSparkPermanentGatewayOwnerV1-" +
-           std::to_wstring(::GetCurrentProcessId()) + L"-" +
+    return L"Local\\EndstoneSparkPermanentGatewayOwnerV1-" + std::to_wstring(::GetCurrentProcessId()) + L"-" +
            std::to_wstring(reinterpret_cast<std::uintptr_t>(handle.state));
 }
 
@@ -115,14 +114,14 @@ void closeOwnershipView(OwnershipView &view) noexcept
 [[nodiscard]] bool validateOwnerMemory(OwnershipRecord *record, std::string &error)
 {
     MEMORY_BASIC_INFORMATION memory{};
-    if (record == nullptr || ::VirtualQuery(record, &memory, sizeof(memory)) == 0 ||
-        memory.State != MEM_COMMIT || memory.RegionSize < sizeof(OwnershipRecord)) {
+    if (record == nullptr || ::VirtualQuery(record, &memory, sizeof(memory)) == 0 || memory.State != MEM_COMMIT ||
+        memory.RegionSize < sizeof(OwnershipRecord)) {
         error = "permanent gateway ownership record is not committed memory";
         return false;
     }
     const DWORD protection = memory.Protect & 0xFFU;
-    if (protection == PAGE_EXECUTE || protection == PAGE_EXECUTE_READ ||
-        protection == PAGE_EXECUTE_READWRITE || protection == PAGE_EXECUTE_WRITECOPY) {
+    if (protection == PAGE_EXECUTE || protection == PAGE_EXECUTE_READ || protection == PAGE_EXECUTE_READWRITE ||
+        protection == PAGE_EXECUTE_WRITECOPY) {
         error = "permanent gateway ownership record must remain non-executable";
         return false;
     }
@@ -153,14 +152,12 @@ void closeOwnershipView(OwnershipView &view) noexcept
     }
 }
 
-[[nodiscard]] bool validatePublishedRecord(OwnershipRecord *record,
-                                           const PermanentGatewayHandle &handle,
+[[nodiscard]] bool validatePublishedRecord(OwnershipRecord *record, const PermanentGatewayHandle &handle,
                                            std::string &error)
 {
     if (record->magic != kOwnerMagic || record->abi_version != kOwnerAbiVersion ||
-        record->struct_size != sizeof(OwnershipRecord) ||
-        record->process_id != ::GetCurrentProcessId() || record->entry != handle.entry ||
-        record->gateway != handle.gateway || record->state != handle.state ||
+        record->struct_size != sizeof(OwnershipRecord) || record->process_id != ::GetCurrentProcessId() ||
+        record->entry != handle.entry || record->gateway != handle.gateway || record->state != handle.state ||
         record->fingerprint != ownershipFingerprint(*record)) {
         error = "permanent gateway ownership identity/fingerprint validation failed";
         return false;
@@ -168,8 +165,7 @@ void closeOwnershipView(OwnershipView &view) noexcept
     return true;
 }
 
-[[nodiscard]] bool openOwnershipRecord(const PermanentGatewayHandle &handle, OwnershipView &view,
-                                       std::string &error)
+[[nodiscard]] bool openOwnershipRecord(const PermanentGatewayHandle &handle, OwnershipView &view, std::string &error)
 {
     view = {};
     if (handle.entry == nullptr || handle.gateway == nullptr || handle.state == nullptr) {
@@ -178,11 +174,10 @@ void closeOwnershipView(OwnershipView &view) noexcept
     }
 
     const std::wstring name = ownershipName(handle);
-    HANDLE mapping = ::CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0,
-                                          kOwnerMappingBytes, name.c_str());
+    HANDLE mapping =
+        ::CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0, kOwnerMappingBytes, name.c_str());
     if (mapping == nullptr) {
-        error = "CreateFileMappingW permanent gateway ownership failed: " +
-                std::to_string(::GetLastError());
+        error = "CreateFileMappingW permanent gateway ownership failed: " + std::to_string(::GetLastError());
         return false;
     }
     const bool created = ::GetLastError() != ERROR_ALREADY_EXISTS;
@@ -205,8 +200,7 @@ void closeOwnershipView(OwnershipView &view) noexcept
     }
 
     if (created) {
-        if (::InterlockedCompareExchange(&record->status, kOwnerInitializing, kOwnerEmpty) !=
-            kOwnerEmpty) {
+        if (::InterlockedCompareExchange(&record->status, kOwnerInitializing, kOwnerEmpty) != kOwnerEmpty) {
             error = "new permanent gateway ownership record was not zero-initialized";
             closeOwnershipView(view);
             return false;
@@ -300,8 +294,7 @@ bool bindOwnedPermanentGateway(PermanentGatewayHandle &handle, void *handler, st
         return false;
     }
 
-    (void)::InterlockedExchange64(&record->bound_generation,
-                                  static_cast<LONG64>(handle.generation));
+    (void)::InterlockedExchange64(&record->bound_generation, static_cast<LONG64>(handle.generation));
     ticket.value = static_cast<std::uint64_t>(owner);
     ticket.generation = handle.generation;
     releaseTransition(record);
@@ -329,8 +322,7 @@ bool detachOwnedPermanentGateway(PermanentGatewayHandle &handle, PermanentGatewa
     }
 
     const LONG64 owner = static_cast<LONG64>(ticket.value);
-    const std::uint64_t persistent_generation =
-        static_cast<std::uint64_t>(load64(&record->bound_generation));
+    const std::uint64_t persistent_generation = static_cast<std::uint64_t>(load64(&record->bound_generation));
     const std::uint64_t current_generation = permanentGatewayGeneration(handle);
     if (loadStatus(record) != kOwnerPublished || load64(&record->current_owner) != owner ||
         persistent_generation != ticket.generation || handle.generation != ticket.generation ||
@@ -344,8 +336,7 @@ bool detachOwnedPermanentGateway(PermanentGatewayHandle &handle, PermanentGatewa
     const bool detached = detachPermanentGateway(handle, timeout_ms, error);
     if (handle.generation != ticket.generation) {
         ticket.generation = handle.generation;
-        (void)::InterlockedExchange64(&record->bound_generation,
-                                      static_cast<LONG64>(handle.generation));
+        (void)::InterlockedExchange64(&record->bound_generation, static_cast<LONG64>(handle.generation));
     }
     if (!detached) {
         // Ownership deliberately remains held. A live caller with this exact

@@ -42,8 +42,7 @@ public:
         // Five complete bytes precede RET so funchook takes its normal bounded
         // relocation path instead of the unusual <5-byte short-function fallback.
         constexpr std::array<std::uint8_t, 16> code{
-            0x8D, 0x41, 0x01, 0x66, 0x90, 0xC3, 0x90, 0x90,
-            0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
+            0x8D, 0x41, 0x01, 0x66, 0x90, 0xC3, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
         };
         std::memcpy(page_, code.data(), code.size());
         assert(::FlushInstructionCache(::GetCurrentProcess(), page_, code.size()) != FALSE);
@@ -72,10 +71,10 @@ void dumpMemory(const char *label, const void *address)
     std::cerr << label << ": address=0x" << std::hex << reinterpret_cast<std::uintptr_t>(address) << std::dec
               << " query=" << queried;
     if (queried != 0) {
-        std::cerr << " base=0x" << std::hex << reinterpret_cast<std::uintptr_t>(memory.BaseAddress)
-                  << " allocbase=0x" << reinterpret_cast<std::uintptr_t>(memory.AllocationBase) << std::dec
-                  << " size=" << memory.RegionSize << " state=0x" << std::hex << memory.State
-                  << " protect=0x" << memory.Protect << " allocprotect=0x" << memory.AllocationProtect << std::dec;
+        std::cerr << " base=0x" << std::hex << reinterpret_cast<std::uintptr_t>(memory.BaseAddress) << " allocbase=0x"
+                  << reinterpret_cast<std::uintptr_t>(memory.AllocationBase) << std::dec
+                  << " size=" << memory.RegionSize << " state=0x" << std::hex << memory.State << " protect=0x"
+                  << memory.Protect << " allocprotect=0x" << memory.AllocationProtect << std::dec;
     }
     std::cerr << " bytes=";
     const auto *bytes = static_cast<const std::uint8_t *>(address);
@@ -139,8 +138,8 @@ int main()
 
     DWORD trampoline_exception = ERROR_SUCCESS;
     std::cerr << "lifecycle-probe: direct-trampoline-enter\n";
-    const int direct_trampoline = callTrampolineWithSeh(reinterpret_cast<SyntheticFn>(hook.trampoline()), 11,
-                                                        trampoline_exception);
+    const int direct_trampoline =
+        callTrampolineWithSeh(reinterpret_cast<SyntheticFn>(hook.trampoline()), 11, trampoline_exception);
     std::cerr << "lifecycle-probe: direct-trampoline-return result=" << direct_trampoline << " exception=0x" << std::hex
               << trampoline_exception << std::dec << '\n';
     if (trampoline_exception != ERROR_SUCCESS || direct_trampoline != 12) {

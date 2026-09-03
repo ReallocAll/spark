@@ -22,8 +22,8 @@
 #include <string>
 #include <vector>
 
-using spark::stable_entry_experiment::TargetRecord;
 using spark::stable_entry_experiment::resolveWindowsAllocatorTargets;
+using spark::stable_entry_experiment::TargetRecord;
 
 namespace {
 

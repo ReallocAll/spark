@@ -23,13 +23,13 @@
 #include <thread>
 #include <vector>
 
-using spark::stable_entry_experiment::PermanentGatewayHandle;
 using spark::stable_entry_experiment::bindPermanentGateway;
 using spark::stable_entry_experiment::detachPermanentGateway;
 using spark::stable_entry_experiment::discoverPermanentGateway;
 using spark::stable_entry_experiment::installPermanentGateway;
 using spark::stable_entry_experiment::permanentGatewayActive;
 using spark::stable_entry_experiment::permanentGatewayAdmissionOpen;
+using spark::stable_entry_experiment::PermanentGatewayHandle;
 using spark::stable_entry_experiment::permanentGatewayHandler;
 using spark::stable_entry_experiment::permanentGatewayOriginal;
 
@@ -58,8 +58,8 @@ class ExecutableFunction {
 public:
     explicit ExecutableFunction(std::array<std::uint8_t, 16> code)
     {
-        page_ = static_cast<std::uint8_t *>(
-            ::VirtualAlloc(nullptr, 64 * 1024, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+        page_ =
+            static_cast<std::uint8_t *>(::VirtualAlloc(nullptr, 64 * 1024, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
         assert(page_ != nullptr);
         assert((reinterpret_cast<std::uintptr_t>(page_) & 7U) == 0);
         std::memcpy(page_, code.data(), code.size());
@@ -130,8 +130,8 @@ void requireDiscoveryFailure(void *entry, const char *stage)
         std::cerr << "third-party ownership discovery failed without fail-closed diagnostic stage=" << stage << '\n';
         std::abort();
     }
-    std::cerr << "stage=permanent-gateway-third-party discovery-fail-closed point=" << stage
-              << " error=" << error << '\n';
+    std::cerr << "stage=permanent-gateway-third-party discovery-fail-closed point=" << stage << " error=" << error
+              << '\n';
 }
 
 }  // namespace
@@ -141,8 +141,22 @@ int main()
     std::cerr << "stage=permanent-gateway-third-party begin\n";
 
     ExecutableFunction target({
-        0x8D, 0x41, 0x01, 0x66, 0x90, 0xC3, 0x90, 0x90,
-        0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
+        0x8D,
+        0x41,
+        0x01,
+        0x66,
+        0x90,
+        0xC3,
+        0x90,
+        0x90,
+        0x90,
+        0x90,
+        0x90,
+        0x90,
+        0x90,
+        0x90,
+        0x90,
+        0x90,
     });
     TargetFn public_entry = target.function<TargetFn>();
     assert(public_entry(40) == 41);
@@ -194,8 +208,7 @@ int main()
             for (std::size_t iteration = 0; iteration < kCallsPerWorker; ++iteration) {
                 const int result = cached_gateway(value);
                 if (result != value + 1) {
-                    std::cerr << "third-party cached gateway mismatch worker=" << worker
-                              << " iteration=" << iteration
+                    std::cerr << "third-party cached gateway mismatch worker=" << worker << " iteration=" << iteration
                               << " value=" << value << " result=" << result
                               << " active=" << permanentGatewayActive(g_gateway)
                               << " handler=" << permanentGatewayHandler(g_gateway) << '\n';
@@ -223,7 +236,6 @@ int main()
 
     std::cerr << "stage=permanent-gateway-third-party pass"
               << " cached_gateway_calls=" << pass_through_calls.load(std::memory_order_relaxed)
-              << " handler_calls=" << calls_after_detach
-              << " active=" << permanentGatewayActive(g_gateway) << '\n';
+              << " handler_calls=" << calls_after_detach << " active=" << permanentGatewayActive(g_gateway) << '\n';
     return 0;
 }

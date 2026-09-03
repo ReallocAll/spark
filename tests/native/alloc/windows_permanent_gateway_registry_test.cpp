@@ -21,12 +21,12 @@
 #include <iostream>
 #include <string>
 
-using spark::stable_entry_experiment::PermanentGatewayHandle;
 using spark::stable_entry_experiment::acquirePermanentGateway;
 using spark::stable_entry_experiment::bindPermanentGateway;
 using spark::stable_entry_experiment::detachPermanentGateway;
 using spark::stable_entry_experiment::permanentGatewayActive;
 using spark::stable_entry_experiment::permanentGatewayAdmissionOpen;
+using spark::stable_entry_experiment::PermanentGatewayHandle;
 using spark::stable_entry_experiment::permanentGatewayHandler;
 using spark::stable_entry_experiment::permanentGatewayOriginal;
 
@@ -53,8 +53,8 @@ class ExecutableFunction {
 public:
     explicit ExecutableFunction(std::array<std::uint8_t, 16> code)
     {
-        page_ = static_cast<std::uint8_t *>(
-            ::VirtualAlloc(nullptr, 64 * 1024, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+        page_ =
+            static_cast<std::uint8_t *>(::VirtualAlloc(nullptr, 64 * 1024, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
         assert(page_ != nullptr);
         assert((reinterpret_cast<std::uintptr_t>(page_) & 7U) == 0);
         std::memcpy(page_, code.data(), code.size());
@@ -114,8 +114,22 @@ int main()
 {
     std::cerr << "stage=permanent-gateway-registry begin reloads=" << kReloads << '\n';
     ExecutableFunction target({
-        0x8D, 0x41, 0x01, 0x66, 0x90, 0xC3, 0x90, 0x90,
-        0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
+        0x8D,
+        0x41,
+        0x01,
+        0x66,
+        0x90,
+        0xC3,
+        0x90,
+        0x90,
+        0x90,
+        0x90,
+        0x90,
+        0x90,
+        0x90,
+        0x90,
+        0x90,
+        0x90,
     });
     TargetFn public_entry = target.function<TargetFn>();
     assert(public_entry(41) == 42);
@@ -191,8 +205,8 @@ int main()
 
     const DWORD handles_after_failed_reloads = processHandleCount();
     if (handles_after_failed_reloads != handles_before_failed_reloads) {
-        std::cerr << "registry ownership-loss path leaked temporary handles baseline="
-                  << handles_before_failed_reloads << " after=" << handles_after_failed_reloads << '\n';
+        std::cerr << "registry ownership-loss path leaked temporary handles baseline=" << handles_before_failed_reloads
+                  << " after=" << handles_after_failed_reloads << '\n';
         return 9;
     }
     assert(g_gateway.gateway == stable_gateway);
@@ -202,8 +216,7 @@ int main()
     assert(permanentGatewayHandler(g_gateway) == nullptr);
 
     std::cerr << "stage=permanent-gateway-registry pass"
-              << " successful_reloads=" << kReloads
-              << " rejected_ownership_loss_reloads=" << kReloads
+              << " successful_reloads=" << kReloads << " rejected_ownership_loss_reloads=" << kReloads
               << " permanent_handle_delta=1"
               << " handler_calls=" << handler_calls_after_detach << '\n';
     return 0;

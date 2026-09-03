@@ -23,7 +23,6 @@
 #include <thread>
 #include <vector>
 
-using spark::stable_entry_experiment::PermanentGatewayHandle;
 using spark::stable_entry_experiment::bindPermanentGateway;
 using spark::stable_entry_experiment::detachPermanentGateway;
 using spark::stable_entry_experiment::discoverPermanentGateway;
@@ -31,6 +30,7 @@ using spark::stable_entry_experiment::installPermanentGateway;
 using spark::stable_entry_experiment::permanentGatewayActive;
 using spark::stable_entry_experiment::permanentGatewayAdmissionOpen;
 using spark::stable_entry_experiment::permanentGatewayGeneration;
+using spark::stable_entry_experiment::PermanentGatewayHandle;
 using spark::stable_entry_experiment::permanentGatewayHandler;
 using spark::stable_entry_experiment::permanentGatewayOriginal;
 
@@ -65,8 +65,8 @@ extern "C" __declspec(noinline) int __cdecl syntheticPermanentHandler(int value)
     return result;
 }
 
-extern "C" __declspec(noinline) std::uint64_t __cdecl fiveArgHandler(
-    std::uint64_t a, std::uint64_t b, std::uint64_t c, std::uint64_t d, std::uint64_t e) noexcept
+extern "C" __declspec(noinline) std::uint64_t __cdecl fiveArgHandler(std::uint64_t a, std::uint64_t b, std::uint64_t c,
+                                                                     std::uint64_t d, std::uint64_t e) noexcept
 {
     auto *original = reinterpret_cast<FiveArgFn>(permanentGatewayOriginal(g_five_arg_gateway));
     return original(a, b, c, d, e) + 1;
@@ -174,8 +174,22 @@ int main()
 {
     std::cerr << "stage=permanent-gateway-v2 begin\n";
     ExecutableFunction target({
-        0x8D, 0x41, 0x01, 0x66, 0x90, 0xC3, 0x90, 0x90,
-        0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
+        0x8D,
+        0x41,
+        0x01,
+        0x66,
+        0x90,
+        0xC3,
+        0x90,
+        0x90,
+        0x90,
+        0x90,
+        0x90,
+        0x90,
+        0x90,
+        0x90,
+        0x90,
+        0x90,
     });
     SyntheticFn function = target.function<SyntheticFn>();
     assert(function(41) == 42);
@@ -208,8 +222,22 @@ int main()
     // ABI probe for the only stack-argument shape in the current 19-target set.
     // mov rax, rcx; add rax,rdx; add rax,r8; add rax,r9; add rax,[rsp+40]; ret
     ExecutableFunction five_arg_target({
-        0x48, 0x8B, 0xC1, 0x48, 0x03, 0xC2, 0x49, 0x03,
-        0xC0, 0x49, 0x03, 0xC1, 0x48, 0x03, 0x44, 0x24,
+        0x48,
+        0x8B,
+        0xC1,
+        0x48,
+        0x03,
+        0xC2,
+        0x49,
+        0x03,
+        0xC0,
+        0x49,
+        0x03,
+        0xC1,
+        0x48,
+        0x03,
+        0x44,
+        0x24,
     });
     // Last two instruction bytes and RET live just after the initial 16-byte
     // decode window so write them while temporarily writable.
@@ -252,8 +280,8 @@ int main()
                 if (result != value + 1) {
                     std::cerr << "permanent-gateway mismatch worker=" << worker
                               << " generation=" << permanentGatewayGeneration(g_gateway)
-                              << " active=" << permanentGatewayActive(g_gateway)
-                              << " value=" << value << " result=" << result << '\n';
+                              << " active=" << permanentGatewayActive(g_gateway) << " value=" << value
+                              << " result=" << result << '\n';
                     std::abort();
                 }
                 value = (value + 1) & 0x7fff;
@@ -263,8 +291,7 @@ int main()
     }
 
     for (std::size_t cycle = 0; cycle < kCycles; ++cycle) {
-        if (!bindPermanentGateway(g_gateway, reinterpret_cast<void *>(&syntheticPermanentHandler), kTimeoutMs,
-                                  error)) {
+        if (!bindPermanentGateway(g_gateway, reinterpret_cast<void *>(&syntheticPermanentHandler), kTimeoutMs, error)) {
             std::cerr << "permanent-gateway bind failed cycle=" << cycle << " error=" << error << '\n';
             std::abort();
         }
@@ -316,8 +343,7 @@ int main()
     assert(g_worker_calls.load(std::memory_order_relaxed) != 0);
     assert(rediscoveries == kCycles + 1);
 
-    std::cerr << "stage=permanent-gateway-v2 pass cycles=" << kCycles
-              << " rediscoveries=" << rediscoveries
+    std::cerr << "stage=permanent-gateway-v2 pass cycles=" << kCycles << " rediscoveries=" << rediscoveries
               << " worker_calls=" << g_worker_calls.load(std::memory_order_relaxed)
               << " handler_calls=" << g_handler_calls.load(std::memory_order_relaxed)
               << " permanent_rx_bytes=" << g_gateway.permanent_rx_bytes

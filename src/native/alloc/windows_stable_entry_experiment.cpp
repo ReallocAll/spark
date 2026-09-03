@@ -135,14 +135,14 @@ bool StateMachine::validateRendezvous(const RendezvousProof &proof, const char *
         return false;
     }
     if (!proof.thread_creation_excluded) {
-        markUnsafe(
-            std::string(phase) +
-                ": no process-wide thread-creation exclusion exists; a thread may appear after enumeration and enter the patch window",
-            error);
+        markUnsafe(std::string(phase) + ": no process-wide thread-creation exclusion exists; a thread may appear after "
+                                        "enumeration and enter the patch window",
+                   error);
         return false;
     }
     if (ripTouchesSparkExecutable(proof)) {
-        markUnsafe(std::string(phase) + ": a live thread RIP is inside a Spark-owned hook/transition/trampoline range", error);
+        markUnsafe(std::string(phase) + ": a live thread RIP is inside a Spark-owned hook/transition/trampoline range",
+                   error);
         return false;
     }
     return true;

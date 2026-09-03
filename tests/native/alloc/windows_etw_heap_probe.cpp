@@ -8,9 +8,9 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
-#include <windows.h>
-#include <evntrace.h>
 #include <evntcons.h>
+#include <evntrace.h>
+#include <windows.h>
 
 #include <array>
 #include <atomic>
@@ -72,7 +72,8 @@ void WINAPI onEvent(PEVENT_RECORD event) noexcept
         const USHORT type = event->ExtendedData[index].ExtType;
         if (type == EVENT_HEADER_EXT_TYPE_STACK_TRACE32) {
             stats->stack32_events.fetch_add(1, std::memory_order_relaxed);
-        } else if (type == EVENT_HEADER_EXT_TYPE_STACK_TRACE64) {
+        }
+        else if (type == EVENT_HEADER_EXT_TYPE_STACK_TRACE64) {
             stats->stack64_events.fetch_add(1, std::memory_order_relaxed);
         }
     }
@@ -171,15 +172,14 @@ int main()
     stats.process_id = ::GetCurrentProcessId();
     g_stats = &stats;
 
-    const std::wstring session_name = L"SparkEtwHeapProbe-" + std::to_wstring(stats.process_id) + L"-" +
-                                      std::to_wstring(::GetTickCount64());
+    const std::wstring session_name =
+        L"SparkEtwHeapProbe-" + std::to_wstring(stats.process_id) + L"-" + std::to_wstring(::GetTickCount64());
     std::vector<std::byte> properties_storage = makeProperties(session_name);
     auto *properties = reinterpret_cast<EVENT_TRACE_PROPERTIES *>(properties_storage.data());
 
     TRACEHANDLE session = 0;
     const ULONG start_status = ::StartTraceW(&session, session_name.c_str(), properties);
-    std::cerr << "stage=etw-heap-probe start status=" << start_status
-              << " pid=" << stats.process_id << '\n';
+    std::cerr << "stage=etw-heap-probe start status=" << start_status << " pid=" << stats.process_id << '\n';
     if (start_status != ERROR_SUCCESS) {
         // System logger sessions may be unavailable due to permissions or host
         // policy. That is bounded feasibility evidence, not a reason to mutate
@@ -193,19 +193,17 @@ int main()
         if (!session_started) {
             return;
         }
-        const ULONG stop_status = ::ControlTraceW(session, session_name.c_str(), properties,
-                                                  EVENT_TRACE_CONTROL_STOP);
-        std::cerr << "stage=etw-heap-probe stop status=" << stop_status
-                  << " events_lost=" << properties->EventsLost
+        const ULONG stop_status = ::ControlTraceW(session, session_name.c_str(), properties, EVENT_TRACE_CONTROL_STOP);
+        std::cerr << "stage=etw-heap-probe stop status=" << stop_status << " events_lost=" << properties->EventsLost
                   << " buffers_written=" << properties->BuffersWritten
                   << " log_buffers_lost=" << properties->LogBuffersLost
                   << " realtime_buffers_lost=" << properties->RealTimeBuffersLost << '\n';
         session_started = false;
     };
 
-    const ULONG enable_status = ::EnableTraceEx2(
-        session, &kSystemMemoryProviderGuid, EVENT_CONTROL_CODE_ENABLE_PROVIDER,
-        TRACE_LEVEL_VERBOSE, kSystemMemoryHeapKeyword, 0, 1000, nullptr);
+    const ULONG enable_status =
+        ::EnableTraceEx2(session, &kSystemMemoryProviderGuid, EVENT_CONTROL_CODE_ENABLE_PROVIDER, TRACE_LEVEL_VERBOSE,
+                         kSystemMemoryHeapKeyword, 0, 1000, nullptr);
     std::cerr << "stage=etw-heap-probe enable-system-memory-heap status=" << enable_status << '\n';
     if (enable_status != ERROR_SUCCESS) {
         stopSession();
@@ -238,9 +236,9 @@ int main()
     runHeapWorkload();
     ::Sleep(500);
 
-    const ULONG disable_status = ::EnableTraceEx2(
-        session, &kSystemMemoryProviderGuid, EVENT_CONTROL_CODE_DISABLE_PROVIDER,
-        TRACE_LEVEL_NONE, 0, 0, 1000, nullptr);
+    const ULONG disable_status =
+        ::EnableTraceEx2(session, &kSystemMemoryProviderGuid, EVENT_CONTROL_CODE_DISABLE_PROVIDER, TRACE_LEVEL_NONE, 0,
+                         0, 1000, nullptr);
     std::cerr << "stage=etw-heap-probe disable status=" << disable_status << '\n';
     stopSession();
     consumer_thread.join();
@@ -253,12 +251,9 @@ int main()
     const std::uint64_t stack32_events = stats.stack32_events.load(std::memory_order_relaxed);
     const std::uint64_t stack64_events = stats.stack64_events.load(std::memory_order_relaxed);
 
-    std::cerr << "stage=etw-heap-probe consume status=" << consumed_status
-              << " provider_events=" << provider_events
-              << " process_events=" << process_events
-              << " stack32_events=" << stack32_events
-              << " stack64_events=" << stack64_events
-              << " logfile_events_lost=" << logfile.EventsLost << '\n';
+    std::cerr << "stage=etw-heap-probe consume status=" << consumed_status << " provider_events=" << provider_events
+              << " process_events=" << process_events << " stack32_events=" << stack32_events
+              << " stack64_events=" << stack64_events << " logfile_events_lost=" << logfile.EventsLost << '\n';
     printHistogram("event_ids", stats.event_ids);
     printHistogram("opcodes", stats.opcodes);
 

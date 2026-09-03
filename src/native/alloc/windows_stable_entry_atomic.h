@@ -18,10 +18,10 @@
 // Keep Win32 declarations in the global namespace. The implementation includes
 // these headers again after opening the experiment namespace; the SDK/header
 // guards deliberately make those later includes no-ops.
-#include <windows.h>
-#include <tlhelp32.h>
-#include <intrin.h>
 #include <funchook.h>
+#include <intrin.h>
+#include <tlhelp32.h>
+#include <windows.h>
 #endif
 
 #include "native/alloc/windows_stable_entry_experiment.h"
@@ -36,12 +36,11 @@ constexpr std::size_t kAbsoluteIndirectJumpSize = 14;
 [[nodiscard]] bool isAlignedForAtomic16(std::uintptr_t address) noexcept;
 [[nodiscard]] bool rel32Reachable(std::uintptr_t instruction_end, std::uintptr_t destination) noexcept;
 
-bool encodeAtomic8RelayEntry(std::uintptr_t entry, std::uintptr_t relay,
-                             const std::array<std::uint8_t, 16> &original,
+bool encodeAtomic8RelayEntry(std::uintptr_t entry, std::uintptr_t relay, const std::array<std::uint8_t, 16> &original,
                              std::array<std::uint8_t, 16> &installed, std::string &error);
 bool encodeAtomic16AbsoluteEntry(std::uintptr_t entry, std::uintptr_t hook,
-                                 const std::array<std::uint8_t, 16> &original,
-                                 std::array<std::uint8_t, 16> &installed, std::string &error);
+                                 const std::array<std::uint8_t, 16> &original, std::array<std::uint8_t, 16> &installed,
+                                 std::string &error);
 
 #ifdef _WIN32
 
@@ -102,8 +101,8 @@ private:
     bool prepareProtectedRanges(std::string &error);
     bool changeEntryProtection(std::uint32_t protection, std::uint32_t &old_protection) noexcept;
     bool restoreEntryProtection(std::uint32_t old_protection) noexcept;
-    bool transaction(const std::array<std::uint8_t, 16> &expected,
-                     const std::array<std::uint8_t, 16> &desired, bool installing, std::string &error);
+    bool transaction(const std::array<std::uint8_t, 16> &expected, const std::array<std::uint8_t, 16> &desired,
+                     bool installing, std::string &error);
     void releasePreparedResources() noexcept;
 
     void *entry_ = nullptr;

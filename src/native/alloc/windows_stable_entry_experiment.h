@@ -66,7 +66,10 @@ class StateMachine {
 public:
     [[nodiscard]] State state() const noexcept { return state_; }
     [[nodiscard]] bool dynamicCodeAllowed() const noexcept { return dynamic_code_allowed_; }
-    [[nodiscard]] bool shutdownBackend() const noexcept { return state_ == State::Detached || state_ == State::Destroyed; }
+    [[nodiscard]] bool shutdownBackend() const noexcept
+    {
+        return state_ == State::Detached || state_ == State::Destroyed;
+    }
     [[nodiscard]] const std::string &failureReason() const noexcept { return failure_reason_; }
     [[nodiscard]] const std::vector<TargetRecord> &targets() const noexcept { return targets_; }
 

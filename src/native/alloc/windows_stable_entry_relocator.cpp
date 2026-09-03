@@ -10,9 +10,8 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
-#include <windows.h>
-
 #include <distorm.h>
+#include <windows.h>
 
 #include <array>
 #include <climits>
@@ -45,8 +44,7 @@ enum class BuildStatus {
 
 bool fitsRel32(std::intptr_t difference) noexcept
 {
-    return difference >= static_cast<std::intptr_t>(INT32_MIN) &&
-           difference <= static_cast<std::intptr_t>(INT32_MAX);
+    return difference >= static_cast<std::intptr_t>(INT32_MIN) && difference <= static_cast<std::intptr_t>(INT32_MAX);
 }
 
 bool isRetOpcode(const std::uint8_t *raw, std::size_t size) noexcept
@@ -92,8 +90,8 @@ bool decodeEntryWindow(const std::uint8_t *source, DecodedWindow &window, std::s
     std::size_t consumed = 0;
     for (unsigned index = 0; index < used && window.count < window.instructions.size(); ++index) {
         const _DInst &instruction = decoded[index];
-        if (instruction.flags == FLAG_NOT_DECODABLE || instruction.size == 0 ||
-            instruction.addr != base + consumed || consumed + instruction.size > kDecodeWindow) {
+        if (instruction.flags == FLAG_NOT_DECODABLE || instruction.size == 0 || instruction.addr != base + consumed ||
+            consumed + instruction.size > kDecodeWindow) {
             error = "stable-entry instruction window is discontinuous or undecodable";
             return false;
         }
@@ -189,9 +187,9 @@ bool targetInsidePatch(std::uintptr_t target, std::uintptr_t source, std::size_t
     return target >= source && target < source + patch_length;
 }
 
-BuildStatus encodeRel32(std::array<std::uint8_t, kMaxTrampolineCode> &output, std::size_t &out,
-                        std::uint8_t opcode, std::uintptr_t target, std::uintptr_t destination_base,
-                        std::size_t instruction_size, std::string &error)
+BuildStatus encodeRel32(std::array<std::uint8_t, kMaxTrampolineCode> &output, std::size_t &out, std::uint8_t opcode,
+                        std::uintptr_t target, std::uintptr_t destination_base, std::size_t instruction_size,
+                        std::string &error)
 {
     if (out + instruction_size > output.size()) {
         error = "stable-entry trampoline buffer capacity exceeded";
@@ -230,14 +228,13 @@ BuildStatus buildTrampoline(const std::uint8_t *source, const DecodedWindow &win
             }
             std::int32_t displacement = 0;
             std::memcpy(&displacement, raw + 1, sizeof(displacement));
-            const std::uintptr_t target = static_cast<std::uintptr_t>(
-                static_cast<std::intptr_t>(source_next) + static_cast<std::intptr_t>(displacement));
+            const std::uintptr_t target = static_cast<std::uintptr_t>(static_cast<std::intptr_t>(source_next) +
+                                                                      static_cast<std::intptr_t>(displacement));
             if (targetInsidePatch(target, source_base, window.patch_length)) {
                 error = "relative CALL/JMP targets the overwritten entry window";
                 return BuildStatus::Unsupported;
             }
-            const BuildStatus status =
-                encodeRel32(output, out, raw[0], target, destination_base, 5, error);
+            const BuildStatus status = encodeRel32(output, out, raw[0], target, destination_base, 5, error);
             if (status != BuildStatus::Success) {
                 return status;
             }
@@ -248,8 +245,8 @@ BuildStatus buildTrampoline(const std::uint8_t *source, const DecodedWindow &win
                 return BuildStatus::Unsupported;
             }
             const auto displacement = static_cast<std::int8_t>(raw[1]);
-            const std::uintptr_t target = static_cast<std::uintptr_t>(
-                static_cast<std::intptr_t>(source_next) + static_cast<std::intptr_t>(displacement));
+            const std::uintptr_t target = static_cast<std::uintptr_t>(static_cast<std::intptr_t>(source_next) +
+                                                                      static_cast<std::intptr_t>(displacement));
             if (targetInsidePatch(target, source_base, window.patch_length)) {
                 error = "short JMP targets the overwritten entry window";
                 return BuildStatus::Unsupported;
@@ -265,8 +262,8 @@ BuildStatus buildTrampoline(const std::uint8_t *source, const DecodedWindow &win
                 return BuildStatus::Unsupported;
             }
             const auto displacement = static_cast<std::int8_t>(raw[1]);
-            const std::uintptr_t target = static_cast<std::uintptr_t>(
-                static_cast<std::intptr_t>(source_next) + static_cast<std::intptr_t>(displacement));
+            const std::uintptr_t target = static_cast<std::uintptr_t>(static_cast<std::intptr_t>(source_next) +
+                                                                      static_cast<std::intptr_t>(displacement));
             if (targetInsidePatch(target, source_base, window.patch_length)) {
                 error = "short conditional branch targets the overwritten entry window";
                 return BuildStatus::Unsupported;
@@ -285,8 +282,8 @@ BuildStatus buildTrampoline(const std::uint8_t *source, const DecodedWindow &win
         else if (raw[0] == 0x0F && size == 6 && raw[1] >= 0x80 && raw[1] <= 0x8F) {
             std::int32_t displacement = 0;
             std::memcpy(&displacement, raw + 2, sizeof(displacement));
-            const std::uintptr_t target = static_cast<std::uintptr_t>(
-                static_cast<std::intptr_t>(source_next) + static_cast<std::intptr_t>(displacement));
+            const std::uintptr_t target = static_cast<std::uintptr_t>(static_cast<std::intptr_t>(source_next) +
+                                                                      static_cast<std::intptr_t>(displacement));
             if (targetInsidePatch(target, source_base, window.patch_length)) {
                 error = "conditional rel32 branch targets the overwritten entry window";
                 return BuildStatus::Unsupported;
@@ -333,8 +330,8 @@ BuildStatus buildTrampoline(const std::uint8_t *source, const DecodedWindow &win
                     error = "RIP-relative displacement metadata does not match executable bytes";
                     return BuildStatus::Unsupported;
                 }
-                const std::uintptr_t target = static_cast<std::uintptr_t>(
-                    static_cast<std::intptr_t>(source_next) + static_cast<std::intptr_t>(old_displacement));
+                const std::uintptr_t target = static_cast<std::uintptr_t>(static_cast<std::intptr_t>(source_next) +
+                                                                          static_cast<std::intptr_t>(old_displacement));
                 const std::uintptr_t destination_next = destination_base + out + size;
                 const std::intptr_t difference =
                     static_cast<std::intptr_t>(target) - static_cast<std::intptr_t>(destination_next);
@@ -412,8 +409,7 @@ bool prepareBoundedRelocation(void *source_address, BoundedRelocation &relocatio
 
             std::array<std::uint8_t, kMaxTrampolineCode> code{};
             std::size_t code_size = 0;
-            const BuildStatus status =
-                buildTrampoline(source, window, candidate, code, code_size, error);
+            const BuildStatus status = buildTrampoline(source, window, candidate, code, code_size, error);
             if (status == BuildStatus::AddressOutOfRange) {
                 ::VirtualFree(memory, 0, MEM_RELEASE);
                 continue;

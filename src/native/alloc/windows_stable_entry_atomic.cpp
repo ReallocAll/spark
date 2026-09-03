@@ -26,8 +26,7 @@ bool rel32Reachable(std::uintptr_t instruction_end, std::uintptr_t destination) 
     return instruction_end - destination <= static_cast<std::uintptr_t>(INT32_MAX) + 1ULL;
 }
 
-bool encodeAtomic8RelayEntry(std::uintptr_t entry, std::uintptr_t relay,
-                             const std::array<std::uint8_t, 16> &original,
+bool encodeAtomic8RelayEntry(std::uintptr_t entry, std::uintptr_t relay, const std::array<std::uint8_t, 16> &original,
                              std::array<std::uint8_t, 16> &installed, std::string &error)
 {
     error.clear();
@@ -52,8 +51,8 @@ bool encodeAtomic8RelayEntry(std::uintptr_t entry, std::uintptr_t relay,
 }
 
 bool encodeAtomic16AbsoluteEntry(std::uintptr_t entry, std::uintptr_t hook,
-                                 const std::array<std::uint8_t, 16> &original,
-                                 std::array<std::uint8_t, 16> &installed, std::string &error)
+                                 const std::array<std::uint8_t, 16> &original, std::array<std::uint8_t, 16> &installed,
+                                 std::string &error)
 {
     error.clear();
     if (!isAlignedForAtomic16(entry)) {
@@ -88,9 +87,9 @@ bool encodeAtomic16AbsoluteEntry(std::uintptr_t entry, std::uintptr_t hook,
 #include <intrin.h>
 // clang-format on
 
-#include <array>
-
 #include <funchook.h>
+
+#include <array>
 
 namespace {
 
@@ -153,8 +152,8 @@ void closeThreadHandles(std::array<SuspendedThread, kMaxQuiescenceThreads> &thre
 bool dynamicCodeAllowed() noexcept
 {
     PROCESS_MITIGATION_DYNAMIC_CODE_POLICY policy{};
-    return ::GetProcessMitigationPolicy(
-               ::GetCurrentProcess(), ProcessDynamicCodePolicy, &policy, static_cast<SIZE_T>(sizeof(policy))) != FALSE &&
+    return ::GetProcessMitigationPolicy(::GetCurrentProcess(), ProcessDynamicCodePolicy, &policy,
+                                        static_cast<SIZE_T>(sizeof(policy))) != FALSE &&
            policy.ProhibitDynamicCode == 0;
 }
 
@@ -180,8 +179,8 @@ AtomicCompareResult atomicCompareExchange8(void *address, const std::array<std::
     long long desired_word = 0;
     std::memcpy(&expected_word, expected.data(), sizeof(expected_word));
     std::memcpy(&desired_word, desired.data(), sizeof(desired_word));
-    const long long observed = _InterlockedCompareExchange64(reinterpret_cast<volatile long long *>(address),
-                                                              desired_word, expected_word);
+    const long long observed =
+        _InterlockedCompareExchange64(reinterpret_cast<volatile long long *>(address), desired_word, expected_word);
     std::memcpy(result.observed.data(), &observed, sizeof(observed));
     result.exchanged = observed == expected_word;
     return result;
@@ -201,7 +200,7 @@ AtomicCompareResult atomicCompareExchange16(void *address, const std::array<std:
     std::memcpy(desired_words, desired.data(), sizeof(desired_words));
     long long comparand[2]{expected_words[0], expected_words[1]};
     result.exchanged = _InterlockedCompareExchange128(reinterpret_cast<volatile long long *>(address), desired_words[1],
-                                                       desired_words[0], comparand) != 0;
+                                                      desired_words[0], comparand) != 0;
     std::memcpy(result.observed.data(), comparand, sizeof(comparand));
     return result;
 }
@@ -219,8 +218,7 @@ AtomicEntryHook::~AtomicEntryHook()
 bool AtomicEntryHook::markFailure(const char *message, std::uint32_t code, std::string &error) noexcept
 {
     unsafe_ = true;
-    std::snprintf(failure_.data(), failure_.size(), "%s (error=%lu)", message,
-                  static_cast<unsigned long>(code));
+    std::snprintf(failure_.data(), failure_.size(), "%s (error=%lu)", message, static_cast<unsigned long>(code));
     try {
         error.assign(failure_.data());
     }
@@ -247,8 +245,8 @@ bool AtomicEntryHook::prepareRelay(std::string &error)
 {
     SYSTEM_INFO system{};
     ::GetSystemInfo(&system);
-    const std::uintptr_t granularity = system.dwAllocationGranularity != 0 ? system.dwAllocationGranularity
-                                                                           : kRelayReservationSize;
+    const std::uintptr_t granularity =
+        system.dwAllocationGranularity != 0 ? system.dwAllocationGranularity : kRelayReservationSize;
     const std::uintptr_t entry = reinterpret_cast<std::uintptr_t>(entry_);
     const std::uintptr_t base = entry & ~(granularity - 1);
     const std::uintptr_t max_distance = static_cast<std::uintptr_t>(INT32_MAX) - granularity;
@@ -357,8 +355,8 @@ bool AtomicEntryHook::prepareRelocation(std::string &error)
 bool AtomicEntryHook::prepareProtectedRanges(std::string &error)
 {
     protected_range_count_ = 0;
-    protected_ranges_[protected_range_count_++] = {
-        reinterpret_cast<std::uintptr_t>(entry_), reinterpret_cast<std::uintptr_t>(entry_) + kAtomicEntryWidth8};
+    protected_ranges_[protected_range_count_++] = {reinterpret_cast<std::uintptr_t>(entry_),
+                                                   reinterpret_cast<std::uintptr_t>(entry_) + kAtomicEntryWidth8};
     protected_ranges_[protected_range_count_++] = {
         reinterpret_cast<std::uintptr_t>(relay_), reinterpret_cast<std::uintptr_t>(relay_) + kAbsoluteIndirectJumpSize};
 
@@ -367,20 +365,18 @@ bool AtomicEntryHook::prepareProtectedRanges(std::string &error)
         trampoline_memory.BaseAddress == nullptr || trampoline_memory.RegionSize == 0) {
         return markFailure("VirtualQuery trampoline failed", ::GetLastError(), error);
     }
-    protected_ranges_[protected_range_count_++] = {
-        reinterpret_cast<std::uintptr_t>(trampoline_memory.BaseAddress),
-        reinterpret_cast<std::uintptr_t>(trampoline_memory.BaseAddress) + trampoline_memory.RegionSize};
+    protected_ranges_[protected_range_count_++] = {reinterpret_cast<std::uintptr_t>(trampoline_memory.BaseAddress),
+                                                   reinterpret_cast<std::uintptr_t>(trampoline_memory.BaseAddress) +
+                                                       trampoline_memory.RegionSize};
 
 #if defined(_M_X64) || defined(__x86_64__)
     DWORD64 image_base = 0;
-    PRUNTIME_FUNCTION function =
-        ::RtlLookupFunctionEntry(reinterpret_cast<DWORD64>(hook_), &image_base, nullptr);
+    PRUNTIME_FUNCTION function = ::RtlLookupFunctionEntry(reinterpret_cast<DWORD64>(hook_), &image_base, nullptr);
     if (function == nullptr || function->BeginAddress >= function->EndAddress) {
         return markFailureText("RtlLookupFunctionEntry could not bound the Spark hook pre-guard corridor", error);
     }
-    protected_ranges_[protected_range_count_++] = {
-        static_cast<std::uintptr_t>(image_base + function->BeginAddress),
-        static_cast<std::uintptr_t>(image_base + function->EndAddress)};
+    protected_ranges_[protected_range_count_++] = {static_cast<std::uintptr_t>(image_base + function->BeginAddress),
+                                                   static_cast<std::uintptr_t>(image_base + function->EndAddress)};
 #else
     return markFailureText("stable-entry experiment currently requires Windows x64 unwind metadata", error);
 #endif
@@ -451,13 +447,12 @@ bool AtomicEntryHook::restoreEntryProtection(std::uint32_t old_protection) noexc
 }
 
 bool AtomicEntryHook::transaction(const std::array<std::uint8_t, 16> &expected,
-                                  const std::array<std::uint8_t, 16> &desired, bool installing,
-                                  std::string &error)
+                                  const std::array<std::uint8_t, 16> &desired, bool installing, std::string &error)
 {
     std::uint32_t old_protection = 0;
     if (!changeEntryProtection(PAGE_EXECUTE_READWRITE, old_protection)) {
         return markFailure(installing ? "VirtualProtect before atomic install failed"
-                                     : "VirtualProtect before atomic restore failed",
+                                      : "VirtualProtect before atomic restore failed",
                            ::GetLastError(), error);
     }
 
@@ -465,7 +460,8 @@ bool AtomicEntryHook::transaction(const std::array<std::uint8_t, 16> &expected,
     if (!result.exchanged) {
         const bool protection_restored = restoreEntryProtection(old_protection);
         if (!protection_restored) {
-            return markFailure("stable-entry ownership mismatch and protection restore failed", ::GetLastError(), error);
+            return markFailure("stable-entry ownership mismatch and protection restore failed", ::GetLastError(),
+                               error);
         }
         return markFailureText(installing ? "stable-entry original ownership lost before atomic install"
                                           : "stable-entry installed ownership lost before atomic restore",
@@ -479,12 +475,12 @@ bool AtomicEntryHook::transaction(const std::array<std::uint8_t, 16> &expected,
         const DWORD failure = ::GetLastError();
         (void)restoreEntryProtection(old_protection);
         return markFailure(installing ? "FlushInstructionCache after atomic install failed"
-                                     : "FlushInstructionCache after atomic restore failed",
+                                      : "FlushInstructionCache after atomic restore failed",
                            failure, error);
     }
     if (!restoreEntryProtection(old_protection)) {
         return markFailure(installing ? "VirtualProtect restore after atomic install failed"
-                                     : "VirtualProtect restore after atomic entry restore failed",
+                                      : "VirtualProtect restore after atomic entry restore failed",
                            ::GetLastError(), error);
     }
     return true;
@@ -556,8 +552,9 @@ bool AtomicEntryHook::proveQuiescence(const std::atomic<std::uint64_t> &active_h
                     failure = ERROR_NOT_ENOUGH_MEMORY;
                     break;
                 }
-                HANDLE thread = ::OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_LIMITED_INFORMATION,
-                                             FALSE, entry.th32ThreadID);
+                HANDLE thread =
+                    ::OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_LIMITED_INFORMATION, FALSE,
+                                 entry.th32ThreadID);
                 if (thread == nullptr) {
                     const DWORD code = ::GetLastError();
                     if (code == ERROR_INVALID_PARAMETER) {
@@ -580,10 +577,8 @@ bool AtomicEntryHook::proveQuiescence(const std::atomic<std::uint64_t> &active_h
                     failed_thread = entry.th32ThreadID;
                     break;
                 }
-                threads[count++] = {.handle = thread,
-                                    .id = entry.th32ThreadID,
-                                    .previous_suspend_count = previous,
-                                    .suspended = true};
+                threads[count++] = {
+                    .handle = thread, .id = entry.th32ThreadID, .previous_suspend_count = previous, .suspended = true};
             } while (::Thread32Next(snapshot, &entry) != FALSE);
             if (failure == ERROR_SUCCESS) {
                 const DWORD iteration_error = ::GetLastError();
