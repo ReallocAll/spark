@@ -49,8 +49,9 @@ extern "C" __declspec(noinline) std::uint64_t __cdecl originalFive(std::uint64_t
     return baseValue(a, b, c, d, e);
 }
 
-extern "C" __declspec(noinline) std::uint64_t __cdecl capturingHandler(
-    std::uint64_t a, std::uint64_t b, std::uint64_t c, std::uint64_t d, std::uint64_t e) noexcept
+extern "C"
+    __declspec(noinline) std::uint64_t __cdecl capturingHandler(std::uint64_t a, std::uint64_t b, std::uint64_t c,
+                                                                std::uint64_t d, std::uint64_t e) noexcept
 {
     g_frames.fill(nullptr);
     g_depth = captureDynamicAwareStackBackTrace(0, static_cast<ULONG>(g_frames.size()), g_frames.data(), nullptr);
@@ -78,8 +79,7 @@ extern "C" __declspec(noinline) std::uint64_t __cdecl knownCaller(FiveArgFn func
 [[nodiscard]] bool frameInCompiledFunction(void *frame, void *function) noexcept
 {
     DWORD64 image_base = 0;
-    PRUNTIME_FUNCTION entry =
-        ::RtlLookupFunctionEntry(reinterpret_cast<DWORD64>(function), &image_base, nullptr);
+    PRUNTIME_FUNCTION entry = ::RtlLookupFunctionEntry(reinterpret_cast<DWORD64>(function), &image_base, nullptr);
     if (entry == nullptr) {
         return false;
     }

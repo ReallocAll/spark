@@ -45,10 +45,10 @@ constexpr ULONG kMaximumWalkSteps = 256;
 }
 
 [[nodiscard]] inline bool permanentIatGatewayFrame(DWORD64 control_pc, DWORD64 image_base,
-                                                    const RUNTIME_FUNCTION *function) noexcept
+                                                   const RUNTIME_FUNCTION *function) noexcept
 {
-    if (control_pc == 0 || image_base == 0 || function == nullptr ||
-        control_pc < image_base + function->BeginAddress || control_pc >= image_base + function->EndAddress ||
+    if (control_pc == 0 || image_base == 0 || function == nullptr || control_pc < image_base + function->BeginAddress ||
+        control_pc >= image_base + function->EndAddress ||
         !readableRange(static_cast<std::uintptr_t>(image_base), 10)) {
         return false;
     }
@@ -111,8 +111,7 @@ constexpr ULONG kMaximumWalkSteps = 256;
 // x64 unwind primitives directly. Instrumentation frames from the permanent
 // gateway itself are consumed for unwind correctness but are not exported.
 [[nodiscard]] inline USHORT WINAPI captureDynamicAwareStackBackTrace(ULONG frames_to_skip, ULONG frames_to_capture,
-                                                                     PVOID *back_trace,
-                                                                     PULONG back_trace_hash) noexcept
+                                                                     PVOID *back_trace, PULONG back_trace_hash) noexcept
 {
     if (back_trace == nullptr || frames_to_capture == 0) {
         if (back_trace_hash != nullptr) {
@@ -158,8 +157,7 @@ constexpr ULONG kMaximumWalkSteps = 256;
                                      &establisher_frame, nullptr);
         }
 
-        if (context.Rip == 0 || context.Rsp == 0 ||
-            (context.Rip == previous_rip && context.Rsp == previous_rsp)) {
+        if (context.Rip == 0 || context.Rsp == 0 || (context.Rip == previous_rip && context.Rsp == previous_rsp)) {
             break;
         }
         if (context.Rsp < stack_low || context.Rsp > stack_high) {
@@ -167,8 +165,7 @@ constexpr ULONG kMaximumWalkSteps = 256;
         }
 
         DWORD64 caller_image_base = 0;
-        PRUNTIME_FUNCTION caller_function =
-            ::RtlLookupFunctionEntry(context.Rip, &caller_image_base, &history);
+        PRUNTIME_FUNCTION caller_function = ::RtlLookupFunctionEntry(context.Rip, &caller_image_base, &history);
         if (dynamic_stack_capture_detail::permanentIatGatewayFrame(context.Rip, caller_image_base, caller_function)) {
             continue;
         }

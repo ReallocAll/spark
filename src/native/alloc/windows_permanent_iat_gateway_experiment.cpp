@@ -243,10 +243,8 @@ static_assert(std::atomic<void *>::is_always_lock_free);
         return false;
     }
 
-    if (!patchRel8(image, initial_fallback, fallback, error) ||
-        !patchRel8(image, closed_rollback, rollback, error) ||
-        !patchRel8(image, generation_rollback, rollback, error) ||
-        !patchRel8(image, null_rollback, rollback, error) ||
+    if (!patchRel8(image, initial_fallback, fallback, error) || !patchRel8(image, closed_rollback, rollback, error) ||
+        !patchRel8(image, generation_rollback, rollback, error) || !patchRel8(image, null_rollback, rollback, error) ||
         !patchRel8(image, call_stub_jump, call_stub, error)) {
         return false;
     }
@@ -261,8 +259,7 @@ static_assert(std::atomic<void *>::is_always_lock_free);
     // no frame register. UWOP_ALLOC_SMALL with OpInfo=4 represents 40 bytes:
     // size = OpInfo * 8 + 8 = 40. The final two zero bytes keep the structure
     // four-byte aligned as required by the x64 unwind format.
-    const std::array<std::uint8_t, kGatewayUnwindInfoSize> unwind_bytes{
-        0x01, 0x04, 0x01, 0x00, 0x04, 0x42, 0x00, 0x00};
+    const std::array<std::uint8_t, kGatewayUnwindInfoSize> unwind_bytes{0x01, 0x04, 0x01, 0x00, 0x04, 0x42, 0x00, 0x00};
     std::memcpy(image.data() + unwind_info, unwind_bytes.data(), unwind_bytes.size());
 
     if (call_stub > (std::numeric_limits<DWORD>::max)() || code_size > (std::numeric_limits<DWORD>::max)() ||
@@ -514,8 +511,7 @@ bool discoverPermanentIatGateway(void *gateway, PermanentIatGatewayHandle &handl
     std::array<std::uint8_t, kGatewayImageCapacity> expected_image{};
     GatewayImageLayout expected_layout;
     if (!buildGatewayImage(state, expected_image, expected_layout, error) ||
-        expected_layout.code_size != state->code_size ||
-        expected_layout.call_stub_offset != state->call_stub_offset ||
+        expected_layout.code_size != state->code_size || expected_layout.call_stub_offset != state->call_stub_offset ||
         expected_layout.unwind_info_offset != state->unwind_info_offset ||
         !sameRuntimeFunction(expected_layout.runtime_function, state->runtime_function) ||
         std::memcmp(gateway, expected_image.data(), expected_layout.image_size) != 0 ||
