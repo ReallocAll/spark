@@ -1,0 +1,52 @@
+name: Experimental clang-format once
+
+on:
+  push:
+    branches: [exp/windows-stable-entry-hooks]
+    paths:
+      - ".github/workflows/experimental-clang-format-once.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout experiment branch
+        uses: actions/checkout@v7
+        with:
+          ref: exp/windows-stable-entry-hooks
+          fetch-depth: 0
+
+      - name: Install clang-format 20
+        run: |
+          wget -qO /tmp/llvm.sh https://apt.llvm.org/llvm.sh
+          chmod +x /tmp/llvm.sh
+          sudo /tmp/llvm.sh 20
+          sudo apt-get install -y clang-format-20
+          clang-format-20 --version | grep -E "clang-format version 20\\."
+
+      - name: Format exact failing files
+        run: |
+          clang-format-20 -i \
+            src/native/alloc/windows_dynamic_stack_capture.h \
+            src/native/alloc/windows_permanent_iat_gateway_experiment.cpp \
+            tests/native/alloc/windows_permanent_iat_gateway_unwind_test.cpp
+          git diff --check
+
+      - name: Commit formatting-only delta
+        run: |
+          if git diff --quiet; then
+            echo "No formatting changes required"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            src/native/alloc/windows_dynamic_stack_capture.h \
+            src/native/alloc/windows_permanent_iat_gateway_experiment.cpp \
+            tests/native/alloc/windows_permanent_iat_gateway_unwind_test.cpp
+          git diff --cached --check
+          git commit -m "style: format permanent IAT gateway"
+          git push origin HEAD:exp/windows-stable-entry-hooks
