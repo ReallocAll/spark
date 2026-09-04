@@ -262,8 +262,7 @@ std::string Profiler::exportData(const ExportContext &ctx, const AllocationSnaps
     meta.endstone_version = ctx.endstone_version;
     meta.minecraft_version = ctx.minecraft_version;
     if (mode_ == ProfileMode::Allocation) {
-        meta.engine_version =
-            std::string("endstone-spark ") + kVersion + " " + AllocationSampler::backendId();
+        meta.engine_version = std::string("endstone-spark ") + kVersion + " " + AllocationSampler::backendId();
     }
     else {
         meta.engine_version = std::string("endstone-spark ") + kVersion;
