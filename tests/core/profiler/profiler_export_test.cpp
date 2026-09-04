@@ -197,6 +197,12 @@ bool metadataBoolean(std::string_view profile, std::string_view key, bool expect
     return findExtraMetadataValue(profile, key, value) && value == (expected ? "true" : "false");
 }
 
+bool metadataJsonString(std::string_view profile, std::string_view key, std::string_view expected)
+{
+    std::string value;
+    return findExtraMetadataValue(profile, key, value) && value == std::string("\"") + std::string(expected) + "\"";
+}
+
 bool verifyTerminalMetadataExport()
 {
     spark::Profiler execution;
@@ -214,6 +220,8 @@ bool verifyTerminalMetadataExport()
     spark::ProfilerTestAccess::setMode(allocation, spark::ProfileMode::Allocation);
     const std::string allocation_profile = allocation.exportData({});
     if (allocation_profile.empty() ||
+        allocation_profile.find(spark::AllocationSampler::backendId()) == std::string::npos ||
+        !metadataJsonString(allocation_profile, "Allocation backend", spark::AllocationSampler::backendName()) ||
         !metadataUnsigned(allocation_profile, "Allocation terminal in-flight tick samples discarded", 0) ||
         !metadataUnsigned(allocation_profile, "Allocation pending final drops", 0) ||
         !metadataUnsigned(allocation_profile, "Allocation samples dropped", 0) ||

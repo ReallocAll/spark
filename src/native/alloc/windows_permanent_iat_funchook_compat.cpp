@@ -380,3 +380,13 @@ extern "C" const char *funchook_error_message(funchook_t *funchook)
 {
     return funchook == nullptr ? "permanent Windows IAT allocation hook context is null" : funchook->error.c_str();
 }
+
+extern "C" const char *funchook_backend_id(void)
+{
+    return "native-ucrt/permanent-iat";
+}
+
+extern "C" const char *funchook_backend_name(void)
+{
+    return "Windows UCRT/permanent IAT gateway";
+}

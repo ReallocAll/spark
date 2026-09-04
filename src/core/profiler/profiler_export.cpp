@@ -262,13 +262,8 @@ std::string Profiler::exportData(const ExportContext &ctx, const AllocationSnaps
     meta.endstone_version = ctx.endstone_version;
     meta.minecraft_version = ctx.minecraft_version;
     if (mode_ == ProfileMode::Allocation) {
-#ifdef _WIN32
-        meta.engine_version = std::string("endstone-spark ") + kVersion + " native-ucrt/funchook";
-#elif defined(__linux__)
-        meta.engine_version = std::string("endstone-spark ") + kVersion + " native-glibc/elf-import";
-#else
-        meta.engine_version = std::string("endstone-spark ") + kVersion + " native-allocation";
-#endif
+        meta.engine_version =
+            std::string("endstone-spark ") + kVersion + " " + AllocationSampler::backendId();
     }
     else {
         meta.engine_version = std::string("endstone-spark ") + kVersion;
@@ -297,13 +292,13 @@ std::string Profiler::exportData(const ExportContext &ctx, const AllocationSnaps
         // The viewer JSON-parses every map value, so textual values must be encoded
         // as JSON string literals; numbers and booleans are already valid JSON.
 #ifdef _WIN32
-        meta.extra_platform_metadata["Allocation backend"] = jsonString("Windows UCRT/funchook");
+        meta.extra_platform_metadata["Allocation backend"] = jsonString(AllocationSampler::backendName());
         meta.extra_platform_metadata["Allocation coverage"] =
             jsonString("process threads reaching hooked UCRT allocation entry points plus "
                        "aligned/base "
                        "and direct process HeapAlloc/HeapReAlloc entry points when available");
 #elif defined(__linux__)
-        meta.extra_platform_metadata["Allocation backend"] = jsonString("Linux glibc/ELF import slots");
+        meta.extra_platform_metadata["Allocation backend"] = jsonString(AllocationSampler::backendName());
         meta.extra_platform_metadata["Allocation coverage"] =
             jsonString("process threads reaching patched "
                        "malloc/calloc/realloc/reallocarray/aligned_alloc/"
