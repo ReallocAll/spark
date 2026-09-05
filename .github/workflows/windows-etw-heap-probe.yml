@@ -1,0 +1,48 @@
+name: Windows ETW Heap Feasibility
+
+on:
+  push:
+    branches:
+      - "exp/windows-stable-entry-hooks"
+    paths:
+      - "tests/native/alloc/windows_etw_heap_probe.cpp"
+      - ".github/workflows/windows-etw-heap-probe.yml"
+  pull_request:
+    paths:
+      - "tests/native/alloc/windows_etw_heap_probe.cpp"
+      - ".github/workflows/windows-etw-heap-probe.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  raw-system-memory-heap:
+    runs-on: windows-2022
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up MSVC environment
+        uses: TheMrMilchmann/setup-msvc-dev@v4
+        with:
+          arch: x64
+      - name: Report ETW/WPR environment
+        shell: pwsh
+        run: |
+          Write-Host "identity=$(whoami)"
+          $wpr = Get-Command wpr.exe -ErrorAction SilentlyContinue
+          if ($null -eq $wpr) {
+            Write-Host "wpr=unavailable"
+          } else {
+            Write-Host "wpr=$($wpr.Source)"
+          }
+      - name: Compile raw System Memory heap probe
+        shell: pwsh
+        run: >-
+          cl.exe /nologo /std:c++20 /EHsc /W4 /WX
+          /DWIN32_LEAN_AND_MEAN /DNOMINMAX
+          tests\native\alloc\windows_etw_heap_probe.cpp
+          /Fe:windows_etw_heap_probe.exe /link advapi32.lib
+      - name: Run raw System Memory heap probe
+        shell: pwsh
+        run: .\windows_etw_heap_probe.exe

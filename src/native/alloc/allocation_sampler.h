@@ -179,6 +179,8 @@ public:
     bool running() const;
     bool hooksInstalled() const;
     bool failure(std::string &error) const;
+    static const char *backendId() noexcept;
+    static const char *backendName() noexcept;
     const std::vector<AllocationHookCapability> &hookCapabilities() const;
     std::size_t hookTargetCount() const;
 

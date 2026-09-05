@@ -1,0 +1,210 @@
+name: Windows Stable Entry Experiment
+
+on:
+  push:
+    branches:
+      - "exp/windows-stable-entry-hooks"
+    paths:
+      - "src/native/alloc/windows_stable_entry_*"
+      - "src/native/alloc/windows_permanent_gateway_*"
+      - "tests/native/alloc/windows_stable_entry_*"
+      - "tests/native/alloc/windows_permanent_gateway_*"
+      - "tests/native/alloc/windows_gateway_test_handler.cpp"
+      - "tests/native/alloc/stable_entry/**"
+      - ".github/workflows/windows-stable-entry-experiment.yml"
+  pull_request:
+    paths:
+      - "src/native/alloc/windows_stable_entry_*"
+      - "src/native/alloc/windows_permanent_gateway_*"
+      - "tests/native/alloc/windows_stable_entry_*"
+      - "tests/native/alloc/windows_permanent_gateway_*"
+      - "tests/native/alloc/windows_gateway_test_handler.cpp"
+      - "tests/native/alloc/stable_entry/**"
+      - ".github/workflows/windows-stable-entry-experiment.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deterministic-state-machine:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Compile fail-closed state-machine tests
+        run: >-
+          c++ -std=c++20 -Wall -Wextra -Werror -pedantic
+          -Isrc
+          src/native/alloc/windows_stable_entry_experiment.cpp
+          tests/native/alloc/windows_stable_entry_experiment_test.cpp
+          -o windows_stable_entry_experiment_test
+      - name: Run fail-closed state-machine tests
+        run: ./windows_stable_entry_experiment_test
+      - name: Compile atomic encoding tests
+        run: >-
+          c++ -std=c++20 -Wall -Wextra -Werror -pedantic
+          -Isrc
+          src/native/alloc/windows_stable_entry_atomic.cpp
+          tests/native/alloc/windows_stable_entry_atomic_encoding_test.cpp
+          -o windows_stable_entry_atomic_encoding_test
+      - name: Run atomic encoding tests
+        run: ./windows_stable_entry_atomic_encoding_test
+
+  native-windows-core:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up MSVC environment
+        uses: TheMrMilchmann/setup-msvc-dev@v4
+        with:
+          arch: x64
+      - name: Configure standalone stable-entry experiment
+        shell: pwsh
+        run: cmake -S tests/native/alloc/stable_entry -B build/stable-entry -A x64
+      - name: Build native stable-entry probes
+        shell: pwsh
+        run: cmake --build build/stable-entry --config Release --parallel
+      - name: Report real allocator entry alignment and hotpatch padding
+        shell: pwsh
+        run: .\build\stable-entry\Release\windows_stable_entry_alignment_test.exe
+      - name: Prove prepare-only bounded relocation
+        shell: pwsh
+        run: .\build\stable-entry\Release\windows_stable_entry_relocation_probe.exe
+      - name: Dump relocation diagnostics
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path funchook-stable-entry.log) {
+            Get-Content funchook-stable-entry.log
+          } else {
+            Write-Host "no funchook relocation log produced"
+          }
+      - name: Isolate prepare install call restore lifecycle
+        shell: pwsh
+        run: .\build\stable-entry\Release\windows_stable_entry_lifecycle_probe.exe
+      - name: Prove CMPXCHG16B data atomicity under contention
+        shell: pwsh
+        run: .\build\stable-entry\Release\windows_stable_entry_atomic_test.exe cmpxchg16
+      - name: Run single-thread executable entry lifecycle
+        shell: pwsh
+        run: .\build\stable-entry\Release\windows_stable_entry_atomic_test.exe synthetic-single
+      - name: Fail closed when original ownership changes before install
+        shell: pwsh
+        run: .\build\stable-entry\Release\windows_stable_entry_atomic_test.exe ownership-install
+      - name: Fail closed when third party replaces installed entry
+        shell: pwsh
+        run: .\build\stable-entry\Release\windows_stable_entry_atomic_test.exe ownership-restore
+      - name: Reject false quiescence in pre-guard corridor
+        shell: pwsh
+        run: .\build\stable-entry\Release\windows_stable_entry_atomic_test.exe pre-guard-rip
+      - name: Fail closed under ProcessDynamicCodePolicy
+        shell: pwsh
+        run: .\build\stable-entry\Release\windows_stable_entry_atomic_test.exe dynamic-code
+      - name: Run process-lifetime gateway registry/reload reuse stress
+        shell: pwsh
+        run: .\build\stable-entry\Release\windows_permanent_gateway_registry_test.exe
+      - name: Prove permanent gateway safe after third-party entry ownership loss
+        shell: pwsh
+        run: .\build\stable-entry\Release\windows_permanent_gateway_third_party_test.exe
+
+  permanent-gateway-synthetic:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up MSVC environment
+        uses: TheMrMilchmann/setup-msvc-dev@v4
+        with:
+          arch: x64
+      - name: Configure standalone permanent-gateway experiment
+        shell: pwsh
+        run: cmake -S tests/native/alloc/stable_entry -B build/stable-entry -A x64
+      - name: Build permanent-gateway probes
+        shell: pwsh
+        run: cmake --build build/stable-entry --config Release --parallel
+      - name: Run permanent gateway 1000-cycle admission/reuse stress
+        shell: pwsh
+        run: .\build\stable-entry\Release\windows_permanent_gateway_test.exe
+
+  permanent-gateway-publication:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up MSVC environment
+        uses: TheMrMilchmann/setup-msvc-dev@v4
+        with:
+          arch: x64
+      - name: Configure standalone permanent-gateway experiment
+        shell: pwsh
+        run: cmake -S tests/native/alloc/stable_entry -B build/stable-entry -A x64
+      - name: Build concurrent publication probe
+        shell: pwsh
+        run: cmake --build build/stable-entry --config Release --parallel --target windows_permanent_gateway_publication_test
+      - name: Stress one-time entry publication under concurrent callers and thread churn
+        shell: pwsh
+        run: .\build\stable-entry\Release\windows_permanent_gateway_publication_test.exe
+
+  permanent-gateway-dll-unload:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up MSVC environment
+        uses: TheMrMilchmann/setup-msvc-dev@v4
+        with:
+          arch: x64
+      - name: Configure standalone permanent-gateway experiment
+        shell: pwsh
+        run: cmake -S tests/native/alloc/stable_entry -B build/stable-entry -A x64
+      - name: Build permanent-gateway DLL unload stress
+        shell: pwsh
+        run: cmake --build build/stable-entry --config Release --parallel
+      - name: Run true DLL unload/reload permanent gateway stress
+        shell: pwsh
+        run: .\build\stable-entry\Release\windows_permanent_gateway_unload_test.exe
+
+  legacy-reclaim-evidence:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up MSVC environment
+        uses: TheMrMilchmann/setup-msvc-dev@v4
+        with:
+          arch: x64
+      - name: Configure standalone stable-entry reclaim experiment
+        shell: pwsh
+        run: cmake -S tests/native/alloc/stable_entry -B build/stable-entry -A x64
+      - name: Build stable-entry reclaim probes
+        shell: pwsh
+        run: cmake --build build/stable-entry --config Release --parallel
+      - name: Classify retired executable faults under concurrent reclaim stress (negative evidence)
+        id: legacy-retired-fault
+        continue-on-error: true
+        shell: pwsh
+        run: .\build\stable-entry\Release\windows_stable_entry_retired_fault_probe.exe
+      - name: Run concurrent 1000-cycle executable entry stress (negative evidence)
+        id: legacy-reclaim-stress
+        continue-on-error: true
+        shell: pwsh
+        run: .\build\stable-entry\Release\windows_stable_entry_atomic_test.exe synthetic-stress
+      - name: Record legacy reclaim route classification
+        if: always()
+        shell: pwsh
+        run: |
+          $retired = "${{ steps.legacy-retired-fault.outcome }}"
+          $stress = "${{ steps.legacy-reclaim-stress.outcome }}"
+          Write-Host "legacy retired-fault outcome=$retired"
+          Write-Host "legacy 1000-cycle stress outcome=$stress"
+          if ($retired -eq "failure" -or $stress -eq "failure") {
+            Write-Host "legacy reclaim route reproduced the known executable-retirement fault; retained as negative evidence"
+          } elseif ($retired -eq "success" -and $stress -eq "success") {
+            Write-Host "legacy reclaim probes did not reproduce the historical fault in this bounded run; route remains rejected by prior evidence"
+          } else {
+            Write-Error "legacy reclaim probes did not produce usable outcomes"
+          }
+      - name: Run real UCRT malloc entry probe
+        shell: pwsh
+        run: .\build\stable-entry\Release\windows_stable_entry_atomic_test.exe ucrt-malloc

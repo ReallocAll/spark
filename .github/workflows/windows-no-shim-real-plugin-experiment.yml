@@ -1,0 +1,141 @@
+name: Windows No-Shim Real Plugin Experiment
+
+on:
+  pull_request:
+    paths:
+      - "CMakeLists.txt"
+      - "src/native/alloc/allocation_sampler_windows.cpp"
+      - "src/native/alloc/windows_iat_hooks.*"
+      - "src/native/alloc/windows_iat_hooks_windows.cpp"
+      - "src/native/alloc/windows_permanent_iat_gateway_experiment.*"
+      - "src/native/alloc/windows_permanent_iat_gateway_registry_experiment.*"
+      - "src/native/alloc/windows_permanent_iat_funchook_compat.cpp"
+      - "tests/CMakeLists.txt"
+      - "tests/native/alloc/allocation_count_only_test.cpp"
+      - "tests/native/alloc/windows_allocation_fixture.cpp"
+      - "tests/native/alloc/windows_allocation_unavailable_test.cpp"
+      - ".github/workflows/windows-no-shim-real-plugin-experiment.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  real-no-shim-plugin:
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout experiment branch
+        uses: actions/checkout@v7
+
+      - name: Set up MSVC environment
+        uses: TheMrMilchmann/setup-msvc-dev@v4
+        with:
+          arch: x64
+
+      - name: Select clang-cl 20
+        shell: pwsh
+        run: |
+          $llvmBin = "C:\Program Files\LLVM\bin"
+          $llvmBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          $version = & "$llvmBin\clang-cl.exe" --version
+          $version
+          if (-not ($version | Select-String "clang version 20\.")) {
+            throw "clang-cl 20 is required"
+          }
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install Conan
+        run: python -m pip install "conan>=2,<3"
+
+      - name: Cache Conan packages
+        uses: actions/cache@v5
+        with:
+          path: .conan2
+          key: ${{ runner.os }}-clang20-conan-${{ hashFiles('conanfile.py', '.conan2/profiles/default') }}
+
+      - name: Install dependencies
+        run: conan install . --build=missing
+
+      - name: Configure real no-shim plugin
+        run: >-
+          cmake --preset conan-relwithdebinfo
+          -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+          -DENDSTONE_SPARK_BUILD_SELFTEST=ON
+          -DENDSTONE_SPARK_WINDOWS_PERMANENT_IAT_EXPERIMENT=ON
+
+      - name: Verify shim target is absent
+        shell: pwsh
+        run: |
+          $targets = & cmake --build --preset conan-relwithdebinfo --target help
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $targets | Out-File -FilePath "build/RelWithDebInfo/no-shim-targets.txt" -Encoding utf8
+          if ($targets | Select-String -SimpleMatch "spark_allocation_shim") {
+            throw "no-shim configuration still exposes the spark_allocation_shim target"
+          }
+
+      - name: Build complete no-shim target graph
+        run: cmake --build --preset conan-relwithdebinfo
+
+      - name: Run no-shim allocation semantic gates
+        shell: pwsh
+        run: |
+          ctest --test-dir build/RelWithDebInfo -C RelWithDebInfo --output-on-failure -R "^(spark_windows_allocation_unavailable_test|spark_allocation_count_only_test)$"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Verify permanent-IAT backend selection and no shim payload
+        shell: pwsh
+        run: |
+          $build = "build/RelWithDebInfo"
+          $plugin = Join-Path $build "endstone_spark.dll"
+          $pdb = Join-Path $build "endstone_spark.pdb"
+          $cache = Join-Path $build "CMakeCache.txt"
+          $commands = Join-Path $build "compile_commands.json"
+
+          if (-not (Test-Path $plugin)) { throw "endstone_spark.dll was not produced" }
+          if (-not (Test-Path $pdb)) { throw "endstone_spark.pdb was not produced" }
+          if (-not (Select-String -Path $cache -SimpleMatch "ENDSTONE_SPARK_WINDOWS_PERMANENT_IAT_EXPERIMENT:BOOL=ON")) {
+            throw "CMake cache did not select the permanent-IAT experiment"
+          }
+          if (-not (Select-String -Path $commands -SimpleMatch "windows_permanent_iat_funchook_compat.cpp")) {
+            throw "real Spark target did not compile the permanent-IAT compat source"
+          }
+          if (Select-String -Path $commands -SimpleMatch "windows_iat_funchook_compat.cpp") {
+            throw "real Spark target still compiled the pinned-shim compat source"
+          }
+          if (Select-String -Path $commands -SimpleMatch "windows_allocation_shim.cpp") {
+            throw "no-shim target graph still compiled the pinned shim source"
+          }
+
+          $shimFiles = @(Get-ChildItem $build -Recurse -File -Filter "spark_allocation_shim.*")
+          if ($shimFiles.Count -ne 0) {
+            $shimFiles | ForEach-Object { Write-Host $_.FullName }
+            throw "no-shim build unexpectedly produced spark_allocation_shim payload"
+          }
+
+          $dependents = & dumpbin.exe /dependents $plugin
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $dependents | Out-File -FilePath "$build/endstone_spark-dependents.txt" -Encoding utf8
+          if ($dependents | Select-String -SimpleMatch "spark_allocation_shim.dll") {
+            throw "endstone_spark.dll still has a dynamic dependency on spark_allocation_shim.dll"
+          }
+
+          Get-FileHash $plugin -Algorithm SHA256 | Format-List
+          Get-FileHash $pdb -Algorithm SHA256 | Format-List
+
+      - name: Upload real no-shim plugin artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: spark-windows-no-shim-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            build/RelWithDebInfo/endstone_spark.dll
+            build/RelWithDebInfo/endstone_spark.pdb
+            build/RelWithDebInfo/endstone_spark-dependents.txt
+            build/RelWithDebInfo/no-shim-targets.txt
+          if-no-files-found: error
+          retention-days: 14
