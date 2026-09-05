@@ -65,15 +65,17 @@ jobs:
 
       - name: Configure pinned-shim baseline from exact source SHA
         run: >-
-          cmake --preset conan-relwithdebinfo
-          -B build/bench-shim
+          cmake -S . -B build/bench-shim -G Ninja
+          -DCMAKE_TOOLCHAIN_FILE=build/RelWithDebInfo/generators/conan_toolchain.cmake
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo
           -DENDSTONE_SPARK_BUILD_SELFTEST=ON
           -DENDSTONE_SPARK_WINDOWS_PERMANENT_IAT_EXPERIMENT=OFF
 
       - name: Configure permanent-IAT candidate from exact source SHA
         run: >-
-          cmake --preset conan-relwithdebinfo
-          -B build/bench-permanent
+          cmake -S . -B build/bench-permanent -G Ninja
+          -DCMAKE_TOOLCHAIN_FILE=build/RelWithDebInfo/generators/conan_toolchain.cmake
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo
           -DENDSTONE_SPARK_BUILD_SELFTEST=ON
           -DENDSTONE_SPARK_WINDOWS_PERMANENT_IAT_EXPERIMENT=ON
 
