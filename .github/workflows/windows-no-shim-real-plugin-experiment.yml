@@ -12,6 +12,7 @@ on:
       - "src/native/alloc/windows_permanent_iat_funchook_compat.cpp"
       - "tests/CMakeLists.txt"
       - "tests/native/alloc/allocation_count_only_test.cpp"
+      - "tests/native/alloc/windows_allocation_fixture.cpp"
       - "tests/native/alloc/windows_allocation_unavailable_test.cpp"
       - ".github/workflows/windows-no-shim-real-plugin-experiment.yml"
   workflow_dispatch:
