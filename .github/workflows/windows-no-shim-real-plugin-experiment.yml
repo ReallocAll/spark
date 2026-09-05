@@ -10,6 +10,9 @@ on:
       - "src/native/alloc/windows_permanent_iat_gateway_experiment.*"
       - "src/native/alloc/windows_permanent_iat_gateway_registry_experiment.*"
       - "src/native/alloc/windows_permanent_iat_funchook_compat.cpp"
+      - "tests/CMakeLists.txt"
+      - "tests/native/alloc/allocation_count_only_test.cpp"
+      - "tests/native/alloc/windows_allocation_unavailable_test.cpp"
       - ".github/workflows/windows-no-shim-real-plugin-experiment.yml"
   workflow_dispatch:
 
@@ -62,7 +65,7 @@ jobs:
         run: >-
           cmake --preset conan-relwithdebinfo
           -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
-          -DENDSTONE_SPARK_BUILD_SELFTEST=OFF
+          -DENDSTONE_SPARK_BUILD_SELFTEST=ON
           -DENDSTONE_SPARK_WINDOWS_PERMANENT_IAT_EXPERIMENT=ON
 
       - name: Verify shim target is absent
@@ -77,6 +80,12 @@ jobs:
 
       - name: Build complete no-shim target graph
         run: cmake --build --preset conan-relwithdebinfo
+
+      - name: Run no-shim allocation semantic gates
+        shell: pwsh
+        run: |
+          ctest --test-dir build/RelWithDebInfo -C RelWithDebInfo --output-on-failure -R "^(spark_windows_allocation_unavailable_test|spark_allocation_count_only_test)$"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify permanent-IAT backend selection and no shim payload
         shell: pwsh
