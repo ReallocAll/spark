@@ -79,19 +79,33 @@ bool waitForLateLoadedModuleSample(spark::AllocationSampler &sampler, FixtureOnc
     return false;
 }
 
-bool waitForRetainedModuleSample(spark::AllocationSampler &sampler, FixtureRetainFn retain, FixtureReleaseFn release,
-                                 void *&retained, std::uint64_t &retained_snapshot_bytes, std::string &error)
+bool waitForSampledRetainedAllocation(spark::AllocationSampler &sampler, FixtureRetainFn retain,
+                                      FixtureReleaseFn release, void *&retained, std::uint64_t &retained_weight,
+                                      std::string &error)
 {
     constexpr std::size_t k_retained_bytes = 1024 * 1024;
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(8);
     while (std::chrono::steady_clock::now() < deadline) {
+        const std::uint64_t live_samples_before = sampler.liveSamples();
+        const std::uint64_t live_bytes_before = sampler.liveBytes();
+
         retained = retain(k_retained_bytes);
         if (retained == nullptr) {
             std::fprintf(stderr, "windows allocation backend: retained fixture allocation failed\n");
             return false;
         }
-        sampler.onTick(1.0);
 
+        const std::uint64_t live_samples_after = sampler.liveSamples();
+        const std::uint64_t live_bytes_after = sampler.liveBytes();
+        if (live_samples_after != live_samples_before + 1 || live_bytes_after <= live_bytes_before) {
+            release(retained);
+            retained = nullptr;
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            continue;
+        }
+
+        retained_weight = live_bytes_after - live_bytes_before;
+        sampler.onTick(1.0);
         spark::AllocationSnapshot snapshot;
         if (!sampler.snapshot(snapshot, error)) {
             release(retained);
@@ -105,17 +119,18 @@ bool waitForRetainedModuleSample(spark::AllocationSampler &sampler, FixtureRetai
             std::fprintf(stderr, "windows allocation backend: shim instrumentation frame leaked into live snapshot\n");
             return false;
         }
-        if (treeContainsModule(snapshot.tree.root(), snapshot.modules, "spark_windows_allocation_fixture.dll")) {
-            retained_snapshot_bytes = snapshot.sampled_bytes;
-            return true;
+        if (!treeContainsModule(snapshot.tree.root(), snapshot.modules, "spark_windows_allocation_fixture.dll")) {
+            release(retained);
+            retained = nullptr;
+            std::fprintf(stderr,
+                         "windows allocation backend: sampled retained pointer was not attributed to the fixture\n");
+            return false;
         }
-
-        release(retained);
-        retained = nullptr;
-        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+        return true;
     }
 
-    std::fprintf(stderr, "windows allocation backend: retained fixture was not sampled after automatic refresh\n");
+    std::fprintf(stderr,
+                 "windows allocation backend: no fixture allocation produced exactly one retained sample in time\n");
     return false;
 }
 
@@ -208,8 +223,8 @@ bool runLiveOnlySession(spark::AllocationSampler &sampler, std::uint64_t seed)
     }
 
     void *retained = nullptr;
-    std::uint64_t retained_snapshot_bytes = 0;
-    if (!waitForRetainedModuleSample(sampler, retain, release, retained, retained_snapshot_bytes, error)) {
+    std::uint64_t retained_weight = 0;
+    if (!waitForSampledRetainedAllocation(sampler, retain, release, retained, retained_weight, error)) {
         ::FreeLibrary(fixture);
         return false;
     }
@@ -227,11 +242,13 @@ bool runLiveOnlySession(spark::AllocationSampler &sampler, std::uint64_t seed)
 
     if (live_samples_before_release == 0 || live_samples_after_release + 1 != live_samples_before_release ||
         freed_samples_after_release != freed_samples_before_release + 1 ||
-        live_bytes_after_release >= live_bytes_before_release || freed_bytes_after_release <= freed_bytes_before_release) {
+        live_bytes_before_release - live_bytes_after_release != retained_weight ||
+        freed_bytes_after_release - freed_bytes_before_release != retained_weight) {
         ::FreeLibrary(fixture);
         std::fprintf(stderr,
-                     "windows allocation backend: retained pointer free did not retire exactly one sampled allocation "
-                     "(live=%llu->%llu bytes=%llu->%llu freed=%llu->%llu freed-bytes=%llu->%llu)\n",
+                     "windows allocation backend: sampled retained pointer did not retire exactly "
+                     "(weight=%llu live=%llu->%llu bytes=%llu->%llu freed=%llu->%llu freed-bytes=%llu->%llu)\n",
+                     static_cast<unsigned long long>(retained_weight),
                      static_cast<unsigned long long>(live_samples_before_release),
                      static_cast<unsigned long long>(live_samples_after_release),
                      static_cast<unsigned long long>(live_bytes_before_release),
@@ -240,12 +257,6 @@ bool runLiveOnlySession(spark::AllocationSampler &sampler, std::uint64_t seed)
                      static_cast<unsigned long long>(freed_samples_after_release),
                      static_cast<unsigned long long>(freed_bytes_before_release),
                      static_cast<unsigned long long>(freed_bytes_after_release));
-        return false;
-    }
-    const std::uint64_t retired_weight = live_bytes_before_release - live_bytes_after_release;
-    if (freed_bytes_after_release - freed_bytes_before_release != retired_weight) {
-        ::FreeLibrary(fixture);
-        std::fprintf(stderr, "windows allocation backend: live/freed byte accounting disagreed for retained pointer\n");
         return false;
     }
 
@@ -258,16 +269,6 @@ bool runLiveOnlySession(spark::AllocationSampler &sampler, std::uint64_t seed)
     if (treeContainsModule(released_snapshot.tree.root(), released_snapshot.modules, "spark_allocation_shim.dll")) {
         ::FreeLibrary(fixture);
         std::fprintf(stderr, "windows allocation backend: shim instrumentation frame leaked after retained free\n");
-        return false;
-    }
-    if (released_snapshot.sampled_bytes >= retained_snapshot_bytes) {
-        ::FreeLibrary(fixture);
-        std::fprintf(stderr,
-                     "windows allocation backend: live-only snapshot weight did not decrease after retained free "
-                     "(%llu -> %llu, retired=%llu)\n",
-                     static_cast<unsigned long long>(retained_snapshot_bytes),
-                     static_cast<unsigned long long>(released_snapshot.sampled_bytes),
-                     static_cast<unsigned long long>(retired_weight));
         return false;
     }
 
