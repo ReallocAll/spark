@@ -32,7 +32,7 @@ using SetHoldFn = void(__cdecl *)(int);
 using ResetEnteredFn = void(__cdecl *)();
 using EnteredFn = int(__cdecl *)();
 
-constexpr std::size_t kReloadCycles = 250;
+constexpr std::size_t kReloadCycles = 1000;
 constexpr std::size_t kWorkers = 4;
 constexpr std::uint64_t kTimeoutMs = 5000;
 constexpr wchar_t kClientName[] = L"windows_permanent_iat_backend_client.dll";
