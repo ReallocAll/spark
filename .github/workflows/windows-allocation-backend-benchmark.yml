@@ -1,0 +1,192 @@
+name: Windows Allocation Backend A-B Benchmark
+
+on:
+  push:
+    branches:
+      - "exp/windows-stable-entry-hooks"
+    paths:
+      - "CMakeLists.txt"
+      - "tests/CMakeLists.txt"
+      - "tests/allocation_benchmark.cpp"
+      - "src/native/alloc/**"
+      - ".github/workflows/windows-allocation-backend-benchmark.yml"
+  pull_request:
+    paths:
+      - "CMakeLists.txt"
+      - "tests/CMakeLists.txt"
+      - "tests/allocation_benchmark.cpp"
+      - "src/native/alloc/**"
+      - ".github/workflows/windows-allocation-backend-benchmark.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  paired-backend-benchmark:
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v7
+
+      - name: Set up MSVC environment
+        uses: TheMrMilchmann/setup-msvc-dev@v4
+        with:
+          arch: x64
+
+      - name: Select clang-cl 20
+        shell: pwsh
+        run: |
+          $llvmBin = "C:\Program Files\LLVM\bin"
+          $llvmBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          $version = & "$llvmBin\clang-cl.exe" --version
+          $version
+          if (-not ($version | Select-String "clang version 20\.")) {
+            throw "clang-cl 20 is required"
+          }
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install Conan
+        run: python -m pip install "conan>=2,<3"
+
+      - name: Cache Conan packages
+        uses: actions/cache@v5
+        with:
+          path: .conan2
+          key: ${{ runner.os }}-clang20-conan-${{ hashFiles('conanfile.py', '.conan2/profiles/default') }}
+
+      - name: Install dependencies
+        run: conan install . --build=missing
+
+      - name: Configure pinned-shim baseline from exact source SHA
+        run: >-
+          cmake --preset conan-relwithdebinfo
+          -B build/bench-shim
+          -DENDSTONE_SPARK_BUILD_SELFTEST=ON
+          -DENDSTONE_SPARK_WINDOWS_PERMANENT_IAT_EXPERIMENT=OFF
+
+      - name: Configure permanent-IAT candidate from exact source SHA
+        run: >-
+          cmake --preset conan-relwithdebinfo
+          -B build/bench-permanent
+          -DENDSTONE_SPARK_BUILD_SELFTEST=ON
+          -DENDSTONE_SPARK_WINDOWS_PERMANENT_IAT_EXPERIMENT=ON
+
+      - name: Build both benchmark backends
+        shell: pwsh
+        run: |
+          cmake --build build/bench-shim --target spark_allocation_shim spark_allocation_benchmark
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build build/bench-permanent --target spark_allocation_benchmark
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Record exact runner and binary provenance
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force evidence | Out-Null
+          $shim = (Resolve-Path "build/bench-shim/spark_allocation_benchmark.exe").Path
+          $permanent = (Resolve-Path "build/bench-permanent/spark_allocation_benchmark.exe").Path
+          $shimDll = (Resolve-Path "build/bench-shim/spark_allocation_shim.dll").Path
+          @(
+            "sha=${{ github.sha }}"
+            "runner_os=${{ runner.os }}"
+            "runner_arch=${{ runner.arch }}"
+            "image_os=$env:ImageOS"
+            "image_version=$env:ImageVersion"
+            "processor=$env:PROCESSOR_IDENTIFIER"
+            "clang=$(& 'C:\Program Files\LLVM\bin\clang-cl.exe' --version | Select-Object -First 1)"
+            "shim_benchmark_sha256=$((Get-FileHash $shim -Algorithm SHA256).Hash)"
+            "shim_dll_sha256=$((Get-FileHash $shimDll -Algorithm SHA256).Hash)"
+            "permanent_benchmark_sha256=$((Get-FileHash $permanent -Algorithm SHA256).Hash)"
+          ) | Set-Content evidence/provenance.txt
+          Get-Content evidence/provenance.txt
+
+      - name: Run interleaved A-B-B-A benchmark
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & build/bench-shim/spark_allocation_benchmark.exe | Tee-Object -FilePath evidence/shim-a.csv
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & build/bench-permanent/spark_allocation_benchmark.exe | Tee-Object -FilePath evidence/permanent-a.csv
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & build/bench-permanent/spark_allocation_benchmark.exe | Tee-Object -FilePath evidence/permanent-b.csv
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & build/bench-shim/spark_allocation_benchmark.exe | Tee-Object -FilePath evidence/shim-b.csv
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Summarize paired evidence without imposing a promotion threshold
+        shell: bash
+        run: |
+          python - <<'PY'
+          import csv
+          import json
+          import statistics
+          from pathlib import Path
+
+          files = {
+              "shim": [Path("evidence/shim-a.csv"), Path("evidence/shim-b.csv")],
+              "permanent": [Path("evidence/permanent-a.csv"), Path("evidence/permanent-b.csv")],
+          }
+
+          def read(path):
+              with path.open(newline="", encoding="utf-8-sig") as handle:
+                  rows = list(csv.DictReader(handle))
+              data = {}
+              for row in rows:
+                  key = (
+                      row["case"], row["threads"], row["interval"],
+                      row["live_only"], row["count_only"], row["operations_per_trial"],
+                  )
+                  if key in data:
+                      raise SystemExit(f"duplicate benchmark case in {path}: {key}")
+                  data[key] = float(row["ns_per_op"])
+              return data
+
+          parsed = {backend: [read(path) for path in paths] for backend, paths in files.items()}
+          keys = set(parsed["shim"][0])
+          for backend, runs in parsed.items():
+              for run in runs:
+                  if set(run) != keys:
+                      raise SystemExit(f"benchmark case mismatch for {backend}")
+
+          summary = []
+          for key in sorted(keys):
+              shim_values = [run[key] for run in parsed["shim"]]
+              permanent_values = [run[key] for run in parsed["permanent"]]
+              shim_median = statistics.median(shim_values)
+              permanent_median = statistics.median(permanent_values)
+              delta_pct = ((permanent_median / shim_median) - 1.0) * 100.0 if shim_median else None
+              summary.append({
+                  "case": key[0],
+                  "threads": int(key[1]),
+                  "interval": int(key[2]),
+                  "live_only": int(key[3]),
+                  "count_only": int(key[4]),
+                  "operations_per_trial": int(key[5]),
+                  "shim_ns_per_op": shim_values,
+                  "permanent_ns_per_op": permanent_values,
+                  "shim_paired_median_ns_per_op": shim_median,
+                  "permanent_paired_median_ns_per_op": permanent_median,
+                  "permanent_vs_shim_pct": delta_pct,
+              })
+
+          Path("evidence/summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+          with Path("evidence/summary.csv").open("w", newline="", encoding="utf-8") as handle:
+              writer = csv.DictWriter(handle, fieldnames=summary[0].keys())
+              writer.writeheader()
+              writer.writerows(summary)
+          print(json.dumps(summary, indent=2))
+          PY
+
+      - name: Upload paired benchmark evidence
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-allocation-backend-ab-${{ github.sha }}
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 30
