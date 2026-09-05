@@ -213,14 +213,18 @@ bool runLiveOnlySession(spark::AllocationSampler &sampler, std::uint64_t seed)
                      static_cast<unsigned long>(::GetLastError()));
         return false;
     }
-    const auto retain =
-        reinterpret_cast<FixtureRetainFn>(::GetProcAddress(fixture, "sparkAllocationFixtureRetain"));
-    const auto release =
-        reinterpret_cast<FixtureReleaseFn>(::GetProcAddress(fixture, "sparkAllocationFixtureRelease"));
+    const auto retain = reinterpret_cast<FixtureRetainFn>(::GetProcAddress(fixture, "sparkAllocationFixtureRetain"));
+    const auto release = reinterpret_cast<FixtureReleaseFn>(::GetProcAddress(fixture, "sparkAllocationFixtureRelease"));
     if (retain == nullptr || release == nullptr) {
         ::FreeLibrary(fixture);
         return false;
     }
+
+    // Isolate post-refresh semantics from the known late-load window: wait past
+    // the production refresh interval, then force an onTick refresh before the
+    // allocation whose exact free lifecycle is asserted below.
+    std::this_thread::sleep_for(std::chrono::milliseconds(2250));
+    sampler.onTick(1.0);
 
     void *retained = nullptr;
     std::uint64_t retained_weight = 0;
