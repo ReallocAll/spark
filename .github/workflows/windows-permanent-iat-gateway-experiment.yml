@@ -43,7 +43,16 @@ jobs:
     runs-on: windows-2022
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
+      - name: Checkout exact candidate
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify exact candidate checkout
+        shell: pwsh
+        run: |
+          $expected = "${{ github.event.pull_request.head.sha || github.sha }}"
+          $checkout = (& git rev-parse HEAD).Trim()
+          if ($checkout -ne $expected) { throw "checkout SHA mismatch: expected $expected, got $checkout" }
       - name: Set up MSVC environment
         uses: TheMrMilchmann/setup-msvc-dev@v4
         with:
@@ -65,7 +74,16 @@ jobs:
     runs-on: windows-2022
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
+      - name: Checkout exact candidate
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify exact candidate checkout
+        shell: pwsh
+        run: |
+          $expected = "${{ github.event.pull_request.head.sha || github.sha }}"
+          $checkout = (& git rev-parse HEAD).Trim()
+          if ($checkout -ne $expected) { throw "checkout SHA mismatch: expected $expected, got $checkout" }
       - name: Set up MSVC environment
         uses: TheMrMilchmann/setup-msvc-dev@v4
         with:
@@ -87,7 +105,16 @@ jobs:
     runs-on: windows-2022
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
+      - name: Checkout exact candidate
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify exact candidate checkout
+        shell: pwsh
+        run: |
+          $expected = "${{ github.event.pull_request.head.sha || github.sha }}"
+          $checkout = (& git rev-parse HEAD).Trim()
+          if ($checkout -ne $expected) { throw "checkout SHA mismatch: expected $expected, got $checkout" }
       - name: Set up MSVC environment
         uses: TheMrMilchmann/setup-msvc-dev@v4
         with:
@@ -109,7 +136,16 @@ jobs:
     runs-on: windows-2022
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
+      - name: Checkout exact candidate
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify exact candidate checkout
+        shell: pwsh
+        run: |
+          $expected = "${{ github.event.pull_request.head.sha || github.sha }}"
+          $checkout = (& git rev-parse HEAD).Trim()
+          if ($checkout -ne $expected) { throw "checkout SHA mismatch: expected $expected, got $checkout" }
       - name: Set up MSVC environment
         uses: TheMrMilchmann/setup-msvc-dev@v4
         with:
@@ -137,7 +173,16 @@ jobs:
     runs-on: windows-2022
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
+      - name: Checkout exact candidate
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify exact candidate checkout
+        shell: pwsh
+        run: |
+          $expected = "${{ github.event.pull_request.head.sha || github.sha }}"
+          $checkout = (& git rev-parse HEAD).Trim()
+          if ($checkout -ne $expected) { throw "checkout SHA mismatch: expected $expected, got $checkout" }
       - name: Set up MSVC environment
         uses: TheMrMilchmann/setup-msvc-dev@v4
         with:
