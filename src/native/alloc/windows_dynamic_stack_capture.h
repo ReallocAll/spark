@@ -27,9 +27,11 @@ constexpr std::size_t kPermanentIatGatewayCodeCapacity = 128;
 constexpr std::size_t kGatewayStateAbiOffset = 8;
 constexpr std::size_t kGatewayStateGatewayOffset = 56;
 constexpr std::size_t kGatewayStateBytesNeeded = kGatewayStateGatewayOffset + sizeof(void *);
+constexpr std::size_t kPermanentIatGatewayCacheCapacity = 8;
 constexpr ULONG kMaximumWalkSteps = 256;
 
-inline thread_local DWORD64 cachedPermanentIatGatewayImageBase = 0;
+inline thread_local DWORD64 cachedPermanentIatGatewayImageBases[kPermanentIatGatewayCacheCapacity]{};
+inline thread_local std::size_t cachedPermanentIatGatewayInsertIndex = 0;
 
 [[nodiscard]] inline bool readableRange(std::uintptr_t address, std::size_t bytes) noexcept
 {
@@ -57,12 +59,15 @@ inline thread_local DWORD64 cachedPermanentIatGatewayImageBase = 0;
         return false;
     }
 
-    // A validated permanent-IAT gateway is intentionally process-lifetime: its
-    // code/state are never reclaimed or reused before process exit. Remember the
-    // last positive image base per thread so high-frequency sampling does not
-    // repeat VirtualQuery and magic/state validation on every unwind.
-    if (image_base == cachedPermanentIatGatewayImageBase) {
-        return true;
+    // Validated permanent-IAT gateways are intentionally process-lifetime: their
+    // code/state are never reclaimed or reused before process exit. Keep several
+    // positive image bases per thread because normal allocator traffic alternates
+    // between multiple permanent gateways (for example malloc/free), making a
+    // single-entry cache thrash even though every cached positive remains valid.
+    for (const DWORD64 cached_image_base : cachedPermanentIatGatewayImageBases) {
+        if (image_base == cached_image_base) {
+            return true;
+        }
     }
 
     if (!readableRange(static_cast<std::uintptr_t>(image_base), 10)) {
@@ -90,7 +95,9 @@ inline thread_local DWORD64 cachedPermanentIatGatewayImageBase = 0;
     const bool validated = magic == kPermanentIatGatewayMagic && abi_version == kPermanentIatGatewayAbiVersion &&
                            gateway_value == image_base;
     if (validated) {
-        cachedPermanentIatGatewayImageBase = image_base;
+        cachedPermanentIatGatewayImageBases[cachedPermanentIatGatewayInsertIndex] = image_base;
+        cachedPermanentIatGatewayInsertIndex =
+            (cachedPermanentIatGatewayInsertIndex + 1) % kPermanentIatGatewayCacheCapacity;
     }
     return validated;
 }
