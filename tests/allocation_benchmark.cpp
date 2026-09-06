@@ -60,13 +60,18 @@ double runTrials(std::size_t threads, std::size_t operations_per_thread)
 
 void printResult(const char *name, std::size_t threads, std::int32_t interval, bool live_only, bool count_only,
                  std::size_t operations_per_thread, double elapsed_ns, std::uint64_t samples, std::uint64_t dropped,
-                 std::uint64_t observed_bytes)
+                 std::uint64_t observed_bytes, std::uint64_t hook_calls = 0,
+                 std::uint64_t successful_allocation_calls = 0, std::uint64_t sampling_points = 0,
+                 std::uint64_t filtered_samples = 0)
 {
     const auto operations = static_cast<double>(threads * operations_per_thread);
-    std::printf("%s,%zu,%d,%d,%d,%zu,%.0f,%.2f,%llu,%llu,%llu\n", name, threads, interval, live_only ? 1 : 0,
-                count_only ? 1 : 0, threads * operations_per_thread, elapsed_ns, elapsed_ns / operations,
-                static_cast<unsigned long long>(samples), static_cast<unsigned long long>(dropped),
-                static_cast<unsigned long long>(observed_bytes));
+    std::printf("%s,%zu,%d,%d,%d,%zu,%.0f,%.2f,%llu,%llu,%llu,%llu,%llu,%llu,%llu\n", name, threads, interval,
+                live_only ? 1 : 0, count_only ? 1 : 0, threads * operations_per_thread, elapsed_ns,
+                elapsed_ns / operations, static_cast<unsigned long long>(samples),
+                static_cast<unsigned long long>(dropped), static_cast<unsigned long long>(observed_bytes),
+                static_cast<unsigned long long>(hook_calls),
+                static_cast<unsigned long long>(successful_allocation_calls),
+                static_cast<unsigned long long>(sampling_points), static_cast<unsigned long long>(filtered_samples));
 }
 
 bool runProfiledCase(spark::AllocationSampler &sampler, const char *name, std::size_t threads, std::int32_t interval,
@@ -99,7 +104,8 @@ bool runProfiledCase(spark::AllocationSampler &sampler, const char *name, std::s
     const std::uint64_t dropped = sampler.droppedSamples();
 #endif
     printResult(name, threads, interval, live_only, count_only, operations_per_thread, elapsed, sampler.sampleCount(),
-                dropped, sampler.observedBytes());
+                dropped, sampler.observedBytes(), sampler.hookCalls(), sampler.successfulAllocationCalls(),
+                sampler.samplingPoints(), sampler.filteredSamples());
     return true;
 }
 
@@ -111,7 +117,8 @@ int main()
     constexpr std::size_t k_pressure_operations = 16384;
 
     std::printf("case,threads,interval,live_only,count_only,operations_per_trial,median_ns,"
-                "ns_per_op,samples_all_trials,dropped_all_trials,observed_bytes\n");
+                "ns_per_op,samples_all_trials,dropped_all_trials,observed_bytes,hook_calls,"
+                "successful_allocation_calls,sampling_points,filtered_samples\n");
     printResult("unprofiled", 1, 0, false, false, k_operations, runTrials(1, k_operations), 0, 0, 0);
     printResult("unprofiled", 4, 0, false, false, k_operations, runTrials(4, k_operations), 0, 0, 0);
 
