@@ -286,11 +286,15 @@ jobs:
               raise RuntimeError("BDS did not stop within 45 seconds after CTRL_BREAK_EVENT")
           reader.join(timeout=5)
 
+          normalized_exit = exit_code & 0xFFFFFFFF
+          control_break_exit = 0xC000013A
           with (evidence / "provenance.txt").open("a", encoding="utf-8") as out:
               out.write("shutdown_signal=CTRL_BREAK_EVENT\n")
+              out.write(f"shutdown_exit_code={exit_code}\n")
+              out.write(f"shutdown_exit_code_hex=0x{normalized_exit:08X}\n")
 
-          if exit_code != 0:
-              raise RuntimeError(f"BDS exited with code {exit_code}")
+          if exit_code != 0 and normalized_exit != control_break_exit:
+              raise RuntimeError(f"BDS exited with unexpected code {exit_code} (0x{normalized_exit:08X})")
           dumps = list(server.rglob("*.dmp"))
           if dumps:
               raise RuntimeError("BDS replay produced crash dumps: " + ", ".join(str(p) for p in dumps))
