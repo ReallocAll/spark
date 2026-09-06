@@ -98,12 +98,14 @@ jobs:
 
       - name: Configure exact-head no-shim plugin
         shell: pwsh
-        run: >-
-          cmake --preset conan-relwithdebinfo
-          -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
-          -DENDSTONE_SPARK_BUILD_SELFTEST=OFF
-          -DENDSTONE_SPARK_WINDOWS_PERMANENT_IAT_EXPERIMENT=ON
-          -DENDSTONE_SPARK_ENDSTONE_GIT_TAG=$env:ENDSTONE_REF
+        run: |
+          $endstoneRef = $env:ENDSTONE_REF
+          & cmake --preset conan-relwithdebinfo `
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON `
+            -DENDSTONE_SPARK_BUILD_SELFTEST=OFF `
+            -DENDSTONE_SPARK_WINDOWS_PERMANENT_IAT_EXPERIMENT=ON `
+            "-DENDSTONE_SPARK_ENDSTONE_GIT_TAG=$endstoneRef"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build exact-head no-shim plugin
         run: cmake --build --preset conan-relwithdebinfo --target spark
