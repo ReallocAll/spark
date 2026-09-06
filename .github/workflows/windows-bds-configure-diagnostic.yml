@@ -62,9 +62,12 @@ jobs:
       - name: Install pinned Endstone develop runtime
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Continue'
           $endstoneRef = "46eff9f125f52eac76472d84339ead8fbf51fcd2"
-          python -m pip install --force-reinstall "git+https://github.com/EndstoneMC/endstone.git@$endstoneRef"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & python -m pip install --force-reinstall "git+https://github.com/EndstoneMC/endstone.git@$endstoneRef" *>&1 |
+            Tee-Object -FilePath evidence/endstone-runtime-install.log
+          $code = $LASTEXITCODE
+          if ($code -ne 0) { exit $code }
           $installedVersion = (python -c "import endstone; print(endstone.__version__)").Trim()
           "ENDSTONE_REF=$endstoneRef" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           @(
