@@ -59,12 +59,19 @@ jobs:
       - name: Install build dependencies
         run: python -m pip install "conan>=2,<3"
 
-      - name: Install released Endstone runtime
+      - name: Install pinned Endstone develop runtime
         shell: pwsh
         run: |
-          python -m pip install --force-reinstall "endstone==0.11.10"
+          $endstoneRef = "46eff9f125f52eac76472d84339ead8fbf51fcd2"
+          python -m pip install --force-reinstall "git+https://github.com/EndstoneMC/endstone.git@$endstoneRef"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          "endstone_version=$((python -c 'import endstone; print(endstone.__version__)').Trim())" | Add-Content evidence/provenance.txt
+          $installedVersion = (python -c "import endstone; print(endstone.__version__)").Trim()
+          "ENDSTONE_REF=$endstoneRef" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          @(
+            "endstone_ref=$endstoneRef"
+            "endstone_runtime_source=git-source"
+            "endstone_version=$installedVersion"
+          ) | Add-Content evidence/provenance.txt
 
       - name: Cache Conan packages
         uses: actions/cache@v5
@@ -79,7 +86,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue'
-          $endstoneRef = "v0.11.10"
+          $endstoneRef = $env:ENDSTONE_REF
           & cmake --preset conan-relwithdebinfo `
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON `
             -DENDSTONE_SPARK_BUILD_SELFTEST=OFF `
