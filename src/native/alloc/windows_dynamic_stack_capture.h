@@ -29,6 +29,8 @@ constexpr std::size_t kGatewayStateGatewayOffset = 56;
 constexpr std::size_t kGatewayStateBytesNeeded = kGatewayStateGatewayOffset + sizeof(void *);
 constexpr ULONG kMaximumWalkSteps = 256;
 
+inline thread_local DWORD64 cachedPermanentIatGatewayImageBase = 0;
+
 [[nodiscard]] inline bool readableRange(std::uintptr_t address, std::size_t bytes) noexcept
 {
     if (address == 0 || bytes == 0 || address > (std::numeric_limits<std::uintptr_t>::max)() - bytes) {
@@ -51,8 +53,19 @@ constexpr ULONG kMaximumWalkSteps = 256;
     if (control_pc == 0 || image_base == 0 || function == nullptr ||
         function->BeginAddress >= kPermanentIatGatewayCodeCapacity ||
         function->EndAddress > kPermanentIatGatewayCodeCapacity || control_pc < image_base + function->BeginAddress ||
-        control_pc >= image_base + function->EndAddress ||
-        !readableRange(static_cast<std::uintptr_t>(image_base), 10)) {
+        control_pc >= image_base + function->EndAddress) {
+        return false;
+    }
+
+    // A validated permanent-IAT gateway is intentionally process-lifetime: its
+    // code/state are never reclaimed or reused before process exit. Remember the
+    // last positive image base per thread so high-frequency sampling does not
+    // repeat VirtualQuery and magic/state validation on every unwind.
+    if (image_base == cachedPermanentIatGatewayImageBase) {
+        return true;
+    }
+
+    if (!readableRange(static_cast<std::uintptr_t>(image_base), 10)) {
         return false;
     }
 
@@ -74,8 +87,12 @@ constexpr ULONG kMaximumWalkSteps = 256;
     std::memcpy(&magic, state, sizeof(magic));
     std::memcpy(&abi_version, state + kGatewayStateAbiOffset, sizeof(abi_version));
     std::memcpy(&gateway_value, state + kGatewayStateGatewayOffset, sizeof(gateway_value));
-    return magic == kPermanentIatGatewayMagic && abi_version == kPermanentIatGatewayAbiVersion &&
-           gateway_value == image_base;
+    const bool validated = magic == kPermanentIatGatewayMagic && abi_version == kPermanentIatGatewayAbiVersion &&
+                           gateway_value == image_base;
+    if (validated) {
+        cachedPermanentIatGatewayImageBase = image_base;
+    }
+    return validated;
 }
 
 [[nodiscard]] inline bool currentStackBounds(std::uintptr_t &low, std::uintptr_t &high) noexcept
