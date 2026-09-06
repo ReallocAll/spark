@@ -158,14 +158,28 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          & build/bench-shim/spark_allocation_benchmark.exe | Tee-Object -FilePath evidence/shim-a.csv
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & build/bench-permanent/spark_allocation_benchmark.exe | Tee-Object -FilePath evidence/permanent-a.csv
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & build/bench-permanent/spark_allocation_benchmark.exe | Tee-Object -FilePath evidence/permanent-b.csv
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & build/bench-shim/spark_allocation_benchmark.exe | Tee-Object -FilePath evidence/shim-b.csv
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          function Invoke-Benchmark([string]$Name, [string]$Executable) {
+            $csv = "evidence/$Name.csv"
+            $stderr = "evidence/$Name.stderr.txt"
+            "starting=$Name" | Add-Content evidence/benchmark-stage.txt
+            & $Executable 1> $csv 2> $stderr
+            $code = $LASTEXITCODE
+            "exit_code=$code" | Add-Content evidence/benchmark-stage.txt
+            if (Test-Path $csv) { Get-Content $csv }
+            if (Test-Path $stderr) {
+              $errorText = Get-Content $stderr
+              if ($errorText) { $errorText | Write-Host }
+            }
+            if ($code -ne 0) {
+              throw "Benchmark '$Name' exited with code $code"
+            }
+          }
+
+          Invoke-Benchmark "shim-a" "build/bench-shim/spark_allocation_benchmark.exe"
+          Invoke-Benchmark "permanent-a" "build/bench-permanent/spark_allocation_benchmark.exe"
+          Invoke-Benchmark "permanent-b" "build/bench-permanent/spark_allocation_benchmark.exe"
+          Invoke-Benchmark "shim-b" "build/bench-shim/spark_allocation_benchmark.exe"
 
       - name: Summarize paired evidence without imposing a promotion threshold
         shell: bash
@@ -232,9 +246,10 @@ jobs:
           PY
 
       - name: Upload paired benchmark evidence
+        if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: windows-allocation-backend-ab-${{ github.sha }}
+          name: windows-allocation-backend-ab-${{ github.sha }}-${{ github.run_id }}
           path: evidence/
           if-no-files-found: error
           retention-days: 30
