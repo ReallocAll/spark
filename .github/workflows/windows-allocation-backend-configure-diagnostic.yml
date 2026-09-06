@@ -1,0 +1,98 @@
+name: Windows Allocation Backend Configure Diagnostic
+
+on:
+  push:
+    branches:
+      - "exp/windows-stable-entry-hooks"
+    paths:
+      - ".github/workflows/windows-allocation-backend-configure-diagnostic.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose-pinned-shim-configure:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v7
+
+      - name: Set up MSVC environment
+        uses: TheMrMilchmann/setup-msvc-dev@v4
+        with:
+          arch: x64
+
+      - name: Select clang-cl 20
+        shell: pwsh
+        run: |
+          $llvmBin = "C:\Program Files\LLVM\bin"
+          $llvmBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          $version = & "$llvmBin\clang-cl.exe" --version
+          $version
+          if (-not ($version | Select-String "clang version 20\.")) {
+            throw "clang-cl 20 is required"
+          }
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install Conan
+        run: python -m pip install "conan>=2,<3"
+
+      - name: Install dependencies
+        run: conan install . --build=missing
+
+      - name: Capture configure diagnostics
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force evidence | Out-Null
+          "sha=${{ github.sha }}" | Set-Content evidence/provenance.txt
+          "pwd=$PWD" | Add-Content evidence/provenance.txt
+          "cmake=$(& cmake --version | Select-Object -First 1)" | Add-Content evidence/provenance.txt
+          "ninja=$(& ninja --version)" | Add-Content evidence/provenance.txt
+          "clang=$(& 'C:\Program Files\LLVM\bin\clang-cl.exe' --version | Select-Object -First 1)" | Add-Content evidence/provenance.txt
+
+          $toolchain = Join-Path $PWD "build/RelWithDebInfo/generators/conan_toolchain.cmake"
+          "toolchain=$toolchain" | Add-Content evidence/provenance.txt
+          "toolchain_exists=$(Test-Path $toolchain)" | Add-Content evidence/provenance.txt
+          if (Test-Path "build/RelWithDebInfo/generators") {
+            Get-ChildItem "build/RelWithDebInfo/generators" -Recurse |
+              Select-Object FullName, Length, LastWriteTime |
+              Format-Table -AutoSize |
+              Out-String -Width 4096 |
+              Set-Content evidence/conan-generators.txt
+          }
+
+          & cmake -S . -B build/bench-shim -G Ninja `
+            "-DCMAKE_TOOLCHAIN_FILE=$toolchain" `
+            "-DCMAKE_BUILD_TYPE=RelWithDebInfo" `
+            "-DENDSTONE_SPARK_BUILD_SELFTEST=ON" `
+            "-DENDSTONE_SPARK_WINDOWS_PERMANENT_IAT_EXPERIMENT=OFF" *>&1 |
+            Tee-Object -FilePath evidence/configure-shim.log
+          $configureExit = $LASTEXITCODE
+          "configure_exit_code=$configureExit" | Add-Content evidence/provenance.txt
+
+          $configureLog = "build/bench-shim/CMakeFiles/CMakeConfigureLog.yaml"
+          if (Test-Path $configureLog) {
+            Copy-Item $configureLog evidence/CMakeConfigureLog.yaml
+          }
+          $cache = "build/bench-shim/CMakeCache.txt"
+          if (Test-Path $cache) {
+            Copy-Item $cache evidence/CMakeCache.txt
+          }
+
+          Get-Content evidence/provenance.txt
+          exit $configureExit
+
+      - name: Upload configure diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-allocation-configure-diagnostic-${{ github.sha }}
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 14
