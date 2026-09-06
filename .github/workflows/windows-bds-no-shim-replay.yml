@@ -274,12 +274,26 @@ jobs:
           run_profile(4096)
 
           send("stop")
+          stop_probe_deadline = time.monotonic() + 8
+          slash_stop_sent = False
+          while process.poll() is None and time.monotonic() < stop_probe_deadline:
+              if log_path.exists():
+                  log_tail = log_path.read_text(encoding="utf-8", errors="replace")[-4096:]
+                  if "Unknown command: stop" in log_tail:
+                      send("/stop")
+                      slash_stop_sent = True
+                      break
+              time.sleep(0.25)
+
           try:
               exit_code = process.wait(timeout=45)
           except subprocess.TimeoutExpired:
               process.kill()
               raise RuntimeError("BDS did not stop within 45 seconds")
           reader.join(timeout=5)
+
+          with (evidence / "provenance.txt").open("a", encoding="utf-8") as out:
+              out.write(f"slash_stop_fallback={str(slash_stop_sent).lower()}\n")
 
           if exit_code != 0:
               raise RuntimeError(f"BDS exited with code {exit_code}")
