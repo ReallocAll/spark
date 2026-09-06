@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <string>
 #include <thread>
 #include <vector>
@@ -115,6 +116,101 @@ double runStackCaptureTrials(bool dynamic, std::size_t threads, std::size_t oper
     std::ranges::sort(trials);
     return trials[trials.size() / 2];
 }
+
+struct GatewayClassificationFixture {
+    static constexpr std::size_t kGatewayCount = 16;
+    struct Gateway {
+        void *code = nullptr;
+        void *state = nullptr;
+        RUNTIME_FUNCTION function{};
+    };
+    Gateway gateways[kGatewayCount]{};
+
+    bool initialize()
+    {
+        using namespace spark::dynamic_stack_capture_detail;
+        for (Gateway &gateway : gateways) {
+            gateway.code = ::VirtualAlloc(nullptr, 4096, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+            gateway.state = ::VirtualAlloc(nullptr, 4096, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+            if (gateway.code == nullptr || gateway.state == nullptr) {
+                return false;
+            }
+            auto *code = static_cast<std::uint8_t *>(gateway.code);
+            code[0] = 0x49;
+            code[1] = 0xBB;
+            const auto state_value = reinterpret_cast<std::uint64_t>(gateway.state);
+            std::memcpy(code + 2, &state_value, sizeof(state_value));
+
+            auto *state = static_cast<std::uint8_t *>(gateway.state);
+            const std::uint64_t magic = kPermanentIatGatewayMagic;
+            const std::uint32_t abi = kPermanentIatGatewayAbiVersion;
+            const auto gateway_value = reinterpret_cast<std::uint64_t>(gateway.code);
+            std::memcpy(state, &magic, sizeof(magic));
+            std::memcpy(state + kGatewayStateAbiOffset, &abi, sizeof(abi));
+            std::memcpy(state + kGatewayStateGatewayOffset, &gateway_value, sizeof(gateway_value));
+            gateway.function.BeginAddress = 0;
+            gateway.function.EndAddress = 10;
+        }
+        return true;
+    }
+
+    ~GatewayClassificationFixture()
+    {
+        for (Gateway &gateway : gateways) {
+            if (gateway.code != nullptr) {
+                ::VirtualFree(gateway.code, 0, MEM_RELEASE);
+            }
+            if (gateway.state != nullptr) {
+                ::VirtualFree(gateway.state, 0, MEM_RELEASE);
+            }
+        }
+    }
+};
+
+void gatewayClassificationWork(const GatewayClassificationFixture &fixture, bool cold, std::size_t operations)
+{
+    using namespace spark::dynamic_stack_capture_detail;
+    volatile std::size_t validated = 0;
+    const std::size_t active_gateways = cold ? GatewayClassificationFixture::kGatewayCount : 1;
+    for (std::size_t i = 0; i < operations; ++i) {
+        const auto &gateway = fixture.gateways[i % active_gateways];
+        const auto image_base = reinterpret_cast<DWORD64>(gateway.code);
+        validated += permanentIatGatewayFrame(image_base + 2, image_base, &gateway.function) ? 1U : 0U;
+    }
+    (void)validated;
+}
+
+double measureGatewayClassification(const GatewayClassificationFixture &fixture, bool cold, std::size_t threads,
+                                    std::size_t operations_per_thread)
+{
+    const auto start = Clock::now();
+    if (threads == 1) {
+        gatewayClassificationWork(fixture, cold, operations_per_thread);
+    }
+    else {
+        std::vector<std::thread> workers;
+        workers.reserve(threads);
+        for (std::size_t i = 0; i < threads; ++i) {
+            workers.emplace_back(gatewayClassificationWork, std::cref(fixture), cold, operations_per_thread);
+        }
+        for (std::thread &worker : workers) {
+            worker.join();
+        }
+    }
+    return std::chrono::duration<double, std::nano>(Clock::now() - start).count();
+}
+
+double runGatewayClassificationTrials(const GatewayClassificationFixture &fixture, bool cold, std::size_t threads,
+                                      std::size_t operations_per_thread)
+{
+    std::vector<double> trials;
+    trials.reserve(5);
+    for (int trial = 0; trial < 5; ++trial) {
+        trials.push_back(measureGatewayClassification(fixture, cold, threads, operations_per_thread));
+    }
+    std::ranges::sort(trials);
+    return trials[trials.size() / 2];
+}
 #endif
 
 void printResult(const char *name, std::size_t threads, std::int32_t interval, bool live_only, bool count_only,
@@ -176,6 +272,7 @@ int main()
     constexpr std::size_t k_pressure_operations = 16384;
 #ifdef _WIN32
     constexpr std::size_t k_stack_capture_operations = 20000;
+    constexpr std::size_t k_gateway_classification_operations = 100000;
 #endif
 
     std::printf("case,threads,interval,live_only,count_only,operations_per_trial,median_ns,"
@@ -192,6 +289,24 @@ int main()
                 runStackCaptureTrials(false, 4, k_stack_capture_operations), 0, 0, 0);
     printResult("stack-dynamic", 4, 0, false, false, k_stack_capture_operations,
                 runStackCaptureTrials(true, 4, k_stack_capture_operations), 0, 0, 0);
+
+    GatewayClassificationFixture gateway_fixture;
+    if (!gateway_fixture.initialize()) {
+        std::fprintf(stderr, "gateway classification fixture initialization failed\n");
+        return 1;
+    }
+    printResult("gateway-classify-warm", 1, 0, false, false, k_gateway_classification_operations,
+                runGatewayClassificationTrials(gateway_fixture, false, 1, k_gateway_classification_operations), 0, 0,
+                0);
+    printResult("gateway-classify-cold", 1, 0, false, false, k_gateway_classification_operations,
+                runGatewayClassificationTrials(gateway_fixture, true, 1, k_gateway_classification_operations), 0, 0,
+                0);
+    printResult("gateway-classify-warm", 4, 0, false, false, k_gateway_classification_operations,
+                runGatewayClassificationTrials(gateway_fixture, false, 4, k_gateway_classification_operations), 0, 0,
+                0);
+    printResult("gateway-classify-cold", 4, 0, false, false, k_gateway_classification_operations,
+                runGatewayClassificationTrials(gateway_fixture, true, 4, k_gateway_classification_operations), 0, 0,
+                0);
 #endif
 
     spark::AllocationSampler sampler;
