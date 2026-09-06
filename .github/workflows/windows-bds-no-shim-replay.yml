@@ -84,7 +84,7 @@ jobs:
           -DENDSTONE_SPARK_WINDOWS_PERMANENT_IAT_EXPERIMENT=ON
 
       - name: Build exact-head no-shim plugin
-        run: cmake --build --preset conan-relwithdebinfo --target endstone_spark
+        run: cmake --build --preset conan-relwithdebinfo --target spark
 
       - name: Verify no-shim carrier artifact
         shell: pwsh
