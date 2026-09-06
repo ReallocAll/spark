@@ -318,6 +318,16 @@ bool AllocationSampler::failure(std::string &error) const
     return false;
 }
 
+const char *AllocationSampler::backendId() noexcept
+{
+    return "native-allocation/unsupported";
+}
+
+const char *AllocationSampler::backendName() noexcept
+{
+    return "Unsupported native allocation backend";
+}
+
 const std::vector<AllocationHookCapability> &AllocationSampler::hookCapabilities() const
 {
     return impl_->capabilities;

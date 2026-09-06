@@ -2216,6 +2216,16 @@ bool AllocationSampler::failure(std::string &error) const
     error = impl_->aggregator_failure.data();
     return true;
 }
+const char *AllocationSampler::backendId() noexcept
+{
+    return "native-glibc/elf-import";
+}
+
+const char *AllocationSampler::backendName() noexcept
+{
+    return "Linux glibc/ELF import slots";
+}
+
 const std::vector<AllocationHookCapability> &AllocationSampler::hookCapabilities() const
 {
     return impl_->hook_capabilities;

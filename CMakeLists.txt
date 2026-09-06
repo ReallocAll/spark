@@ -6,6 +6,11 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(ENDSTONE_SPARK_BUILD_SELFTEST "Build the offline sampler self-test tool" ON)
+option(ENDSTONE_SPARK_WINDOWS_PERMANENT_IAT_EXPERIMENT
+        "Build the experimental shimless permanent-IAT Windows allocation backend" OFF)
+if (ENDSTONE_SPARK_WINDOWS_PERMANENT_IAT_EXPERIMENT AND NOT WIN32)
+    message(FATAL_ERROR "ENDSTONE_SPARK_WINDOWS_PERMANENT_IAT_EXPERIMENT is Windows-only")
+endif ()
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
@@ -72,9 +77,10 @@ if (WIN32)
     add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
 endif ()
 
-# The Windows allocation profiler patches IAT slots to this process-lifetime
-# trampoline module instead of pointing them directly into the unloadable plugin.
-if (WIN32)
+# Production Windows builds retain the pinned process-lifetime shim. The
+# permanent-IAT experiment intentionally omits this target so the resulting
+# plugin artifact can prove a single-DLL deployment before any promotion.
+if (WIN32 AND NOT ENDSTONE_SPARK_WINDOWS_PERMANENT_IAT_EXPERIMENT)
     add_library(spark_allocation_shim SHARED
             src/native/alloc/windows_allocation_shim.cpp)
     target_include_directories(spark_allocation_shim PRIVATE src)
@@ -114,10 +120,19 @@ if (WIN32)
             src/native/symbol/symbol_guess_windows_misc.cpp
             src/native/sampler/capture_windows.cpp
             src/native/alloc/allocation_sampler_windows.cpp
-            src/native/alloc/windows_iat_funchook_compat.cpp
             src/native/alloc/windows_iat_hooks.cpp
             src/native/alloc/windows_iat_hooks_windows.cpp
             src/native/alloc/windows_thread_suspension.cpp)
+    if (ENDSTONE_SPARK_WINDOWS_PERMANENT_IAT_EXPERIMENT)
+        target_sources(spark_native PRIVATE
+                src/native/alloc/windows_permanent_iat_gateway_experiment.cpp
+                src/native/alloc/windows_permanent_iat_gateway_registry_experiment.cpp
+                src/native/alloc/windows_permanent_iat_funchook_compat.cpp)
+        target_compile_definitions(spark_native PRIVATE ENDSTONE_SPARK_WINDOWS_PERMANENT_IAT_EXPERIMENT=1)
+    else ()
+        target_sources(spark_native PRIVATE
+                src/native/alloc/windows_iat_funchook_compat.cpp)
+    endif ()
 elseif (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
     target_sources(spark_native PRIVATE
             src/native/sampler/capture_linux.cpp
