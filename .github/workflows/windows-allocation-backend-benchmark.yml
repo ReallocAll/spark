@@ -29,6 +29,8 @@ jobs:
     steps:
       - name: Checkout exact candidate
         uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Set up MSVC environment
         uses: TheMrMilchmann/setup-msvc-dev@v4
@@ -67,10 +69,18 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force evidence | Out-Null
+          $expected = "${{ github.event.pull_request.head.sha || github.sha }}"
+          $checkout = (& git rev-parse HEAD).Trim()
+          if ($checkout -ne $expected) {
+            throw "checkout SHA mismatch: expected $expected, got $checkout"
+          }
           $toolchain = (Resolve-Path "build/RelWithDebInfo/generators/conan_toolchain.cmake").Path
+          "CANDIDATE_SHA=$expected" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "CONAN_TOOLCHAIN=$toolchain" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           @(
-            "sha=${{ github.sha }}"
+            "candidate_sha=$expected"
+            "event_sha=${{ github.sha }}"
+            "checkout_sha=$checkout"
             "pwd=$PWD"
             "toolchain=$toolchain"
             "toolchain_exists=$(Test-Path $toolchain)"
@@ -121,7 +131,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v7
         with:
-          name: windows-allocation-backend-configure-failure-${{ github.sha }}-${{ github.run_id }}
+          name: windows-allocation-backend-configure-failure-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_id }}
           path: evidence/
           if-no-files-found: error
           retention-days: 14
@@ -141,7 +151,9 @@ jobs:
           $permanent = (Resolve-Path "build/bench-permanent/spark_allocation_benchmark.exe").Path
           $shimDll = (Resolve-Path "build/bench-shim/spark_allocation_shim.dll").Path
           @(
-            "sha=${{ github.sha }}"
+            "candidate_sha=$env:CANDIDATE_SHA"
+            "event_sha=${{ github.sha }}"
+            "checkout_sha=$((& git rev-parse HEAD).Trim())"
             "runner_os=${{ runner.os }}"
             "runner_arch=${{ runner.arch }}"
             "image_os=$env:ImageOS"
@@ -249,7 +261,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: windows-allocation-backend-ab-${{ github.sha }}-${{ github.run_id }}
+          name: windows-allocation-backend-ab-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_id }}
           path: evidence/
           if-no-files-found: error
           retention-days: 30
