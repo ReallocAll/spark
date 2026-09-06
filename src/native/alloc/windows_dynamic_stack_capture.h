@@ -23,6 +23,7 @@ namespace dynamic_stack_capture_detail {
 
 constexpr std::uint64_t kPermanentIatGatewayMagic = 0x3154414947504B53ULL;  // "SKPGIAT1".
 constexpr std::uint32_t kPermanentIatGatewayAbiVersion = 2;
+constexpr std::size_t kPermanentIatGatewayCodeCapacity = 128;
 constexpr std::size_t kGatewayStateAbiOffset = 8;
 constexpr std::size_t kGatewayStateGatewayOffset = 56;
 constexpr std::size_t kGatewayStateBytesNeeded = kGatewayStateGatewayOffset + sizeof(void *);
@@ -47,7 +48,9 @@ constexpr ULONG kMaximumWalkSteps = 256;
 [[nodiscard]] inline bool permanentIatGatewayFrame(DWORD64 control_pc, DWORD64 image_base,
                                                    const RUNTIME_FUNCTION *function) noexcept
 {
-    if (control_pc == 0 || image_base == 0 || function == nullptr || control_pc < image_base + function->BeginAddress ||
+    if (control_pc == 0 || image_base == 0 || function == nullptr ||
+        function->BeginAddress >= kPermanentIatGatewayCodeCapacity ||
+        function->EndAddress > kPermanentIatGatewayCodeCapacity || control_pc < image_base + function->BeginAddress ||
         control_pc >= image_base + function->EndAddress ||
         !readableRange(static_cast<std::uintptr_t>(image_base), 10)) {
         return false;
@@ -135,8 +138,8 @@ constexpr ULONG kMaximumWalkSteps = 256;
     ULONG skipped = 0;
     USHORT captured = 0;
     ULONG hash = 0;
-    for (ULONG step = 0; step < dynamic_stack_capture_detail::kMaximumWalkSteps && captured < frames_to_capture;
-         ++step) {
+    bool candidate_frame = false;
+    for (ULONG step = 0; step < dynamic_stack_capture_detail::kMaximumWalkSteps; ++step) {
         const DWORD64 previous_rip = context.Rip;
         const DWORD64 previous_rsp = context.Rsp;
         if (previous_rip == 0 || previous_rsp == 0) {
@@ -145,6 +148,25 @@ constexpr ULONG kMaximumWalkSteps = 256;
 
         DWORD64 image_base = 0;
         PRUNTIME_FUNCTION function = ::RtlLookupFunctionEntry(context.Rip, &image_base, &history);
+
+        // The previous iteration already unwound to this frame. Classify and
+        // emit it before unwinding again so each stack level needs only one
+        // RtlLookupFunctionEntry call. The first captured CONTEXT is internal
+        // to this helper and therefore is never emitted.
+        if (candidate_frame &&
+            !dynamic_stack_capture_detail::permanentIatGatewayFrame(context.Rip, image_base, function)) {
+            if (skipped < frames_to_skip) {
+                ++skipped;
+            }
+            else {
+                back_trace[captured++] = reinterpret_cast<void *>(static_cast<std::uintptr_t>(context.Rip));
+                hash += static_cast<ULONG>(context.Rip);
+                if (captured >= frames_to_capture) {
+                    break;
+                }
+            }
+        }
+
         if (function == nullptr) {
             if (!dynamic_stack_capture_detail::popLeafFrame(context, stack_low, stack_high)) {
                 break;
@@ -163,19 +185,7 @@ constexpr ULONG kMaximumWalkSteps = 256;
         if (context.Rsp < stack_low || context.Rsp > stack_high) {
             break;
         }
-
-        DWORD64 caller_image_base = 0;
-        PRUNTIME_FUNCTION caller_function = ::RtlLookupFunctionEntry(context.Rip, &caller_image_base, &history);
-        if (dynamic_stack_capture_detail::permanentIatGatewayFrame(context.Rip, caller_image_base, caller_function)) {
-            continue;
-        }
-        if (skipped < frames_to_skip) {
-            ++skipped;
-            continue;
-        }
-
-        back_trace[captured++] = reinterpret_cast<void *>(static_cast<std::uintptr_t>(context.Rip));
-        hash += static_cast<ULONG>(context.Rip);
+        candidate_frame = true;
     }
 
     if (back_trace_hash != nullptr) {
