@@ -96,7 +96,15 @@ jobs:
           }
           if ($code -ne 0) { exit $code }
 
-      - name: Upload configure diagnostics
+      - name: Build exact-head no-shim plugin with diagnostics
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          & cmake --build --preset conan-relwithdebinfo --target spark *>&1 | Tee-Object -FilePath evidence/build.log
+          $code = $LASTEXITCODE
+          if ($code -ne 0) { exit $code }
+
+      - name: Upload configure and build diagnostics
         if: always()
         uses: actions/upload-artifact@v7
         with:
