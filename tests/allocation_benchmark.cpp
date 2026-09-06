@@ -9,6 +9,17 @@
 #include <thread>
 #include <vector>
 
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include "native/alloc/windows_dynamic_stack_capture.h"
+#endif
+
 #include "native/alloc/allocation_sampler.h"
 #include "native/sampler/thread_info.h"
 
@@ -57,6 +68,53 @@ double runTrials(std::size_t threads, std::size_t operations_per_thread)
     std::ranges::sort(trials);
     return trials[trials.size() / 2];
 }
+
+#ifdef _WIN32
+void stackCaptureWork(bool dynamic, std::size_t operations)
+{
+    void *frames[48]{};
+    volatile USHORT depth = 0;
+    for (std::size_t i = 0; i < operations; ++i) {
+        if (dynamic) {
+            depth = spark::captureDynamicAwareStackBackTrace(0, 48, frames, nullptr);
+        }
+        else {
+            depth = ::RtlCaptureStackBackTrace(0, 48, frames, nullptr);
+        }
+    }
+    (void)depth;
+}
+
+double measureStackCapture(bool dynamic, std::size_t threads, std::size_t operations_per_thread)
+{
+    const auto start = Clock::now();
+    if (threads == 1) {
+        stackCaptureWork(dynamic, operations_per_thread);
+    }
+    else {
+        std::vector<std::thread> workers;
+        workers.reserve(threads);
+        for (std::size_t i = 0; i < threads; ++i) {
+            workers.emplace_back(stackCaptureWork, dynamic, operations_per_thread);
+        }
+        for (std::thread &worker : workers) {
+            worker.join();
+        }
+    }
+    return std::chrono::duration<double, std::nano>(Clock::now() - start).count();
+}
+
+double runStackCaptureTrials(bool dynamic, std::size_t threads, std::size_t operations_per_thread)
+{
+    std::vector<double> trials;
+    trials.reserve(5);
+    for (int trial = 0; trial < 5; ++trial) {
+        trials.push_back(measureStackCapture(dynamic, threads, operations_per_thread));
+    }
+    std::ranges::sort(trials);
+    return trials[trials.size() / 2];
+}
+#endif
 
 void printResult(const char *name, std::size_t threads, std::int32_t interval, bool live_only, bool count_only,
                  std::size_t operations_per_thread, double elapsed_ns, std::uint64_t samples, std::uint64_t dropped,
@@ -115,12 +173,25 @@ int main()
 {
     constexpr std::size_t k_operations = 200000;
     constexpr std::size_t k_pressure_operations = 16384;
+#ifdef _WIN32
+    constexpr std::size_t k_stack_capture_operations = 20000;
+#endif
 
     std::printf("case,threads,interval,live_only,count_only,operations_per_trial,median_ns,"
                 "ns_per_op,samples_all_trials,dropped_all_trials,observed_bytes,hook_calls,"
                 "successful_allocation_calls,sampling_points,filtered_samples\n");
     printResult("unprofiled", 1, 0, false, false, k_operations, runTrials(1, k_operations), 0, 0, 0);
     printResult("unprofiled", 4, 0, false, false, k_operations, runTrials(4, k_operations), 0, 0, 0);
+#ifdef _WIN32
+    printResult("stack-native", 1, 0, false, false, k_stack_capture_operations,
+                runStackCaptureTrials(false, 1, k_stack_capture_operations), 0, 0, 0);
+    printResult("stack-dynamic", 1, 0, false, false, k_stack_capture_operations,
+                runStackCaptureTrials(true, 1, k_stack_capture_operations), 0, 0, 0);
+    printResult("stack-native", 4, 0, false, false, k_stack_capture_operations,
+                runStackCaptureTrials(false, 4, k_stack_capture_operations), 0, 0, 0);
+    printResult("stack-dynamic", 4, 0, false, false, k_stack_capture_operations,
+                runStackCaptureTrials(true, 4, k_stack_capture_operations), 0, 0, 0);
+#endif
 
     spark::AllocationSampler sampler;
     if (!runProfiledCase(sampler, "count-only", 1, spark::kDefaultAllocationIntervalBytes, false, true, k_operations,
