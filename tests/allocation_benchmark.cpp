@@ -175,10 +175,10 @@ void gatewayClassificationWork(const GatewayClassificationFixture &fixture, bool
     for (std::size_t i = 0; i < operations; ++i) {
         const auto &gateway = fixture.gateways[i % active_gateways];
         const auto image_base = reinterpret_cast<DWORD64>(gateway.code);
-        validated += spark::dynamic_stack_capture_detail::permanentIatGatewayFrame(image_base + 2, image_base,
-                                                                                   &gateway.function)
-                         ? 1U
-                         : 0U;
+        validated +=
+            spark::dynamic_stack_capture_detail::permanentIatGatewayFrame(image_base + 2, image_base, &gateway.function)
+                ? 1U
+                : 0U;
     }
     (void)validated;
 }
