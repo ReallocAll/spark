@@ -27,7 +27,7 @@ constexpr std::size_t kPermanentIatGatewayCodeCapacity = 128;
 constexpr std::size_t kGatewayStateAbiOffset = 8;
 constexpr std::size_t kGatewayStateGatewayOffset = 56;
 constexpr std::size_t kGatewayStateBytesNeeded = kGatewayStateGatewayOffset + sizeof(void *);
-constexpr std::size_t kPermanentIatGatewayCacheCapacity = 8;
+constexpr std::size_t kPermanentIatGatewayCacheCapacity = 32;
 constexpr ULONG kMaximumWalkSteps = 256;
 
 inline thread_local DWORD64 cachedPermanentIatGatewayImageBases[kPermanentIatGatewayCacheCapacity]{};
@@ -60,10 +60,9 @@ inline thread_local std::size_t cachedPermanentIatGatewayInsertIndex = 0;
     }
 
     // Validated permanent-IAT gateways are intentionally process-lifetime: their
-    // code/state are never reclaimed or reused before process exit. Keep several
-    // positive image bases per thread because normal allocator traffic alternates
-    // between multiple permanent gateways (for example malloc/free), making a
-    // single-entry cache thrash even though every cached positive remains valid.
+    // code/state are never reclaimed or reused before process exit. Keep enough
+    // positive image bases per thread for the complete allocator-hook family so
+    // normal traffic does not evict one permanent gateway while entering another.
     for (const DWORD64 cached_image_base : cachedPermanentIatGatewayImageBases) {
         if (image_base == cached_image_base) {
             return true;
