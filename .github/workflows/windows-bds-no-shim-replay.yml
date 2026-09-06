@@ -67,52 +67,24 @@ jobs:
       - name: Install build dependencies
         run: python -m pip install "conan>=2,<3"
 
-      - name: Resolve matching Endstone develop runtime
+      - name: Install matching Endstone released runtime
         shell: pwsh
         run: |
-          $headers = @{
-            Accept = "application/vnd.github+json"
-            "X-GitHub-Api-Version" = "2022-11-28"
-            "User-Agent" = "spark-bds-replay"
-          }
-          $selectedArtifact = $null
-          $scanned = 0
-          for ($page = 1; $page -le 10 -and $null -eq $selectedArtifact; ++$page) {
-            $artifactsUri = "https://api.github.com/repos/EndstoneMC/endstone/actions/artifacts?per_page=100&page=$page"
-            $artifacts = (Invoke-RestMethod -Headers $headers -Uri $artifactsUri).artifacts
-            if ($null -eq $artifacts -or $artifacts.Count -eq 0) { break }
-            $scanned += $artifacts.Count
-            $selectedArtifact = $artifacts |
-              Where-Object {
-                -not $_.expired -and
-                $_.name -match '^endstone-.+-cp312-cp312-win_amd64\.whl$' -and
-                $_.workflow_run.head_branch -eq 'develop'
-              } |
-              Select-Object -First 1
-          }
-          if ($null -eq $selectedArtifact) {
-            throw "no non-expired CPython 3.12 Windows Endstone develop artifact found across $scanned repository artifacts"
-          }
-
-          $archive = Join-Path $PWD "endstone-runtime-artifact.zip"
-          $runtimeDir = Join-Path $PWD "endstone-runtime"
-          Invoke-WebRequest -Headers $headers -Uri $selectedArtifact.archive_download_url -OutFile $archive
-          Expand-Archive -Path $archive -DestinationPath $runtimeDir -Force
-          $wheelPath = Get-ChildItem $runtimeDir -Recurse -File -Filter "*.whl" | Select-Object -First 1
-          if ($null -eq $wheelPath) {
-            throw "Endstone artifact did not contain a wheel"
-          }
-          python -m pip install --force-reinstall $wheelPath.FullName
+          $endstoneRef = "v0.11.10"
+          $endstoneVersion = "0.11.10"
+          python -m pip install --force-reinstall "endstone==$endstoneVersion"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-          $endstoneRef = $selectedArtifact.workflow_run.head_sha
+          $installedVersion = (python -c "import endstone; print(endstone.__version__)").Trim()
+          if ($installedVersion -ne $endstoneVersion) {
+            throw "Endstone runtime version mismatch: expected $endstoneVersion, got $installedVersion"
+          }
+
           "ENDSTONE_REF=$endstoneRef" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           @(
             "endstone_ref=$endstoneRef"
-            "endstone_runtime_run_id=$($selectedArtifact.workflow_run.id)"
-            "endstone_runtime_artifact_id=$($selectedArtifact.id)"
-            "endstone_runtime_artifact=$($selectedArtifact.name)"
-            "endstone_version=$(python -c 'import endstone; print(endstone.__version__)')"
+            "endstone_runtime_source=pypi"
+            "endstone_version=$installedVersion"
           ) | Add-Content evidence/provenance.txt
 
       - name: Cache Conan packages
