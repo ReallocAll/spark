@@ -17,6 +17,7 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+
 #include "native/alloc/windows_dynamic_stack_capture.h"
 #endif
 
