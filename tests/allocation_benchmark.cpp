@@ -119,17 +119,16 @@ double runStackCaptureTrials(bool dynamic, std::size_t threads, std::size_t oper
 }
 
 struct GatewayClassificationFixture {
-    static constexpr std::size_t kGatewayCount = 16;
+    static constexpr std::size_t KGatewayCount = 16;
     struct Gateway {
         void *code = nullptr;
         void *state = nullptr;
         RUNTIME_FUNCTION function{};
     };
-    Gateway gateways[kGatewayCount]{};
+    Gateway gateways[KGatewayCount]{};
 
     bool initialize()
     {
-        using namespace spark::dynamic_stack_capture_detail;
         for (Gateway &gateway : gateways) {
             gateway.code = ::VirtualAlloc(nullptr, 4096, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
             gateway.state = ::VirtualAlloc(nullptr, 4096, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
@@ -143,12 +142,13 @@ struct GatewayClassificationFixture {
             std::memcpy(code + 2, &state_value, sizeof(state_value));
 
             auto *state = static_cast<std::uint8_t *>(gateway.state);
-            const std::uint64_t magic = kPermanentIatGatewayMagic;
-            const std::uint32_t abi = kPermanentIatGatewayAbiVersion;
+            const std::uint64_t magic = spark::dynamic_stack_capture_detail::kPermanentIatGatewayMagic;
+            const std::uint32_t abi = spark::dynamic_stack_capture_detail::kPermanentIatGatewayAbiVersion;
             const auto gateway_value = reinterpret_cast<std::uint64_t>(gateway.code);
             std::memcpy(state, &magic, sizeof(magic));
-            std::memcpy(state + kGatewayStateAbiOffset, &abi, sizeof(abi));
-            std::memcpy(state + kGatewayStateGatewayOffset, &gateway_value, sizeof(gateway_value));
+            std::memcpy(state + spark::dynamic_stack_capture_detail::kGatewayStateAbiOffset, &abi, sizeof(abi));
+            std::memcpy(state + spark::dynamic_stack_capture_detail::kGatewayStateGatewayOffset, &gateway_value,
+                        sizeof(gateway_value));
             gateway.function.BeginAddress = 0;
             gateway.function.EndAddress = 10;
         }
@@ -170,13 +170,15 @@ struct GatewayClassificationFixture {
 
 void gatewayClassificationWork(const GatewayClassificationFixture &fixture, bool cold, std::size_t operations)
 {
-    using namespace spark::dynamic_stack_capture_detail;
     volatile std::size_t validated = 0;
-    const std::size_t active_gateways = cold ? GatewayClassificationFixture::kGatewayCount : 1;
+    const std::size_t active_gateways = cold ? GatewayClassificationFixture::KGatewayCount : 1;
     for (std::size_t i = 0; i < operations; ++i) {
         const auto &gateway = fixture.gateways[i % active_gateways];
         const auto image_base = reinterpret_cast<DWORD64>(gateway.code);
-        validated += permanentIatGatewayFrame(image_base + 2, image_base, &gateway.function) ? 1U : 0U;
+        validated += spark::dynamic_stack_capture_detail::permanentIatGatewayFrame(image_base + 2, image_base,
+                                                                                   &gateway.function)
+                         ? 1U
+                         : 0U;
     }
     (void)validated;
 }
@@ -296,17 +298,21 @@ int main()
         std::fprintf(stderr, "gateway classification fixture initialization failed\n");
         return 1;
     }
-    printResult("gateway-classify-warm", 1, 0, false, false, k_gateway_classification_operations,
-                runGatewayClassificationTrials(gateway_fixture, false, 1, k_gateway_classification_operations), 0, 0,
+    const double gateway_warm_1t =
+        runGatewayClassificationTrials(gateway_fixture, false, 1, k_gateway_classification_operations);
+    printResult("gateway-classify-warm", 1, 0, false, false, k_gateway_classification_operations, gateway_warm_1t, 0, 0,
                 0);
-    printResult("gateway-classify-cold", 1, 0, false, false, k_gateway_classification_operations,
-                runGatewayClassificationTrials(gateway_fixture, true, 1, k_gateway_classification_operations), 0, 0,
+    const double gateway_cold_1t =
+        runGatewayClassificationTrials(gateway_fixture, true, 1, k_gateway_classification_operations);
+    printResult("gateway-classify-cold", 1, 0, false, false, k_gateway_classification_operations, gateway_cold_1t, 0, 0,
                 0);
-    printResult("gateway-classify-warm", 4, 0, false, false, k_gateway_classification_operations,
-                runGatewayClassificationTrials(gateway_fixture, false, 4, k_gateway_classification_operations), 0, 0,
+    const double gateway_warm_4t =
+        runGatewayClassificationTrials(gateway_fixture, false, 4, k_gateway_classification_operations);
+    printResult("gateway-classify-warm", 4, 0, false, false, k_gateway_classification_operations, gateway_warm_4t, 0, 0,
                 0);
-    printResult("gateway-classify-cold", 4, 0, false, false, k_gateway_classification_operations,
-                runGatewayClassificationTrials(gateway_fixture, true, 4, k_gateway_classification_operations), 0, 0,
+    const double gateway_cold_4t =
+        runGatewayClassificationTrials(gateway_fixture, true, 4, k_gateway_classification_operations);
+    printResult("gateway-classify-cold", 4, 0, false, false, k_gateway_classification_operations, gateway_cold_4t, 0, 0,
                 0);
 #endif
 
