@@ -79,11 +79,12 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue'
+          $endstoneRef = "v0.11.10"
           & cmake --preset conan-relwithdebinfo `
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON `
             -DENDSTONE_SPARK_BUILD_SELFTEST=OFF `
             -DENDSTONE_SPARK_WINDOWS_PERMANENT_IAT_EXPERIMENT=ON `
-            -DENDSTONE_SPARK_ENDSTONE_GIT_TAG=v0.11.10 *>&1 | Tee-Object -FilePath evidence/configure.log
+            "-DENDSTONE_SPARK_ENDSTONE_GIT_TAG=$endstoneRef" *>&1 | Tee-Object -FilePath evidence/configure.log
           $code = $LASTEXITCODE
           $configureLog = "build/RelWithDebInfo/CMakeFiles/CMakeConfigureLog.yaml"
           if (Test-Path $configureLog) {
