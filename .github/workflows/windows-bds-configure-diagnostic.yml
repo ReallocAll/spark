@@ -1,0 +1,105 @@
+name: Windows BDS Configure Diagnostic
+
+on:
+  pull_request:
+    paths:
+      - "CMakeLists.txt"
+      - "conanfile.py"
+      - ".conan2/profiles/default"
+      - ".github/workflows/windows-bds-configure-diagnostic.yml"
+      - ".github/workflows/windows-bds-no-shim-replay.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  configure-diagnostic:
+    runs-on: windows-2022
+    timeout-minutes: 25
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Verify exact candidate checkout
+        shell: pwsh
+        run: |
+          $expected = "${{ github.event.pull_request.head.sha || github.sha }}"
+          $checkout = (& git rev-parse HEAD).Trim()
+          if ($checkout -ne $expected) {
+            throw "checkout SHA mismatch: expected $expected, got $checkout"
+          }
+          New-Item -ItemType Directory -Force evidence | Out-Null
+          "candidate_sha=$expected" | Set-Content evidence/provenance.txt
+          "checkout_sha=$checkout" | Add-Content evidence/provenance.txt
+
+      - name: Set up MSVC environment
+        uses: TheMrMilchmann/setup-msvc-dev@v4
+        with:
+          arch: x64
+
+      - name: Select clang-cl 20
+        shell: pwsh
+        run: |
+          $llvmBin = "C:\Program Files\LLVM\bin"
+          $llvmBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          $version = & "$llvmBin\clang-cl.exe" --version
+          $version
+          if (-not ($version | Select-String "clang version 20\.")) {
+            throw "clang-cl 20 is required"
+          }
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install build dependencies
+        run: python -m pip install "conan>=2,<3"
+
+      - name: Install released Endstone runtime
+        shell: pwsh
+        run: |
+          python -m pip install --force-reinstall "endstone==0.11.10"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "endstone_version=$((python -c 'import endstone; print(endstone.__version__)').Trim())" | Add-Content evidence/provenance.txt
+
+      - name: Cache Conan packages
+        uses: actions/cache@v5
+        with:
+          path: .conan2
+          key: ${{ runner.os }}-clang20-conan-${{ hashFiles('conanfile.py', '.conan2/profiles/default') }}
+
+      - name: Install Conan dependencies
+        run: conan install . --build=missing
+
+      - name: Configure exact-head no-shim plugin with diagnostics
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          & cmake --preset conan-relwithdebinfo `
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON `
+            -DENDSTONE_SPARK_BUILD_SELFTEST=OFF `
+            -DENDSTONE_SPARK_WINDOWS_PERMANENT_IAT_EXPERIMENT=ON `
+            -DENDSTONE_SPARK_ENDSTONE_GIT_TAG=v0.11.10 *>&1 | Tee-Object -FilePath evidence/configure.log
+          $code = $LASTEXITCODE
+          $configureLog = "build/RelWithDebInfo/CMakeFiles/CMakeConfigureLog.yaml"
+          if (Test-Path $configureLog) {
+            Copy-Item $configureLog evidence/CMakeConfigureLog.yaml
+          }
+          $cache = "build/RelWithDebInfo/CMakeCache.txt"
+          if (Test-Path $cache) {
+            Copy-Item $cache evidence/CMakeCache.txt
+          }
+          if ($code -ne 0) { exit $code }
+
+      - name: Upload configure diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-bds-configure-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_id }}
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 14
