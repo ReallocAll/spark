@@ -1,0 +1,288 @@
+name: Windows BDS No-Shim Replay
+
+on:
+  pull_request:
+    paths:
+      - "CMakeLists.txt"
+      - "conanfile.py"
+      - ".conan2/profiles/default"
+      - "src/**"
+      - ".github/workflows/windows-bds-no-shim-replay.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bds-no-shim-replay:
+    runs-on: windows-2022
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Verify exact candidate checkout
+        shell: pwsh
+        run: |
+          $expected = "${{ github.event.pull_request.head.sha || github.sha }}"
+          $checkout = (& git rev-parse HEAD).Trim()
+          if ($checkout -ne $expected) {
+            throw "checkout SHA mismatch: expected $expected, got $checkout"
+          }
+          New-Item -ItemType Directory -Force evidence | Out-Null
+          @(
+            "candidate_sha=$expected"
+            "event_sha=${{ github.sha }}"
+            "checkout_sha=$checkout"
+            "runner_os=${{ runner.os }}"
+            "runner_arch=${{ runner.arch }}"
+            "image_os=$env:ImageOS"
+            "image_version=$env:ImageVersion"
+          ) | Set-Content evidence/provenance.txt
+
+      - name: Set up MSVC environment
+        uses: TheMrMilchmann/setup-msvc-dev@v4
+        with:
+          arch: x64
+
+      - name: Select clang-cl 20
+        shell: pwsh
+        run: |
+          $llvmBin = "C:\Program Files\LLVM\bin"
+          $llvmBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          $version = & "$llvmBin\clang-cl.exe" --version
+          $version
+          if (-not ($version | Select-String "clang version 20\.")) {
+            throw "clang-cl 20 is required"
+          }
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install build and BDS runtime dependencies
+        run: python -m pip install "conan>=2,<3" endstone
+
+      - name: Cache Conan packages
+        uses: actions/cache@v5
+        with:
+          path: .conan2
+          key: ${{ runner.os }}-clang20-conan-${{ hashFiles('conanfile.py', '.conan2/profiles/default') }}
+
+      - name: Install Conan dependencies
+        run: conan install . --build=missing
+
+      - name: Configure exact-head no-shim plugin
+        run: >-
+          cmake --preset conan-relwithdebinfo
+          -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+          -DENDSTONE_SPARK_BUILD_SELFTEST=OFF
+          -DENDSTONE_SPARK_WINDOWS_PERMANENT_IAT_EXPERIMENT=ON
+
+      - name: Build exact-head no-shim plugin
+        run: cmake --build --preset conan-relwithdebinfo --target endstone_spark
+
+      - name: Verify no-shim carrier artifact
+        shell: pwsh
+        run: |
+          $build = "build/RelWithDebInfo"
+          $plugin = Join-Path $build "endstone_spark.dll"
+          $cache = Join-Path $build "CMakeCache.txt"
+          $commands = Join-Path $build "compile_commands.json"
+
+          if (-not (Test-Path $plugin)) { throw "endstone_spark.dll was not produced" }
+          if (-not (Select-String -Path $cache -SimpleMatch "ENDSTONE_SPARK_WINDOWS_PERMANENT_IAT_EXPERIMENT:BOOL=ON")) {
+            throw "permanent-IAT backend was not selected"
+          }
+          if (-not (Select-String -Path $commands -SimpleMatch "windows_permanent_iat_funchook_compat.cpp")) {
+            throw "permanent-IAT compat source was not compiled"
+          }
+          if (Select-String -Path $commands -SimpleMatch "windows_iat_funchook_compat.cpp") {
+            throw "pinned-shim compat source was compiled"
+          }
+          if (Select-String -Path $commands -SimpleMatch "windows_allocation_shim.cpp") {
+            throw "pinned shim source was compiled"
+          }
+          if (Get-ChildItem $build -Recurse -File -Filter "spark_allocation_shim.*") {
+            throw "no-shim build produced spark_allocation_shim payload"
+          }
+
+          $dependents = & dumpbin.exe /dependents $plugin
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $dependents | Set-Content evidence/endstone_spark-dependents.txt
+          if ($dependents | Select-String -SimpleMatch "spark_allocation_shim.dll") {
+            throw "endstone_spark.dll depends on spark_allocation_shim.dll"
+          }
+
+          New-Item -ItemType Directory -Force bedrock_server/plugins | Out-Null
+          Copy-Item $plugin bedrock_server/plugins/endstone_spark.dll
+          "plugin_sha256=$((Get-FileHash $plugin -Algorithm SHA256).Hash)" | Add-Content evidence/provenance.txt
+          "endstone_version=$(python -c 'import endstone; print(endstone.__version__)')" | Add-Content evidence/provenance.txt
+
+      - name: Replay allocation profiling inside BDS
+        shell: bash
+        run: |
+          python - <<'PY'
+          import hashlib
+          import queue
+          import subprocess
+          import threading
+          import time
+          from pathlib import Path
+
+          from endstone.cli.windows import PopenWithDll, WindowsBootstrap
+
+          root = Path.cwd()
+          server = root / "bedrock_server"
+          evidence = root / "evidence"
+          log_path = evidence / "bds-replay.log"
+          profile_dir = server / "plugins" / "spark" / "profiles"
+
+          bootstrap = WindowsBootstrap(
+              server_folder=str(server),
+              no_confirm=True,
+              remote="https://raw.githubusercontent.com/EndstoneMC/bedrock-server-data/v2",
+              interactive=False,
+          )
+          bootstrap._install()
+          bootstrap._validate()
+          bootstrap._prepare()
+
+          version_file = server / "version.txt"
+          if version_file.exists():
+              with (evidence / "provenance.txt").open("a", encoding="utf-8") as out:
+                  out.write(f"bds_version={version_file.read_text(encoding='utf-8').strip()}\n")
+
+          process = PopenWithDll(
+              [str(bootstrap.executable_path.absolute())],
+              text=True,
+              encoding="utf-8",
+              cwd=str(bootstrap.server_path.absolute()),
+              env=bootstrap._endstone_runtime_env,
+              dll_names=str(bootstrap._endstone_runtime_path.absolute()),
+              stdin=subprocess.PIPE,
+              stdout=subprocess.PIPE,
+              stderr=subprocess.STDOUT,
+              bufsize=1,
+          )
+
+          lines = queue.Queue()
+
+          def pump_output():
+              assert process.stdout is not None
+              with log_path.open("w", encoding="utf-8", errors="replace") as log:
+                  for line in process.stdout:
+                      print(line, end="", flush=True)
+                      log.write(line)
+                      log.flush()
+                      lines.put(line)
+
+          reader = threading.Thread(target=pump_output, name="bds-output", daemon=True)
+          reader.start()
+
+          def fail(message):
+              try:
+                  if process.poll() is None and process.stdin is not None:
+                      process.stdin.write("stop\n")
+                      process.stdin.flush()
+                      process.wait(timeout=20)
+              except Exception:
+                  process.kill()
+              raise RuntimeError(message)
+
+          def send(command):
+              if process.poll() is not None:
+                  fail(f"BDS exited before command: {command}; exit={process.returncode}")
+              assert process.stdin is not None
+              print(f">>> {command}", flush=True)
+              process.stdin.write(command + "\n")
+              process.stdin.flush()
+
+          startup_deadline = time.monotonic() + 150
+          started = False
+          while time.monotonic() < startup_deadline:
+              if process.poll() is not None:
+                  fail(f"BDS exited during startup with code {process.returncode}")
+              try:
+                  line = lines.get(timeout=1)
+              except queue.Empty:
+                  continue
+              if "Server started" in line:
+                  started = True
+                  break
+          if not started:
+              fail("BDS did not report successful startup within 150 seconds")
+
+          if any(server.rglob("spark_allocation_shim.dll")):
+              fail("BDS carrier unexpectedly contains spark_allocation_shim.dll")
+
+          def run_profile(interval):
+              profile_dir.mkdir(parents=True, exist_ok=True)
+              before = {p.resolve() for p in profile_dir.glob("*.sparkprofile")}
+              send(f"spark profiler start --alloc --interval {interval} --timeout 12 --save-to-file")
+              deadline = time.monotonic() + 60
+              while time.monotonic() < deadline:
+                  if process.poll() is not None:
+                      fail(f"BDS exited while profiling at interval {interval}; exit={process.returncode}")
+                  current = [
+                      p
+                      for p in profile_dir.glob("*.sparkprofile")
+                      if p.resolve() not in before and p.stat().st_size > 0
+                  ]
+                  if current:
+                      profile = max(current, key=lambda p: p.stat().st_mtime_ns)
+                      size = profile.stat().st_size
+                      time.sleep(1)
+                      if profile.stat().st_size != size:
+                          continue
+                      digest = hashlib.sha256(profile.read_bytes()).hexdigest()
+                      with (evidence / "profiles.txt").open("a", encoding="utf-8") as out:
+                          out.write(f"interval={interval} file={profile.name} size={size} sha256={digest}\n")
+                      return
+                  time.sleep(1)
+              fail(f"allocation profile at interval {interval} did not produce a .sparkprofile")
+
+          run_profile(524287)
+          run_profile(4096)
+
+          send("stop")
+          try:
+              exit_code = process.wait(timeout=45)
+          except subprocess.TimeoutExpired:
+              process.kill()
+              raise RuntimeError("BDS did not stop within 45 seconds")
+          reader.join(timeout=5)
+
+          if exit_code != 0:
+              raise RuntimeError(f"BDS exited with code {exit_code}")
+          dumps = list(server.rglob("*.dmp"))
+          if dumps:
+              raise RuntimeError("BDS replay produced crash dumps: " + ", ".join(str(p) for p in dumps))
+
+          print("BDS_NO_SHIM_REPLAY_PASS", flush=True)
+          PY
+
+      - name: Verify replay evidence
+        shell: pwsh
+        run: |
+          if (-not (Test-Path evidence/bds-replay.log)) { throw "BDS replay log is missing" }
+          if (-not (Test-Path evidence/profiles.txt)) { throw "profile evidence is missing" }
+          $profiles = @(Get-Content evidence/profiles.txt)
+          if ($profiles.Count -ne 2) { throw "expected two BDS allocation profile records, got $($profiles.Count)" }
+          if (-not ($profiles | Select-String -SimpleMatch "interval=524287")) { throw "default-interval BDS profile is missing" }
+          if (-not ($profiles | Select-String -SimpleMatch "interval=4096")) { throw "4 KiB BDS profile is missing" }
+          Get-Content evidence/provenance.txt
+          Get-Content evidence/profiles.txt
+
+      - name: Upload BDS replay evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-bds-no-shim-replay-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_id }}
+          path: evidence/
+          if-no-files-found: warn
+          retention-days: 14
