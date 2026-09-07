@@ -1,7 +1,7 @@
-#include "native/alloc/windows_permanent_iat_gateway_registry_experiment.h"
+#include "native/alloc/windows_permanent_iat_gateway_registry.h"
 
 #ifndef _WIN32
-#error "windows_permanent_iat_gateway_registry_experiment.cpp must only be compiled on Windows"
+#error "windows_permanent_iat_gateway_registry.cpp must only be compiled on Windows"
 #endif
 
 #ifndef WIN32_LEAN_AND_MEAN
