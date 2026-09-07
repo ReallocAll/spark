@@ -1,4 +1,4 @@
-name: Windows No-Shim Real Plugin Experiment
+name: Windows No-Shim Real Plugin
 
 on:
   pull_request:
@@ -81,7 +81,6 @@ jobs:
           cmake --preset conan-relwithdebinfo
           -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
           -DENDSTONE_SPARK_BUILD_SELFTEST=ON
-          -DENDSTONE_SPARK_WINDOWS_PERMANENT_IAT_EXPERIMENT=ON
 
       - name: Verify shim target is absent
         shell: pwsh
@@ -90,7 +89,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $targets | Out-File -FilePath "build/RelWithDebInfo/no-shim-targets.txt" -Encoding utf8
           if ($targets | Select-String -SimpleMatch "spark_allocation_shim") {
-            throw "no-shim configuration still exposes the spark_allocation_shim target"
+            throw "production configuration still exposes the spark_allocation_shim target"
           }
 
       - name: Build complete no-shim target graph
@@ -102,34 +101,30 @@ jobs:
           ctest --test-dir build/RelWithDebInfo -C RelWithDebInfo --output-on-failure -R "^(spark_windows_allocation_unavailable_test|spark_allocation_count_only_test)$"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Verify permanent-IAT backend selection and no shim payload
+      - name: Verify permanent-IAT backend and no shim payload
         shell: pwsh
         run: |
           $build = "build/RelWithDebInfo"
           $plugin = Join-Path $build "endstone_spark.dll"
           $pdb = Join-Path $build "endstone_spark.pdb"
-          $cache = Join-Path $build "CMakeCache.txt"
           $commands = Join-Path $build "compile_commands.json"
 
           if (-not (Test-Path $plugin)) { throw "endstone_spark.dll was not produced" }
           if (-not (Test-Path $pdb)) { throw "endstone_spark.pdb was not produced" }
-          if (-not (Select-String -Path $cache -SimpleMatch "ENDSTONE_SPARK_WINDOWS_PERMANENT_IAT_EXPERIMENT:BOOL=ON")) {
-            throw "CMake cache did not select the permanent-IAT experiment"
-          }
           if (-not (Select-String -Path $commands -SimpleMatch "windows_permanent_iat_funchook_compat.cpp")) {
             throw "real Spark target did not compile the permanent-IAT compat source"
           }
           if (Select-String -Path $commands -SimpleMatch "windows_iat_funchook_compat.cpp") {
-            throw "real Spark target still compiled the pinned-shim compat source"
+            throw "real Spark target still compiled the removed pinned-shim compat source"
           }
           if (Select-String -Path $commands -SimpleMatch "windows_allocation_shim.cpp") {
-            throw "no-shim target graph still compiled the pinned shim source"
+            throw "production target graph still compiled the removed shim source"
           }
 
           $shimFiles = @(Get-ChildItem $build -Recurse -File -Filter "spark_allocation_shim.*")
           if ($shimFiles.Count -ne 0) {
             $shimFiles | ForEach-Object { Write-Host $_.FullName }
-            throw "no-shim build unexpectedly produced spark_allocation_shim payload"
+            throw "production build unexpectedly produced spark_allocation_shim payload"
           }
 
           $dependents = & dumpbin.exe /dependents $plugin
