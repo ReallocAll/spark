@@ -103,7 +103,7 @@ bool acquireGateways(std::vector<HookRecord> &records, std::string &error)
 {
     for (HookRecord &record : records) {
         if (!permanent_iat_gateway::acquirePermanentIatGateway(record.original, record.stack_argument_count,
-                                                                record.gateway, error)) {
+                                                               record.gateway, error)) {
             return false;
         }
         if (permanent_iat_gateway::permanentIatGatewayAdmissionOpen(record.gateway) ||
@@ -265,7 +265,7 @@ bool WindowsAllocationIatHooks::install(std::string &error)
         }
         for (HookRecord &record : impl_->records) {
             if (!permanent_iat_gateway::bindPermanentIatGateway(record.gateway, record.handler, KGatewayDrainTimeoutMs,
-                                                                 error)) {
+                                                                error)) {
                 std::string detach_error;
                 (void)detachGateways(impl_->records, detach_error);
                 std::string uninstall_error;
