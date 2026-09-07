@@ -101,7 +101,6 @@ jobs:
           & cmake --preset conan-relwithdebinfo `
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON `
             -DENDSTONE_SPARK_BUILD_SELFTEST=OFF `
-            -DENDSTONE_SPARK_WINDOWS_PERMANENT_IAT_EXPERIMENT=ON `
             "-DENDSTONE_SPARK_ENDSTONE_GIT_TAG=$endstoneRef"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -117,9 +116,6 @@ jobs:
           $commands = Join-Path $build "compile_commands.json"
 
           if (-not (Test-Path $plugin)) { throw "endstone_spark.dll was not produced" }
-          if (-not (Select-String -Path $cache -SimpleMatch "ENDSTONE_SPARK_WINDOWS_PERMANENT_IAT_EXPERIMENT:BOOL=ON")) {
-            throw "permanent-IAT backend was not selected"
-          }
           if (-not (Select-String -Path $cache -SimpleMatch "ENDSTONE_SPARK_ENDSTONE_GIT_TAG:STRING=$env:ENDSTONE_REF")) {
             throw "Spark was not compiled against the selected Endstone runtime ref"
           }
@@ -127,10 +123,10 @@ jobs:
             throw "permanent-IAT compat source was not compiled"
           }
           if (Select-String -Path $commands -SimpleMatch "windows_iat_funchook_compat.cpp") {
-            throw "pinned-shim compat source was compiled"
+            throw "removed pinned-shim compat source was compiled"
           }
           if (Select-String -Path $commands -SimpleMatch "windows_allocation_shim.cpp") {
-            throw "pinned shim source was compiled"
+            throw "removed pinned shim source was compiled"
           }
           if (Get-ChildItem $build -Recurse -File -Filter "spark_allocation_shim.*") {
             throw "no-shim build produced spark_allocation_shim payload"
