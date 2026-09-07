@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <string>
 
-namespace spark::permanent_iat_gateway_experiment {
+namespace spark::permanent_iat_gateway {
 
 #ifdef _WIN32
 
@@ -41,4 +41,4 @@ bool detachPermanentIatGateway(PermanentIatGatewayHandle &handle, std::uint64_t 
 
 #endif
 
-}  // namespace spark::permanent_iat_gateway_experiment
+}  // namespace spark::permanent_iat_gateway
