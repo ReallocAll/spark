@@ -1,4 +1,4 @@
-#include <funchook.h>
+#include "native/alloc/windows_allocation_iat_hooks.h"
 
 #ifndef _WIN32
 #error "windows_permanent_iat_backend_plugin.cpp is Windows-only"
@@ -16,13 +16,15 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <memory>
+#include <string>
 
 namespace {
 
 using MallocFn = void *(__cdecl *)(std::size_t);
 using FreeFn = void(__cdecl *)(void *);
 
-funchook_t *g_hooks = nullptr;
+std::unique_ptr<spark::WindowsAllocationIatHooks> g_hooks;
 MallocFn g_malloc = nullptr;
 FreeFn g_free = nullptr;
 std::atomic<std::uint64_t> g_calls{0};
@@ -30,11 +32,9 @@ std::atomic<bool> g_hold{false};
 std::atomic<bool> g_entered{false};
 char g_error[512]{};
 
-void setError(const char *operation, int code) noexcept
+void setError(const char *operation, const std::string &detail) noexcept
 {
-    const char *detail = g_hooks != nullptr ? funchook_error_message(g_hooks) : nullptr;
-    std::snprintf(g_error, sizeof(g_error), "%s failed code=%d detail=%s", operation, code,
-                  detail != nullptr ? detail : "");
+    std::snprintf(g_error, sizeof(g_error), "%s failed: %s", operation, detail.c_str());
 }
 
 extern "C" void *__cdecl hookMalloc(std::size_t size) noexcept
@@ -57,6 +57,13 @@ extern "C" void __cdecl hookFree(void *pointer) noexcept
     }
 }
 
+void resetBackend() noexcept
+{
+    g_hooks.reset();
+    g_malloc = nullptr;
+    g_free = nullptr;
+}
+
 }  // namespace
 
 extern "C" __declspec(dllexport) int __cdecl windowsPermanentIatBackendInstall() noexcept
@@ -75,47 +82,35 @@ extern "C" __declspec(dllexport) int __cdecl windowsPermanentIatBackendInstall()
     g_free = reinterpret_cast<FreeFn>(::GetProcAddress(ucrt, "free"));
     if (g_malloc == nullptr || g_free == nullptr) {
         std::snprintf(g_error, sizeof(g_error), "required UCRT allocator exports are unavailable");
-        g_malloc = nullptr;
-        g_free = nullptr;
+        resetBackend();
         return 0;
     }
 
-    g_hooks = funchook_create();
-    if (g_hooks == nullptr) {
-        std::snprintf(g_error, sizeof(g_error), "funchook_create failed");
-        g_malloc = nullptr;
-        g_free = nullptr;
+    try {
+        g_hooks = std::make_unique<spark::WindowsAllocationIatHooks>();
+        std::string error;
+        if (!g_hooks->addTarget(reinterpret_cast<void *>(g_malloc), reinterpret_cast<void *>(&hookMalloc), error)) {
+            setError("addTarget(malloc)", error);
+            resetBackend();
+            return 0;
+        }
+        if (!g_hooks->addTarget(reinterpret_cast<void *>(g_free), reinterpret_cast<void *>(&hookFree), error)) {
+            setError("addTarget(free)", error);
+            resetBackend();
+            return 0;
+        }
+        if (!g_hooks->install(error)) {
+            setError("install", error);
+            resetBackend();
+            return 0;
+        }
+        return 1;
+    }
+    catch (...) {
+        std::snprintf(g_error, sizeof(g_error), "allocation IAT backend setup threw an exception");
+        resetBackend();
         return 0;
     }
-
-    int code = funchook_prepare(g_hooks, reinterpret_cast<void **>(&g_malloc), reinterpret_cast<void *>(&hookMalloc));
-    if (code != FUNCHOOK_ERROR_SUCCESS) {
-        setError("funchook_prepare(malloc)", code);
-        (void)funchook_destroy(g_hooks);
-        g_hooks = nullptr;
-        g_malloc = nullptr;
-        g_free = nullptr;
-        return 0;
-    }
-    code = funchook_prepare(g_hooks, reinterpret_cast<void **>(&g_free), reinterpret_cast<void *>(&hookFree));
-    if (code != FUNCHOOK_ERROR_SUCCESS) {
-        setError("funchook_prepare(free)", code);
-        (void)funchook_destroy(g_hooks);
-        g_hooks = nullptr;
-        g_malloc = nullptr;
-        g_free = nullptr;
-        return 0;
-    }
-    code = funchook_install(g_hooks, 0);
-    if (code != FUNCHOOK_ERROR_SUCCESS) {
-        setError("funchook_install", code);
-        (void)funchook_destroy(g_hooks);
-        g_hooks = nullptr;
-        g_malloc = nullptr;
-        g_free = nullptr;
-        return 0;
-    }
-    return 1;
 }
 
 extern "C" __declspec(dllexport) int __cdecl windowsPermanentIatBackendUninstall() noexcept
@@ -124,19 +119,12 @@ extern "C" __declspec(dllexport) int __cdecl windowsPermanentIatBackendUninstall
     if (g_hooks == nullptr) {
         return 1;
     }
-    const int uninstall_code = funchook_uninstall(g_hooks, 0);
-    if (uninstall_code != FUNCHOOK_ERROR_SUCCESS) {
-        setError("funchook_uninstall", uninstall_code);
+    std::string error;
+    if (!g_hooks->uninstall(error)) {
+        setError("uninstall", error);
         return 0;
     }
-    const int destroy_code = funchook_destroy(g_hooks);
-    if (destroy_code != FUNCHOOK_ERROR_SUCCESS) {
-        setError("funchook_destroy", destroy_code);
-        return 0;
-    }
-    g_hooks = nullptr;
-    g_malloc = nullptr;
-    g_free = nullptr;
+    resetBackend();
     return 1;
 }
 
