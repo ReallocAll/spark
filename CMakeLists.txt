@@ -22,23 +22,13 @@ endif ()
 find_package(Threads REQUIRED)
 
 include(FetchContent)
+include(cmake/Distorm.cmake)
 
 # --- x86-64 instruction decoder ---
-# funchook 1.1.3 is not available from Conan Center. Fetch the same upstream
-# version used by Endstone. Its small distorm dependency provides the strict
-# instruction-boundary decoder used by both native symbol guessers.
+# Spark uses distorm directly for strict instruction-boundary decoding in both
+# supported x86-64 native symbol guessers. The revision is pinned in Distorm.cmake.
 if (WIN32 OR (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64"))
-    set(FUNCHOOK_BUILD_SHARED OFF CACHE BOOL "" FORCE)
-    set(FUNCHOOK_BUILD_STATIC OFF CACHE BOOL "" FORCE)
-    set(FUNCHOOK_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-    set(FUNCHOOK_INSTALL OFF CACHE BOOL "" FORCE)
-    set(FUNCHOOK_DISASM distorm CACHE STRING "" FORCE)
-    FetchContent_Declare(funchook
-            GIT_REPOSITORY https://github.com/kubo/funchook.git
-            GIT_TAG v1.1.3
-            GIT_SHALLOW TRUE
-            GIT_SUBMODULES_RECURSE TRUE)
-    FetchContent_MakeAvailable(funchook)
+    endstone_spark_add_distorm()
 endif ()
 
 # --- Endstone: header-only API + endstone_add_plugin(), fetched standalone ---
@@ -129,10 +119,8 @@ if (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Cl
     target_compile_options(spark_native PRIVATE -fvisibility=hidden -fvisibility-inlines-hidden)
 endif ()
 if (WIN32)
-    target_include_directories(spark_native PRIVATE "${funchook_SOURCE_DIR}/distorm/include")
     target_link_libraries(spark_native PUBLIC dbghelp psapi advapi32 distorm)
 elseif (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
-    target_include_directories(spark_native PRIVATE "${funchook_SOURCE_DIR}/distorm/include")
     target_link_libraries(spark_native PUBLIC distorm ${CMAKE_DL_LIBS})
 elseif (CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_link_libraries(spark_native PUBLIC ${CMAKE_DL_LIBS})
@@ -207,7 +195,7 @@ endif ()
 add_library(spark_application STATIC
         src/application/activity/activity_command.cpp
         src/application/command/command_registry.cpp
-        src/application/command/profiler_action_resolver.cpp
+        src/application/profiler_action_resolver.cpp
         src/application/health/health_command.cpp
         src/application/health/health_command_report.cpp
         src/application/health/health_report.cpp
