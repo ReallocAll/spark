@@ -7,8 +7,8 @@ on:
       - "src/native/alloc/allocation_sampler_windows.cpp"
       - "src/native/alloc/windows_iat_hooks.*"
       - "src/native/alloc/windows_iat_hooks_windows.cpp"
-      - "src/native/alloc/windows_permanent_iat_gateway_experiment.*"
-      - "src/native/alloc/windows_permanent_iat_gateway_registry_experiment.*"
+      - "src/native/alloc/windows_permanent_iat_gateway.*"
+      - "src/native/alloc/windows_permanent_iat_gateway_registry.*"
       - "src/native/alloc/windows_permanent_iat_funchook_compat.cpp"
       - "tests/CMakeLists.txt"
       - "tests/native/alloc/allocation_count_only_test.cpp"
@@ -113,6 +113,18 @@ jobs:
           if (-not (Test-Path $pdb)) { throw "endstone_spark.pdb was not produced" }
           if (-not (Select-String -Path $commands -SimpleMatch "windows_permanent_iat_funchook_compat.cpp")) {
             throw "real Spark target did not compile the permanent-IAT compat source"
+          }
+          if (-not (Select-String -Path $commands -SimpleMatch "windows_permanent_iat_gateway.cpp")) {
+            throw "real Spark target did not compile the production permanent-IAT gateway source"
+          }
+          if (-not (Select-String -Path $commands -SimpleMatch "windows_permanent_iat_gateway_registry.cpp")) {
+            throw "real Spark target did not compile the production permanent-IAT registry source"
+          }
+          if (Select-String -Path $commands -SimpleMatch "windows_permanent_iat_gateway_experiment.cpp") {
+            throw "production target graph still compiled the experiment-named gateway source"
+          }
+          if (Select-String -Path $commands -SimpleMatch "windows_permanent_iat_gateway_registry_experiment.cpp") {
+            throw "production target graph still compiled the experiment-named registry source"
           }
           if (Select-String -Path $commands -SimpleMatch "windows_iat_funchook_compat.cpp") {
             throw "real Spark target still compiled the removed pinned-shim compat source"
