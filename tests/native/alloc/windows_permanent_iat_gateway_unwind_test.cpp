@@ -1,5 +1,5 @@
 #include "native/alloc/windows_dynamic_stack_capture.h"
-#include "native/alloc/windows_permanent_iat_gateway_experiment.h"
+#include "native/alloc/windows_permanent_iat_gateway.h"
 
 #ifndef _WIN32
 #error "windows_permanent_iat_gateway_unwind_test.cpp is Windows-only"
@@ -21,10 +21,10 @@
 #include <string>
 
 using spark::captureDynamicAwareStackBackTrace;
-using spark::permanent_iat_gateway_experiment::bindPermanentIatGateway;
-using spark::permanent_iat_gateway_experiment::createPermanentIatGateway;
-using spark::permanent_iat_gateway_experiment::detachPermanentIatGateway;
-using spark::permanent_iat_gateway_experiment::PermanentIatGatewayHandle;
+using spark::permanent_iat_gateway::bindPermanentIatGateway;
+using spark::permanent_iat_gateway::createPermanentIatGateway;
+using spark::permanent_iat_gateway::detachPermanentIatGateway;
+using spark::permanent_iat_gateway::PermanentIatGatewayHandle;
 
 namespace {
 
