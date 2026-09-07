@@ -149,7 +149,8 @@ bool normalizePreviousGatewaySlots(const std::vector<HookRecord> &records, std::
         std::string exchange_error;
         const WindowsIatExchangeResult exchange =
             backend->compareExchange(slot, target.replacement, target.original, exchange_error);
-        if (exchange.status == WindowsIatExchangeStatus::Exchanged || exchange.status == WindowsIatExchangeStatus::Stale ||
+        if (exchange.status == WindowsIatExchangeStatus::Exchanged ||
+            exchange.status == WindowsIatExchangeStatus::Stale ||
             (exchange.status == WindowsIatExchangeStatus::Mismatch && exchange.observed != target.replacement)) {
             continue;
         }
@@ -216,8 +217,14 @@ bool WindowsAllocationIatHooks::addTarget(void *target, void *handler, std::stri
             impl_->error = error;
             return false;
         }
-        impl_->records.push_back({description.name, target, handler, description.required_coverage,
-                                  description.stack_argument_count, {}});
+        impl_->records.push_back({
+            .name = description.name,
+            .original = target,
+            .handler = handler,
+            .required_coverage = description.required_coverage,
+            .stack_argument_count = description.stack_argument_count,
+            .gateway = {},
+        });
         return true;
     }
     catch (...) {
