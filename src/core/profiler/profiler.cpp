@@ -260,6 +260,7 @@ bool Profiler::start(const ProfilerOptions &options, std::uint64_t main_tid, std
         }
         config.live_only = options.alloc_live_only;
         config.fail_aggregator_for_testing = options.fail_allocation_aggregator_for_testing;
+        config.aggregator_delay_ms_for_testing = options.allocation_aggregator_delay_ms_for_testing;
         if (persistent_allocation_counting_active_.load(std::memory_order_acquire) &&
             !stopPersistentAllocationCounting(error)) {
             return false;
