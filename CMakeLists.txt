@@ -96,7 +96,6 @@ if (WIN32)
             src/native/alloc/allocation_sampler_windows.cpp
             src/native/alloc/windows_iat_hooks.cpp
             src/native/alloc/windows_iat_hooks_windows.cpp
-            src/native/alloc/windows_thread_suspension.cpp
             src/native/alloc/windows_permanent_iat_gateway.cpp
             src/native/alloc/windows_permanent_iat_gateway_registry.cpp
             src/native/alloc/windows_allocation_iat_hooks.cpp)

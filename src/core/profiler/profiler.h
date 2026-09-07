@@ -154,8 +154,8 @@ public:
     void journalStallBegin(std::uint64_t detected_ns, std::uint64_t last_tick_ns);
     void journalStallEnd(std::uint64_t detected_ns, std::uint64_t recovered_ns);
 
-    // Unconditionally closes the active backend and destroys native hook
-    // trampolines. Must run before the plugin module is unloaded.
+    // Unconditionally closes the active backend and clears native hook handlers.
+    // Must run before the plugin module is unloaded.
     bool shutdown(std::string &error);
 
 private:

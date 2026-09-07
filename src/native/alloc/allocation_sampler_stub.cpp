@@ -22,7 +22,7 @@ AllocationSampler::~AllocationSampler() = default;
 bool AllocationSampler::start(const AllocationSamplerConfig &, std::string &error)
 {
 #ifdef _WIN32
-    error = "Windows allocation profiling is temporarily disabled because safe allocator entry patching is unavailable";
+    error = "Windows allocation profiling is unavailable on this architecture";
 #else
     error = "native allocation profiling is supported only on Windows x64 and Linux x86-64";
 #endif

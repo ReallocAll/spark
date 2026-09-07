@@ -168,7 +168,7 @@ bool verifyAllocationLifecycle()
 #endif
 
     // A second instance in the same process models plugin reload: the old
-    // active-instance pointer and trampolines must not obstruct new setup.
+    // active-instance pointer and gateway bindings must not obstruct new setup.
     spark::AllocationSampler reloaded;
     if (!runAllocationSession(reloaded, config, error) || !reloaded.shutdown(error) || reloaded.hooksInstalled()) {
         std::fprintf(stderr, "allocation lifecycle: reload simulation failed: %s\n", error.c_str());

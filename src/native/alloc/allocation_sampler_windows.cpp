@@ -44,6 +44,7 @@
 #include "native/alloc/byte_sampler.h"
 #include "native/alloc/stable_shard_snapshot.h"
 #include "native/alloc/windows_allocation_iat_hooks.h"
+#include "native/alloc/windows_dynamic_stack_capture.h"
 #include "native/sampler/thread_info.h"
 #include "profiling_window.h"
 
@@ -1331,8 +1332,8 @@ struct AllocationSampler::Impl {
         allocation->thread_id = thread.session_thread_id;
         allocation->os_thread_id = thread.os_thread_id;
         allocation->window = profiling_window::windowNow();
-        allocation->depth = static_cast<std::uint16_t>(
-            ::RtlCaptureStackBackTrace(KFramesToSkip, static_cast<ULONG>(KStackDepth), allocation->frames, nullptr));
+        allocation->depth = static_cast<std::uint16_t>(captureDynamicAwareStackBackTrace(
+            KFramesToSkip, static_cast<ULONG>(KStackDepth), allocation->frames, nullptr));
         const std::uint64_t allocation_weight = allocation->weight_bytes;
         const std::uint64_t allocation_tick = allocation->tick_id;
         const std::uint64_t allocation_thread = allocation->thread_id;
@@ -1567,12 +1568,11 @@ struct AllocationSampler::Impl {
                            error) &&
             registerExport(ucrt, "_realloc_base", real_realloc_base, reinterpret_cast<void *>(&hookReallocBase), false,
                            error) &&
-            registerExport(ucrt, "_free_base", real_free_base, reinterpret_cast<void *>(&hookFreeBase), false,
-                           error) &&
+            registerExport(ucrt, "_free_base", real_free_base, reinterpret_cast<void *>(&hookFreeBase), false, error) &&
             registerExport(kernel32, "HeapAlloc", real_heap_alloc, reinterpret_cast<void *>(&hookHeapAlloc), false,
                            error) &&
-            registerExport(kernel32, "HeapReAlloc", real_heap_realloc, reinterpret_cast<void *>(&hookHeapReAlloc), false,
-                           error) &&
+            registerExport(kernel32, "HeapReAlloc", real_heap_realloc, reinterpret_cast<void *>(&hookHeapReAlloc),
+                           false, error) &&
             registerExport(kernel32, "HeapFree", real_heap_free, reinterpret_cast<void *>(&hookHeapFree), true, error);
 
         if (!ok) {
@@ -1605,6 +1605,7 @@ struct AllocationSampler::Impl {
             return false;
         }
         if (!hooks->install(error)) {
+            hooks_installed.store(hooks->installed(), std::memory_order_release);
             if (error.empty()) {
                 error = hooks->lastError();
             }

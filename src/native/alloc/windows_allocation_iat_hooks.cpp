@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <exception>
 #include <memory>
 #include <string>
@@ -179,6 +180,7 @@ bool normalizePreviousGatewaySlots(const std::vector<HookRecord> &records, std::
 
 bool detachGateways(std::vector<HookRecord> &records, std::string &error) noexcept
 {
+    bool detached = true;
     for (HookRecord &record : records) {
         if (record.gateway.state == nullptr) {
             continue;
@@ -189,16 +191,18 @@ bool detachGateways(std::vector<HookRecord> &records, std::string &error) noexce
         }
         std::string detach_error;
         if (!permanent_iat_gateway::detachPermanentIatGateway(record.gateway, KGatewayDrainTimeoutMs, detach_error)) {
-            try {
-                error = std::string("failed to detach permanent IAT gateway ") + record.name + ": " + detach_error;
+            detached = false;
+            if (error.empty()) {
+                try {
+                    error = std::string("failed to detach permanent IAT gateway ") + record.name + ": " + detach_error;
+                }
+                catch (...) {
+                    error.clear();
+                }
             }
-            catch (...) {
-                error.clear();
-            }
-            return false;
         }
     }
-    return true;
+    return detached;
 }
 
 }  // namespace
@@ -211,7 +215,16 @@ struct WindowsAllocationIatHooks::Impl {
 };
 
 WindowsAllocationIatHooks::WindowsAllocationIatHooks() : impl_(std::make_unique<Impl>()) {}
-WindowsAllocationIatHooks::~WindowsAllocationIatHooks() = default;
+WindowsAllocationIatHooks::~WindowsAllocationIatHooks()
+{
+    if (impl_ == nullptr) {
+        return;
+    }
+    std::string error;
+    if (!uninstall(error)) {
+        std::abort();
+    }
+}
 
 bool WindowsAllocationIatHooks::addTarget(void *target, void *handler, std::string &error)
 {
@@ -277,10 +290,13 @@ bool WindowsAllocationIatHooks::install(std::string &error)
             if (!permanent_iat_gateway::bindPermanentIatGateway(record.gateway, record.handler, KGatewayDrainTimeoutMs,
                                                                 error)) {
                 std::string detach_error;
-                (void)detachGateways(impl_->records, detach_error);
+                const bool gateways_detached = detachGateways(impl_->records, detach_error);
                 std::string uninstall_error;
                 (void)impl_->hooks->uninstall(uninstall_error);
-                impl_->hooks.reset();
+                impl_->installed = !gateways_detached;
+                if (gateways_detached) {
+                    impl_->hooks.reset();
+                }
                 if (!detach_error.empty()) {
                     error += "; gateway rollback: " + detach_error;
                 }
@@ -290,8 +306,8 @@ bool WindowsAllocationIatHooks::install(std::string &error)
                 impl_->error = error;
                 return false;
             }
+            impl_->installed = true;
         }
-        impl_->installed = true;
         return true;
     }
     catch (const std::exception &exception) {
@@ -332,20 +348,21 @@ bool WindowsAllocationIatHooks::refresh(std::string &error)
 bool WindowsAllocationIatHooks::uninstall(std::string &error) noexcept
 {
     error.clear();
-    if (!impl_->installed) {
+    if (!impl_->installed && impl_->hooks == nullptr) {
         return true;
     }
     if (!detachGateways(impl_->records, error)) {
+        impl_->installed = true;
         impl_->error = error;
         return false;
     }
+    impl_->installed = false;
     if (impl_->hooks != nullptr) {
         std::string detach_error;
         if (!impl_->hooks->uninstall(detach_error) && error.empty()) {
             error = "Windows allocation IAT detach left safe permanent gateway entries active: " + detach_error;
         }
     }
-    impl_->installed = false;
     impl_->error = error;
     return true;
 }
