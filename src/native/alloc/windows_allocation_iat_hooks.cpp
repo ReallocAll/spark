@@ -58,29 +58,33 @@ bool describeTarget(void *address, TargetDescription &description) noexcept
         bool required_coverage;
         std::uint32_t stack_argument_count;
     } candidates[] = {
-        {ucrt, "malloc", true, 0},
-        {ucrt, "calloc", false, 0},
-        {ucrt, "realloc", false, 0},
-        {ucrt, "_recalloc", false, 0},
-        {ucrt, "free", true, 0},
-        {ucrt, "_aligned_malloc", false, 0},
-        {ucrt, "_aligned_realloc", false, 0},
-        {ucrt, "_aligned_recalloc", false, 0},
-        {ucrt, "_aligned_offset_malloc", false, 0},
-        {ucrt, "_aligned_offset_realloc", false, 0},
-        {ucrt, "_aligned_offset_recalloc", false, 1},
-        {ucrt, "_aligned_free", false, 0},
-        {ucrt, "_malloc_base", false, 0},
-        {ucrt, "_calloc_base", false, 0},
-        {ucrt, "_realloc_base", false, 0},
-        {ucrt, "_free_base", false, 0},
-        {kernel32, "HeapAlloc", false, 0},
-        {kernel32, "HeapReAlloc", false, 0},
-        {kernel32, "HeapFree", false, 0},
+        {.module = ucrt, .name = "malloc", .required_coverage = true, .stack_argument_count = 0},
+        {.module = ucrt, .name = "calloc", .required_coverage = false, .stack_argument_count = 0},
+        {.module = ucrt, .name = "realloc", .required_coverage = false, .stack_argument_count = 0},
+        {.module = ucrt, .name = "_recalloc", .required_coverage = false, .stack_argument_count = 0},
+        {.module = ucrt, .name = "free", .required_coverage = true, .stack_argument_count = 0},
+        {.module = ucrt, .name = "_aligned_malloc", .required_coverage = false, .stack_argument_count = 0},
+        {.module = ucrt, .name = "_aligned_realloc", .required_coverage = false, .stack_argument_count = 0},
+        {.module = ucrt, .name = "_aligned_recalloc", .required_coverage = false, .stack_argument_count = 0},
+        {.module = ucrt, .name = "_aligned_offset_malloc", .required_coverage = false, .stack_argument_count = 0},
+        {.module = ucrt, .name = "_aligned_offset_realloc", .required_coverage = false, .stack_argument_count = 0},
+        {.module = ucrt, .name = "_aligned_offset_recalloc", .required_coverage = false, .stack_argument_count = 1},
+        {.module = ucrt, .name = "_aligned_free", .required_coverage = false, .stack_argument_count = 0},
+        {.module = ucrt, .name = "_malloc_base", .required_coverage = false, .stack_argument_count = 0},
+        {.module = ucrt, .name = "_calloc_base", .required_coverage = false, .stack_argument_count = 0},
+        {.module = ucrt, .name = "_realloc_base", .required_coverage = false, .stack_argument_count = 0},
+        {.module = ucrt, .name = "_free_base", .required_coverage = false, .stack_argument_count = 0},
+        {.module = kernel32, .name = "HeapAlloc", .required_coverage = false, .stack_argument_count = 0},
+        {.module = kernel32, .name = "HeapReAlloc", .required_coverage = false, .stack_argument_count = 0},
+        {.module = kernel32, .name = "HeapFree", .required_coverage = false, .stack_argument_count = 0},
     };
     for (const Candidate &candidate : candidates) {
         if (sameExport(candidate.module, candidate.name, address)) {
-            description = {candidate.name, candidate.required_coverage, candidate.stack_argument_count};
+            description = {
+                .name = candidate.name,
+                .required_coverage = candidate.required_coverage,
+                .stack_argument_count = candidate.stack_argument_count,
+            };
             return true;
         }
     }
@@ -92,7 +96,13 @@ std::vector<WindowsIatHookTarget> makeTargets(const std::vector<HookRecord> &rec
     std::vector<WindowsIatHookTarget> targets;
     targets.reserve(records.size());
     for (const HookRecord &record : records) {
-        targets.push_back({record.name, {}, record.original, record.gateway.gateway, record.required_coverage});
+        targets.push_back({
+            .import_name = record.name,
+            .import_modules = {},
+            .original = record.original,
+            .replacement = record.gateway.gateway,
+            .required = record.required_coverage,
+        });
     }
     return targets;
 }
@@ -102,8 +112,8 @@ void backendAnchor() noexcept {}
 bool acquireGateways(std::vector<HookRecord> &records, std::string &error)
 {
     for (HookRecord &record : records) {
-        if (!permanent_iat_gateway::acquirePermanentIatGateway(record.original, record.stack_argument_count,
-                                                               record.gateway, error)) {
+        if (!permanent_iat_gateway::acquirePermanentIatGateway(
+                record.original, record.stack_argument_count, record.gateway, error)) {
             return false;
         }
         if (permanent_iat_gateway::permanentIatGatewayAdmissionOpen(record.gateway) ||
@@ -264,8 +274,8 @@ bool WindowsAllocationIatHooks::install(std::string &error)
             return false;
         }
         for (HookRecord &record : impl_->records) {
-            if (!permanent_iat_gateway::bindPermanentIatGateway(record.gateway, record.handler, KGatewayDrainTimeoutMs,
-                                                                error)) {
+            if (!permanent_iat_gateway::bindPermanentIatGateway(
+                    record.gateway, record.handler, KGatewayDrainTimeoutMs, error)) {
                 std::string detach_error;
                 (void)detachGateways(impl_->records, detach_error);
                 std::string uninstall_error;
