@@ -102,11 +102,11 @@ jobs:
       - name: Select clang-cl 20
         shell: pwsh
         run: |
-          $llvmBin = "C:\Program Files\LLVM\bin"
+          $llvmBin = "C:\\Program Files\\LLVM\\bin"
           $llvmBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          $version = & "$llvmBin\clang-cl.exe" --version
+          $version = & "$llvmBin\\clang-cl.exe" --version
           $version
-          if (-not ($version | Select-String "clang version 20\.")) {
+          if (-not ($version | Select-String "clang version 20\\.")) {
             throw "clang-cl 20 is required"
           }
 
@@ -150,7 +150,6 @@ jobs:
           path: |
             build/RelWithDebInfo/endstone_spark.dll
             build/RelWithDebInfo/endstone_spark.pdb
-            build/RelWithDebInfo/spark_allocation_shim.dll
           if-no-files-found: error
           retention-days: 14
 
@@ -226,11 +225,11 @@ jobs:
       - name: Select clang-cl 20
         shell: pwsh
         run: |
-          $llvmBin = "C:\Program Files\LLVM\bin"
+          $llvmBin = "C:\\Program Files\\LLVM\\bin"
           $llvmBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          $version = & "$llvmBin\clang-cl.exe" --version
+          $version = & "$llvmBin\\clang-cl.exe" --version
           $version
-          if (-not ($version | Select-String "clang version 20\.")) {
+          if (-not ($version | Select-String "clang version 20\\.")) {
             throw "clang-cl 20 is required"
           }
 
