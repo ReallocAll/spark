@@ -1,5 +1,6 @@
 #include <windows.h>
 
+#include <cstddef>
 #include <cstdlib>
 
 extern "C" __declspec(dllexport) void sparkAllocationFixtureOnce()
@@ -9,6 +10,20 @@ extern "C" __declspec(dllexport) void sparkAllocationFixtureOnce()
         static_cast<volatile unsigned char *>(pointer)[0] = 1;
         std::free(pointer);
     }
+}
+
+extern "C" __declspec(dllexport) void *sparkAllocationFixtureRetain(std::size_t size)
+{
+    void *pointer = std::malloc(size);
+    if (pointer != nullptr && size != 0) {
+        static_cast<volatile unsigned char *>(pointer)[0] = 1;
+    }
+    return pointer;
+}
+
+extern "C" __declspec(dllexport) void sparkAllocationFixtureRelease(void *pointer)
+{
+    std::free(pointer);
 }
 
 extern "C" __declspec(dllexport) void sparkAllocationFixtureRun(volatile LONG *running)

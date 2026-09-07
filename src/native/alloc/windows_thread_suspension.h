@@ -8,6 +8,13 @@
 #include <string>
 #include <vector>
 
+#include "native/alloc/windows_dynamic_stack_capture.h"
+// allocation_sampler_windows.cpp includes this header after the Windows SDK.
+// The permanent-IAT backend uses a walker that honors dynamic unwind tables.
+// The leading global scope in ::RtlCaptureStackBackTrace expands to a valid
+// ::spark::captureDynamicAwareStackBackTrace call.
+#define RtlCaptureStackBackTrace spark::captureDynamicAwareStackBackTrace
+
 namespace spark {
 
 struct WindowsCodeRange {

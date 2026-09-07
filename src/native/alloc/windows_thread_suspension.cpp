@@ -26,6 +26,23 @@ namespace spark {
 namespace {
 
 constexpr std::size_t KMaxPatchThreads = 2048;
+constexpr DWORD KExitRaceGraceMs = 10;
+
+[[nodiscard]] bool threadHasExited(HANDLE thread, DWORD timeout_ms, bool &exited, DWORD &failure) noexcept
+{
+    exited = false;
+    failure = ERROR_SUCCESS;
+    const DWORD wait = ::WaitForSingleObject(thread, timeout_ms);
+    if (wait == WAIT_OBJECT_0) {
+        exited = true;
+        return true;
+    }
+    if (wait == WAIT_TIMEOUT) {
+        return true;
+    }
+    failure = ::GetLastError();
+    return false;
+}
 
 }  // namespace
 
@@ -79,7 +96,8 @@ bool SuspendedProcessThreads::suspendStable(std::string &error)
                 break;
             }
 
-            HANDLE thread = ::OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_LIMITED_INFORMATION,
+            HANDLE thread = ::OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_LIMITED_INFORMATION |
+                                             SYNCHRONIZE,
                                          FALSE, entry.th32ThreadID);
             if (thread == nullptr) {
                 const DWORD code = ::GetLastError();
@@ -93,9 +111,20 @@ bool SuspendedProcessThreads::suspendStable(std::string &error)
 
             const DWORD previous_count = ::SuspendThread(thread);
             if (previous_count == std::numeric_limits<DWORD>::max()) {
-                DWORD exit_code = STILL_ACTIVE;
                 const DWORD code = ::GetLastError();
-                if (::GetExitCodeThread(thread, &exit_code) != FALSE && exit_code != STILL_ACTIVE) {
+                bool exited = false;
+                DWORD wait_failure = ERROR_SUCCESS;
+                // Microsoft documents the thread object's signaled state as the
+                // authoritative termination test. A short grace period absorbs
+                // the common snapshot/open/exit race without treating a live,
+                // unsuspendable thread as safe to patch around.
+                if (!threadHasExited(thread, KExitRaceGraceMs, exited, wait_failure)) {
+                    ::CloseHandle(thread);
+                    failure = wait_failure;
+                    operation = "WaitForSingleObject after SuspendThread";
+                    break;
+                }
+                if (exited) {
                     ::CloseHandle(thread);
                     continue;
                 }
@@ -159,9 +188,14 @@ bool SuspendedProcessThreads::resume(std::string &error) noexcept
                 break;
             }
             last_error = ::GetLastError();
-            DWORD exit_code = STILL_ACTIVE;
-            if (::GetExitCodeThread(thread.handle, &exit_code) != FALSE && exit_code != STILL_ACTIVE) {
+            bool exited = false;
+            DWORD wait_failure = ERROR_SUCCESS;
+            if (threadHasExited(thread.handle, 0, exited, wait_failure) && exited) {
                 resumed = true;  // exited threads no longer need resuming
+                break;
+            }
+            if (wait_failure != ERROR_SUCCESS) {
+                last_error = wait_failure;
                 break;
             }
             ::Sleep(1);
@@ -204,11 +238,13 @@ bool SuspendedProcessThreads::anyInstructionPointerInRanges(const std::vector<Wi
         CONTEXT context{};
         context.ContextFlags = CONTEXT_CONTROL;
         if (::GetThreadContext(thread.handle, &context) == FALSE) {
-            DWORD exit_code = STILL_ACTIVE;
-            if (::GetExitCodeThread(thread.handle, &exit_code) != FALSE && exit_code != STILL_ACTIVE) {
+            const DWORD context_failure = ::GetLastError();
+            bool exited = false;
+            DWORD wait_failure = ERROR_SUCCESS;
+            if (threadHasExited(thread.handle, 0, exited, wait_failure) && exited) {
                 continue;
             }
-            failure = static_cast<std::uint32_t>(::GetLastError());
+            failure = static_cast<std::uint32_t>(wait_failure != ERROR_SUCCESS ? wait_failure : context_failure);
             failed_thread = thread.thread_id;
             return false;
         }

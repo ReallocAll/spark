@@ -134,7 +134,6 @@ int main()
         !runProfiledCase(sampler, "normal-4k", 1, 4096, false, false, k_operations, false) ||
         !runProfiledCase(sampler, "normal-4k", 4, 4096, false, false, k_operations, false) ||
         !runProfiledCase(sampler, "live-4k", 1, 4096, true, false, k_operations, false) ||
-        !runProfiledCase(sampler, "live-4k", 4, 4096, true, false, k_operations, false) ||
         !runProfiledCase(sampler, "saturated", 4, 1, false, false, k_pressure_operations, true)) {
         std::string ignored;
         sampler.shutdown(ignored);

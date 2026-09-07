@@ -20,6 +20,8 @@ int funchook_refresh(funchook_t *funchook);
 int funchook_uninstall(funchook_t *funchook, int flags);
 int funchook_destroy(funchook_t *funchook);
 const char *funchook_error_message(funchook_t *funchook);
+const char *funchook_backend_id(void);
+const char *funchook_backend_name(void);
 
 #ifdef __cplusplus
 }
