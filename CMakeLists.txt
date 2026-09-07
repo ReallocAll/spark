@@ -22,13 +22,38 @@ endif ()
 find_package(Threads REQUIRED)
 
 include(FetchContent)
-include(cmake/Distorm.cmake)
 
 # --- x86-64 instruction decoder ---
 # Spark uses distorm directly for strict instruction-boundary decoding in both
-# supported x86-64 native symbol guessers. The revision is pinned in Distorm.cmake.
+# supported x86-64 native symbol guessers.
 if (WIN32 OR (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64"))
-    endstone_spark_add_distorm()
+    enable_language(C)
+
+    if (NOT TARGET distorm)
+        FetchContent_Declare(distorm_source
+                GIT_REPOSITORY https://github.com/gdabah/distorm.git
+                GIT_TAG 7a02caa1a936f0a653fc75f1aaea9bd3fa654603)
+        FetchContent_MakeAvailable(distorm_source)
+
+        set(distorm_src_dir "${distorm_source_SOURCE_DIR}/src")
+        add_library(distorm STATIC
+                "${distorm_src_dir}/decoder.c"
+                "${distorm_src_dir}/distorm.c"
+                "${distorm_src_dir}/instructions.c"
+                "${distorm_src_dir}/insts.c"
+                "${distorm_src_dir}/mnemonics.c"
+                "${distorm_src_dir}/operands.c"
+                "${distorm_src_dir}/prefix.c"
+                "${distorm_src_dir}/textdefs.c")
+        set_target_properties(distorm PROPERTIES POSITION_INDEPENDENT_CODE ON)
+        target_include_directories(distorm PUBLIC "${distorm_source_SOURCE_DIR}/include")
+
+        if (MSVC)
+            set_source_files_properties("${distorm_src_dir}/prefix.c" PROPERTIES COMPILE_OPTIONS "/wd4819")
+        elseif (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+            target_compile_options(distorm PRIVATE -fvisibility=hidden)
+        endif ()
+    endif ()
 endif ()
 
 # --- Endstone: header-only API + endstone_add_plugin(), fetched standalone ---
