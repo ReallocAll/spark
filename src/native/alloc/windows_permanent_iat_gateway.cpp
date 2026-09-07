@@ -153,9 +153,14 @@ static_assert(std::atomic<void *>::is_always_lock_free);
         return false;
     }
 
+    // The entry/admission block is a true leaf: it never changes RSP and reaches
+    // the original allocator via a tail jump. Only the dedicated call stub below
+    // owns a stack frame. Keeping these ranges separate lets the Windows x64
+    // unwinder treat entry/fallback as leaf code and apply one precise dynamic
+    // RUNTIME_FUNCTION to the call stub.
     std::size_t code_size = 0;
     const auto state_address = reinterpret_cast<std::uint64_t>(state);
-    if (!emit(image, code_size, {0x49, 0xBB}, error)) {
+    if (!emit(image, code_size, {0x49, 0xBB}, error)) {  // mov r11,state
         return false;
     }
     if (code_size + sizeof(state_address) > KGatewayCodeCapacity) {
@@ -165,61 +170,65 @@ static_assert(std::atomic<void *>::is_always_lock_free);
     std::memcpy(image.data() + code_size, &state_address, sizeof(state_address));
     code_size += sizeof(state_address);
 
-    if (!emit(image, code_size, {0x49, 0x83, 0x7B, 0x18, 0x00}, error)) {
+    if (!emit(image, code_size, {0x49, 0x83, 0x7B, 0x18, 0x00}, error)) {  // cmp [r11+gate],0
         return false;
     }
     const std::size_t initial_fallback = code_size;
-    if (!emit(image, code_size, {0x74, 0x00}, error) ||
-        !emit(image, code_size, {0x4D, 0x8B, 0x53, 0x10}, error) ||
-        !emit(image, code_size, {0xF0, 0x49, 0xFF, 0x43, 0x20}, error) ||
-        !emit(image, code_size, {0x49, 0x83, 0x7B, 0x18, 0x00}, error)) {
+    if (!emit(image, code_size, {0x74, 0x00}, error) ||                    // je fallback
+        !emit(image, code_size, {0x4D, 0x8B, 0x53, 0x10}, error) ||        // mov r10,[r11+generation]
+        !emit(image, code_size, {0xF0, 0x49, 0xFF, 0x43, 0x20}, error) ||  // lock inc [r11+active]
+        !emit(image, code_size, {0x49, 0x83, 0x7B, 0x18, 0x00}, error)) {  // cmp [r11+gate],0
         return false;
     }
     const std::size_t closed_rollback = code_size;
-    if (!emit(image, code_size, {0x74, 0x00}, error) ||
-        !emit(image, code_size, {0x4D, 0x3B, 0x53, 0x10}, error)) {
+    if (!emit(image, code_size, {0x74, 0x00}, error) ||              // je rollback
+        !emit(image, code_size, {0x4D, 0x3B, 0x53, 0x10}, error)) {  // cmp r10,[r11+generation]
         return false;
     }
     const std::size_t generation_rollback = code_size;
-    if (!emit(image, code_size, {0x75, 0x00}, error) ||
-        !emit(image, code_size, {0x4D, 0x8B, 0x53, 0x28}, error) ||
-        !emit(image, code_size, {0x4D, 0x85, 0xD2}, error)) {
+    if (!emit(image, code_size, {0x75, 0x00}, error) ||              // jne rollback
+        !emit(image, code_size, {0x4D, 0x8B, 0x53, 0x28}, error) ||  // mov r10,[r11+handler]
+        !emit(image, code_size, {0x4D, 0x85, 0xD2}, error)) {        // test r10,r10
         return false;
     }
     const std::size_t null_rollback = code_size;
-    if (!emit(image, code_size, {0x74, 0x00}, error)) {
+    if (!emit(image, code_size, {0x74, 0x00}, error)) {  // je rollback
         return false;
     }
 
+    // Preserve the fifth Windows x64 argument before the call stub allocates its
+    // own 32-byte home area. RAX is volatile and does not carry an allocator input.
     if (state->stack_argument_count == 1 &&
-        !emit(image, code_size, {0x48, 0x8B, 0x44, 0x24, 0x28}, error)) {
+        !emit(image, code_size, {0x48, 0x8B, 0x44, 0x24, 0x28}, error)) {  // mov rax,[rsp+40]
         return false;
     }
     const std::size_t call_stub_jump = code_size;
-    if (!emit(image, code_size, {0xEB, 0x00}, error)) {
+    if (!emit(image, code_size, {0xEB, 0x00}, error)) {  // jmp call_stub
         return false;
     }
 
     const std::size_t rollback = code_size;
-    if (!emit(image, code_size, {0xF0, 0x49, 0xFF, 0x4B, 0x20}, error)) {
+    if (!emit(image, code_size, {0xF0, 0x49, 0xFF, 0x4B, 0x20}, error)) {  // lock dec [r11+active]
         return false;
     }
     const std::size_t fallback = code_size;
-    if (!emit(image, code_size, {0x4D, 0x8B, 0x53, 0x30}, error) ||
-        !emit(image, code_size, {0x41, 0xFF, 0xE2}, error)) {
+    if (!emit(image, code_size, {0x4D, 0x8B, 0x53, 0x30}, error) ||  // mov r10,[r11+original]
+        !emit(image, code_size, {0x41, 0xFF, 0xE2}, error)) {        // jmp r10
         return false;
     }
 
+    // This is the only non-leaf range. Its four-byte stack-allocation prologue
+    // is described by the dynamic UNWIND_INFO emitted after the machine code.
     const std::size_t call_stub = code_size;
-    if (!emit(image, code_size, {0x48, 0x83, 0xEC, 0x28}, error)) {
+    if (!emit(image, code_size, {0x48, 0x83, 0xEC, 0x28}, error)) {  // sub rsp,40
         return false;
     }
     if (state->stack_argument_count == 1 &&
-        !emit(image, code_size, {0x48, 0x89, 0x44, 0x24, 0x20}, error)) {
+        !emit(image, code_size, {0x48, 0x89, 0x44, 0x24, 0x20}, error)) {  // mov [rsp+32],rax
         return false;
     }
-    if (!emit(image, code_size, {0x41, 0xFF, 0xD2}, error) ||
-        !emit(image, code_size, {0x49, 0xBB}, error)) {
+    if (!emit(image, code_size, {0x41, 0xFF, 0xD2}, error) ||  // call r10
+        !emit(image, code_size, {0x49, 0xBB}, error)) {        // mov r11,state
         return false;
     }
     if (code_size + sizeof(state_address) > KGatewayCodeCapacity) {
@@ -228,9 +237,9 @@ static_assert(std::atomic<void *>::is_always_lock_free);
     }
     std::memcpy(image.data() + code_size, &state_address, sizeof(state_address));
     code_size += sizeof(state_address);
-    if (!emit(image, code_size, {0xF0, 0x49, 0xFF, 0x4B, 0x20}, error) ||
-        !emit(image, code_size, {0x48, 0x83, 0xC4, 0x28}, error) ||
-        !emit(image, code_size, {0xC3}, error)) {
+    if (!emit(image, code_size, {0xF0, 0x49, 0xFF, 0x4B, 0x20}, error) ||  // lock dec [r11+active]
+        !emit(image, code_size, {0x48, 0x83, 0xC4, 0x28}, error) ||        // add rsp,40
+        !emit(image, code_size, {0xC3}, error)) {                          // ret original caller
         return false;
     }
 
@@ -246,6 +255,10 @@ static_assert(std::atomic<void *>::is_always_lock_free);
         return false;
     }
 
+    // UNWIND_INFO version=1, flags=0, prologue=4, one unwind code,
+    // no frame register. UWOP_ALLOC_SMALL with OpInfo=4 represents 40 bytes:
+    // size = OpInfo * 8 + 8 = 40. The final two zero bytes keep the structure
+    // four-byte aligned as required by the x64 unwind format.
     const std::array<std::uint8_t, KGatewayUnwindInfoSize> unwind_bytes{0x01, 0x04, 0x01, 0x00, 0x04, 0x42, 0x00, 0x00};
     std::memcpy(image.data() + unwind_info, unwind_bytes.data(), unwind_bytes.size());
 
@@ -435,6 +448,11 @@ bool createPermanentIatGateway(void *original, std::uint32_t stack_argument_coun
         return false;
     }
 
+    // The runtime-function entry and its UNWIND_INFO are process-lifetime just
+    // like the gateway code/state. No successful gateway calls
+    // RtlDeleteFunctionTable: doing so on plugin unload would recreate the same
+    // stale-executable/unwind-metadata hazard this architecture is designed to
+    // eliminate.
     if (::RtlAddFunctionTable(&state->runtime_function, 1, reinterpret_cast<DWORD64>(code_memory_raw)) == FALSE) {
         ::VirtualFree(code_memory_raw, 0, MEM_RELEASE);
         ::VirtualFree(state_memory_raw, 0, MEM_RELEASE);
@@ -448,6 +466,10 @@ bool createPermanentIatGateway(void *original, std::uint32_t stack_argument_coun
         return false;
     }
 
+    // This is the lifetime boundary for successful construction. The caller may
+    // publish gateway into arbitrary process IAT slots immediately after return,
+    // so successful code/state/unwind metadata is process-lifetime and has no
+    // destroy API.
     populateHandle(state, code_memory, state_memory, handle);
     return true;
 }
