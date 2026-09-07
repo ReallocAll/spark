@@ -2848,6 +2848,16 @@ bool AllocationSampler::failure(std::string &error) const
     return true;
 }
 
+const char *AllocationSampler::backendId() noexcept
+{
+    return funchook_backend_id();
+}
+
+const char *AllocationSampler::backendName() noexcept
+{
+    return funchook_backend_name();
+}
+
 const std::vector<AllocationHookCapability> &AllocationSampler::hookCapabilities() const
 {
     return impl_->hook_capabilities;

@@ -150,7 +150,6 @@ jobs:
           path: |
             build/RelWithDebInfo/endstone_spark.dll
             build/RelWithDebInfo/endstone_spark.pdb
-            build/RelWithDebInfo/spark_allocation_shim.dll
           if-no-files-found: error
           retention-days: 14
 
