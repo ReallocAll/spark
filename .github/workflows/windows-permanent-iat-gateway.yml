@@ -6,8 +6,8 @@ on:
       - "exp/windows-stable-entry-hooks"
     paths:
       - "src/native/alloc/windows_dynamic_stack_capture.h"
-      - "src/native/alloc/windows_permanent_iat_gateway_experiment.*"
-      - "src/native/alloc/windows_permanent_iat_gateway_registry_experiment.*"
+      - "src/native/alloc/windows_permanent_iat_gateway.*"
+      - "src/native/alloc/windows_permanent_iat_gateway_registry.*"
       - "src/native/alloc/windows_permanent_iat_funchook_compat.cpp"
       - "src/native/alloc/windows_iat_hooks.*"
       - "src/native/alloc/windows_iat_hooks_windows.cpp"
@@ -21,8 +21,8 @@ on:
   pull_request:
     paths:
       - "src/native/alloc/windows_dynamic_stack_capture.h"
-      - "src/native/alloc/windows_permanent_iat_gateway_experiment.*"
-      - "src/native/alloc/windows_permanent_iat_gateway_registry_experiment.*"
+      - "src/native/alloc/windows_permanent_iat_gateway.*"
+      - "src/native/alloc/windows_permanent_iat_gateway_registry.*"
       - "src/native/alloc/windows_permanent_iat_funchook_compat.cpp"
       - "src/native/alloc/windows_iat_hooks.*"
       - "src/native/alloc/windows_iat_hooks_windows.cpp"
@@ -62,7 +62,7 @@ jobs:
         run: >-
           cl.exe /nologo /std:c++20 /EHsc /O2 /W4 /WX /guard:cf
           /DWIN32_LEAN_AND_MEAN /DNOMINMAX /Isrc
-          src\native\alloc\windows_permanent_iat_gateway_experiment.cpp
+          src\native\alloc\windows_permanent_iat_gateway.cpp
           tests\native\alloc\windows_permanent_iat_gateway_test.cpp
           /Fe:windows_permanent_iat_gateway_test.exe
           /link /guard:cf
@@ -93,7 +93,7 @@ jobs:
         run: >-
           cl.exe /nologo /std:c++20 /EHsc /O2 /W4 /WX /guard:cf
           /DWIN32_LEAN_AND_MEAN /DNOMINMAX /Isrc
-          src\native\alloc\windows_permanent_iat_gateway_experiment.cpp
+          src\native\alloc\windows_permanent_iat_gateway.cpp
           tests\native\alloc\windows_permanent_iat_gateway_unwind_test.cpp
           /Fe:windows_permanent_iat_gateway_unwind_test.exe
           /link /guard:cf
@@ -124,8 +124,8 @@ jobs:
         run: >-
           cl.exe /nologo /std:c++20 /EHsc /O2 /W4 /WX
           /DWIN32_LEAN_AND_MEAN /DNOMINMAX /Isrc
-          src\native\alloc\windows_permanent_iat_gateway_experiment.cpp
-          src\native\alloc\windows_permanent_iat_gateway_registry_experiment.cpp
+          src\native\alloc\windows_permanent_iat_gateway.cpp
+          src\native\alloc\windows_permanent_iat_gateway_registry.cpp
           tests\native\alloc\windows_permanent_iat_gateway_registry_test.cpp
           /Fe:windows_permanent_iat_gateway_registry_test.exe
       - name: Run 1000 simulated plugin reload acquisitions
@@ -162,7 +162,7 @@ jobs:
         run: >-
           cl.exe /nologo /std:c++20 /EHsc /O2 /W4 /WX
           /DWIN32_LEAN_AND_MEAN /DNOMINMAX /Isrc
-          src\native\alloc\windows_permanent_iat_gateway_experiment.cpp
+          src\native\alloc\windows_permanent_iat_gateway.cpp
           tests\native\alloc\windows_permanent_iat_gateway_unload_test.cpp
           /Fe:windows_permanent_iat_gateway_unload_test.exe
       - name: Run 1000-cycle true handler DLL unload/reload stress
@@ -198,8 +198,8 @@ jobs:
         run: >-
           cl.exe /nologo /std:c++20 /EHsc /O2 /W4 /WX /MD /LD
           /DWIN32_LEAN_AND_MEAN /DNOMINMAX /Isrc
-          src\native\alloc\windows_permanent_iat_gateway_experiment.cpp
-          src\native\alloc\windows_permanent_iat_gateway_registry_experiment.cpp
+          src\native\alloc\windows_permanent_iat_gateway.cpp
+          src\native\alloc\windows_permanent_iat_gateway_registry.cpp
           src\native\alloc\windows_iat_hooks.cpp
           src\native\alloc\windows_iat_hooks_windows.cpp
           src\native\alloc\windows_permanent_iat_funchook_compat.cpp
