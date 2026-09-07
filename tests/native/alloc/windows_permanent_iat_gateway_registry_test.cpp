@@ -1,4 +1,4 @@
-#include "native/alloc/windows_permanent_iat_gateway_registry_experiment.h"
+#include "native/alloc/windows_permanent_iat_gateway_registry.h"
 
 #ifndef _WIN32
 #error "windows_permanent_iat_gateway_registry_test.cpp is Windows-only"
@@ -17,14 +17,14 @@
 #include <cstdlib>
 #include <string>
 
-using spark::permanent_iat_gateway_experiment::acquirePermanentIatGateway;
-using spark::permanent_iat_gateway_experiment::bindPermanentIatGateway;
-using spark::permanent_iat_gateway_experiment::detachPermanentIatGateway;
-using spark::permanent_iat_gateway_experiment::permanentIatGatewayActive;
-using spark::permanent_iat_gateway_experiment::permanentIatGatewayAdmissionOpen;
-using spark::permanent_iat_gateway_experiment::permanentIatGatewayGeneration;
-using spark::permanent_iat_gateway_experiment::PermanentIatGatewayHandle;
-using spark::permanent_iat_gateway_experiment::permanentIatGatewayHandler;
+using spark::permanent_iat_gateway::acquirePermanentIatGateway;
+using spark::permanent_iat_gateway::bindPermanentIatGateway;
+using spark::permanent_iat_gateway::detachPermanentIatGateway;
+using spark::permanent_iat_gateway::permanentIatGatewayActive;
+using spark::permanent_iat_gateway::permanentIatGatewayAdmissionOpen;
+using spark::permanent_iat_gateway::permanentIatGatewayGeneration;
+using spark::permanent_iat_gateway::PermanentIatGatewayHandle;
+using spark::permanent_iat_gateway::permanentIatGatewayHandler;
 
 namespace {
 
