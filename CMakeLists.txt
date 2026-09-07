@@ -107,8 +107,8 @@ if (WIN32)
             src/native/alloc/windows_iat_hooks.cpp
             src/native/alloc/windows_iat_hooks_windows.cpp
             src/native/alloc/windows_thread_suspension.cpp
-            src/native/alloc/windows_permanent_iat_gateway_experiment.cpp
-            src/native/alloc/windows_permanent_iat_gateway_registry_experiment.cpp
+            src/native/alloc/windows_permanent_iat_gateway.cpp
+            src/native/alloc/windows_permanent_iat_gateway_registry.cpp
             src/native/alloc/windows_permanent_iat_funchook_compat.cpp)
 elseif (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
     target_sources(spark_native PRIVATE
