@@ -22,6 +22,9 @@ public:
     [[nodiscard]] bool installed() const noexcept;
     [[nodiscard]] const std::string &lastError() const noexcept;
 
+    static constexpr const char *backendId() noexcept { return "native-ucrt/permanent-iat"; }
+    static constexpr const char *backendName() noexcept { return "Windows UCRT permanent IAT gateway"; }
+
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
