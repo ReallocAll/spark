@@ -157,7 +157,7 @@ Leave successfully symbolicated frames and non-BDS modules untouched
 ### Key Components
 
 1. **Execution sampler:** Captures selected native thread stacks at a bounded interval. Linux uses `SIGPROF` with cpptrace's safe raw-trace path; Windows suspends a target thread and walks it with the native stack APIs.
-2. **Allocation profiler:** Samples allocation stacks by requested bytes. Windows uses funchook for supported UCRT and heap entry points; Linux redirects supported ELF allocator imports. Hook callbacks enqueue bounded records for later processing.
+2. **Allocation profiler:** Samples allocation stacks by requested bytes. Windows uses Spark-owned Permanent-IAT/`WindowsIatHooks` handling for supported UCRT and heap imports; Linux redirects supported ELF allocator imports. Hook callbacks enqueue bounded records for later processing.
 3. **Profiler pipeline:** Aggregates samples into per-thread call trees, attaches statistics and platform metadata, and serializes the spark protobuf. Network uploads are gzip-compressed; local `.sparkprofile` files contain raw protobuf.
 4. **Symbolization:** Normal platform symbols have priority. Unresolved frames in the BDS main executable may receive conservative runtime guesses from unwind metadata, RTTI, vtables, thunks, and decoded string references. Guesses retain the RVA and identify their evidence source.
 5. **Statistics service:** Maintains bounded rolling TPS, MSPT, CPU, player-count, and world-gauge histories independently of an active profile.
@@ -174,7 +174,7 @@ Leave successfully symbolicated frames and non-BDS modules untouched
 
 ### Dependencies
 
-Conan supplies cpptrace, concurrentqueue, zlib, expected-lite, libcurl, and tomlplusplus. Linux additionally requires OpenSSL for crypto. CMake fetches Endstone's public plugin API and funchook `v1.1.3`; funchook's bundled distorm decoder is used by the x86-64 symbol guessers on both supported platforms, while the funchook hook library itself is linked only on Windows.
+Conan supplies cpptrace, concurrentqueue, zlib, expected-lite, libcurl, and tomlplusplus. Linux additionally requires OpenSSL for crypto. CMake fetches Endstone's public plugin API and directly fetches the pinned distorm decoder used by the x86-64 symbol guessers on both supported platforms. Windows allocation hooking is implemented entirely by Spark's Permanent-IAT and `WindowsIatHooks` backend.
 
 ## Native Symbol Guessing
 
