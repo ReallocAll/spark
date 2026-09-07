@@ -1,6 +1,7 @@
 include_guard(GLOBAL)
 
 include(FetchContent)
+enable_language(C)
 
 # Pin the exact distorm revision that funchook v1.1.3 previously supplied as a
 # submodule. Keeping the decoder revision unchanged makes this dependency-only
