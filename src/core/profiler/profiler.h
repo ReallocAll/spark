@@ -53,6 +53,7 @@ struct ProfilerOptions {
     bool is_background = false;
     // Deterministic service-failure injection used only by the offline selftest.
     bool fail_allocation_aggregator_for_testing = false;
+    std::uint32_t allocation_aggregator_delay_ms_for_testing = 0;
 };
 
 // Server facts needed only at export time (read from Endstone on the main thread).
