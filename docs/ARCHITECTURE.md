@@ -88,7 +88,7 @@ Captures native thread stacks at a bounded interval. Linux uses `SIGPROF` with c
 
 ### Allocation Profiler (`native/alloc/`)
 
-Samples allocation stacks by requested bytes on Linux x86-64 by redirecting supported ELF allocator imports and on Windows x64 by redirecting supported allocator IAT slots through a process-lifetime pinned shim. The Windows shim owns the unload-safe callback gate: teardown closes and drains callbacks, clears Spark-owned handlers, and restores only slots still owned by Spark, while stale shim calls safely fall back to the original allocator. Hook callbacks enqueue bounded records for later processing. Live exports deep-copy cumulative aggregator state or rebuild a temporary retained tree from the authoritative live index without stopping hooks. The hook path is free of allocations, string construction, and unbounded containers.
+Samples allocation stacks by requested bytes on Linux x86-64 by redirecting supported ELF allocator imports and on Windows x64 through Spark-owned `WindowsAllocationIatHooks` and process-lifetime Permanent-IAT gateways. The Windows backend patches supported UCRT and heap import slots to permanent gateways whose handler admission can be closed and drained before plugin unload; the gateways then fall through to the original allocator without retaining pointers into unloaded Spark code. Refresh rescans loaded modules so newly loaded importers receive the same ownership-checked IAT treatment. Hook callbacks enqueue bounded records for later processing. Live exports deep-copy cumulative aggregator state or rebuild a temporary retained tree from the authoritative live index without stopping hooks. The hook path is free of allocations, string construction, and unbounded containers.
 
 ### Symbol Guesser (`native/symbol/`)
 
@@ -125,4 +125,4 @@ enable order when installed; no PAPI binary is linked into Spark.
 
 ## Dependencies
 
-Conan supplies cpptrace, concurrentqueue, zlib, expected-lite, libcurl, and tomlplusplus. Linux additionally requires OpenSSL for crypto. CMake fetches Endstone's public plugin API, pinned public PAPI headers, and funchook `v1.1.3`; only funchook's bundled distorm decoder is used by the x86-64 symbol guessers.
+Conan supplies cpptrace, concurrentqueue, zlib, expected-lite, libcurl, and tomlplusplus. Linux additionally requires OpenSSL for crypto. CMake fetches Endstone's public plugin API and pinned public PAPI headers, and directly fetches the pinned distorm revision used for strict x86-64 instruction-boundary decoding. Windows allocation hooking is implemented entirely by Spark-owned `WindowsAllocationIatHooks` and Permanent-IAT gateways.
