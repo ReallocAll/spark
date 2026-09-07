@@ -5,7 +5,7 @@
 
 #include "native/alloc/windows_permanent_iat_gateway.h"
 
-namespace spark::permanent_iat_gateway_experiment {
+namespace spark::permanent_iat_gateway {
 
 #ifdef _WIN32
 
@@ -17,4 +17,4 @@ bool acquirePermanentIatGateway(void *original, std::uint32_t stack_argument_cou
 
 #endif
 
-}  // namespace spark::permanent_iat_gateway_experiment
+}  // namespace spark::permanent_iat_gateway
