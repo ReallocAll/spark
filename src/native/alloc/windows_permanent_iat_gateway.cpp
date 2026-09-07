@@ -25,22 +25,22 @@
 namespace spark::permanent_iat_gateway {
 namespace {
 
-constexpr std::uint64_t kGatewayMagic = 0x3154414947504B53ULL;  // "SKPGIAT1" marker.
-constexpr std::uint32_t kGatewayAbiVersion = 2;
-constexpr std::size_t kGatewayCodeCapacity = 128;
-constexpr std::size_t kGatewayImageCapacity = 256;
-constexpr std::size_t kGatewayAllocationSize = 4096;
-constexpr std::size_t kGatewayUnwindInfoSize = 8;
-constexpr std::uint64_t kGateClosed = 0;
-constexpr std::uint64_t kGateOpen = 1;
-constexpr std::uint32_t kMaxStackArguments = 1;
+constexpr std::uint64_t KGatewayMagic = 0x3154414947504B53ULL;  // "SKPGIAT1" marker.
+constexpr std::uint32_t KGatewayAbiVersion = 2;
+constexpr std::size_t KGatewayCodeCapacity = 128;
+constexpr std::size_t KGatewayImageCapacity = 256;
+constexpr std::size_t KGatewayAllocationSize = 4096;
+constexpr std::size_t KGatewayUnwindInfoSize = 8;
+constexpr std::uint64_t KGateClosed = 0;
+constexpr std::uint64_t KGateOpen = 1;
+constexpr std::uint32_t KMaxStackArguments = 1;
 
 struct GatewayState {
-    std::uint64_t magic = kGatewayMagic;
-    std::uint32_t abi_version = kGatewayAbiVersion;
+    std::uint64_t magic = KGatewayMagic;
+    std::uint32_t abi_version = KGatewayAbiVersion;
     std::uint32_t struct_size = sizeof(GatewayState);
     std::atomic<std::uint64_t> generation{1};
-    std::atomic<std::uint64_t> gate{kGateClosed};
+    std::atomic<std::uint64_t> gate{KGateClosed};
     std::atomic<std::uint64_t> active{0};
     std::atomic<void *> handler{nullptr};
     void *original = nullptr;
@@ -108,10 +108,10 @@ static_assert(std::atomic<void *>::is_always_lock_free);
     return true;
 }
 
-[[nodiscard]] bool emit(std::array<std::uint8_t, kGatewayImageCapacity> &image, std::size_t &out,
+[[nodiscard]] bool emit(std::array<std::uint8_t, KGatewayImageCapacity> &image, std::size_t &out,
                         std::initializer_list<std::uint8_t> bytes, std::string &error)
 {
-    if (out + bytes.size() > kGatewayCodeCapacity) {
+    if (out + bytes.size() > KGatewayCodeCapacity) {
         error = "permanent IAT gateway machine-code buffer capacity exceeded";
         return false;
     }
@@ -121,10 +121,10 @@ static_assert(std::atomic<void *>::is_always_lock_free);
     return true;
 }
 
-[[nodiscard]] bool patchRel8(std::array<std::uint8_t, kGatewayImageCapacity> &image, std::size_t branch_offset,
+[[nodiscard]] bool patchRel8(std::array<std::uint8_t, KGatewayImageCapacity> &image, std::size_t branch_offset,
                              std::size_t target, std::string &error)
 {
-    if (branch_offset + 2 > kGatewayCodeCapacity || target > kGatewayCodeCapacity) {
+    if (branch_offset + 2 > KGatewayCodeCapacity || target > KGatewayCodeCapacity) {
         error = "permanent IAT gateway branch patch is outside code buffer";
         return false;
     }
@@ -143,12 +143,12 @@ static_assert(std::atomic<void *>::is_always_lock_free);
            left.UnwindData == right.UnwindData;
 }
 
-[[nodiscard]] bool buildGatewayImage(GatewayState *state, std::array<std::uint8_t, kGatewayImageCapacity> &image,
+[[nodiscard]] bool buildGatewayImage(GatewayState *state, std::array<std::uint8_t, KGatewayImageCapacity> &image,
                                      GatewayImageLayout &layout, std::string &error)
 {
     image = {};
     layout = {};
-    if (state == nullptr || state->stack_argument_count > kMaxStackArguments) {
+    if (state == nullptr || state->stack_argument_count > KMaxStackArguments) {
         error = "unsupported permanent IAT gateway stack-argument count";
         return false;
     }
@@ -159,11 +159,11 @@ static_assert(std::atomic<void *>::is_always_lock_free);
     // unwinder treat entry/fallback as leaf code and apply one precise dynamic
     // RUNTIME_FUNCTION to the call stub.
     std::size_t code_size = 0;
-    const std::uint64_t state_address = reinterpret_cast<std::uint64_t>(state);
+    const auto state_address = reinterpret_cast<std::uint64_t>(state);
     if (!emit(image, code_size, {0x49, 0xBB}, error)) {  // mov r11,state
         return false;
     }
-    if (code_size + sizeof(state_address) > kGatewayCodeCapacity) {
+    if (code_size + sizeof(state_address) > KGatewayCodeCapacity) {
         error = "permanent IAT gateway state immediate exceeds code buffer";
         return false;
     }
@@ -231,7 +231,7 @@ static_assert(std::atomic<void *>::is_always_lock_free);
         !emit(image, code_size, {0x49, 0xBB}, error)) {        // mov r11,state
         return false;
     }
-    if (code_size + sizeof(state_address) > kGatewayCodeCapacity) {
+    if (code_size + sizeof(state_address) > KGatewayCodeCapacity) {
         error = "permanent IAT gateway post-call state immediate exceeds code buffer";
         return false;
     }
@@ -250,7 +250,7 @@ static_assert(std::atomic<void *>::is_always_lock_free);
     }
 
     const std::size_t unwind_info = alignUp(code_size, 4);
-    if (unwind_info + kGatewayUnwindInfoSize > image.size()) {
+    if (unwind_info + KGatewayUnwindInfoSize > image.size()) {
         error = "permanent IAT gateway unwind metadata exceeds image capacity";
         return false;
     }
@@ -259,7 +259,7 @@ static_assert(std::atomic<void *>::is_always_lock_free);
     // no frame register. UWOP_ALLOC_SMALL with OpInfo=4 represents 40 bytes:
     // size = OpInfo * 8 + 8 = 40. The final two zero bytes keep the structure
     // four-byte aligned as required by the x64 unwind format.
-    const std::array<std::uint8_t, kGatewayUnwindInfoSize> unwind_bytes{0x01, 0x04, 0x01, 0x00, 0x04, 0x42, 0x00, 0x00};
+    const std::array<std::uint8_t, KGatewayUnwindInfoSize> unwind_bytes{0x01, 0x04, 0x01, 0x00, 0x04, 0x42, 0x00, 0x00};
     std::memcpy(image.data() + unwind_info, unwind_bytes.data(), unwind_bytes.size());
 
     if (call_stub > (std::numeric_limits<DWORD>::max)() || code_size > (std::numeric_limits<DWORD>::max)() ||
@@ -308,12 +308,12 @@ static_assert(std::atomic<void *>::is_always_lock_free);
 
 [[nodiscard]] bool validateStateIdentity(GatewayState *state, void *gateway, std::string &error)
 {
-    if (state == nullptr || state->magic != kGatewayMagic || state->abi_version != kGatewayAbiVersion ||
+    if (state == nullptr || state->magic != KGatewayMagic || state->abi_version != KGatewayAbiVersion ||
         state->struct_size != sizeof(GatewayState) || state->gateway != gateway || state->original == nullptr ||
-        state->stack_argument_count > kMaxStackArguments || state->code_size == 0 ||
-        state->code_size > kGatewayCodeCapacity || state->call_stub_offset >= state->code_size ||
+        state->stack_argument_count > KMaxStackArguments || state->code_size == 0 ||
+        state->code_size > KGatewayCodeCapacity || state->call_stub_offset >= state->code_size ||
         state->unwind_info_offset < state->code_size ||
-        static_cast<std::size_t>(state->unwind_info_offset) + kGatewayUnwindInfoSize > kGatewayAllocationSize ||
+        static_cast<std::size_t>(state->unwind_info_offset) + KGatewayUnwindInfoSize > KGatewayAllocationSize ||
         state->runtime_function.BeginAddress != state->call_stub_offset ||
         state->runtime_function.EndAddress != state->code_size ||
         state->runtime_function.UnwindData != state->unwind_info_offset) {
@@ -329,7 +329,7 @@ static_assert(std::atomic<void *>::is_always_lock_free);
         error = "permanent IAT gateway unwind validation received null state";
         return false;
     }
-    const DWORD64 gateway_base = reinterpret_cast<DWORD64>(state->gateway);
+    const auto gateway_base = reinterpret_cast<DWORD64>(state->gateway);
     const DWORD64 control_pc = gateway_base + state->call_stub_offset + 4;
     DWORD64 image_base = 0;
     PRUNTIME_FUNCTION found = ::RtlLookupFunctionEntry(control_pc, &image_base, nullptr);
@@ -376,7 +376,7 @@ bool createPermanentIatGateway(void *original, std::uint32_t stack_argument_coun
         error = "permanent IAT gateway original is null";
         return false;
     }
-    if (stack_argument_count > kMaxStackArguments) {
+    if (stack_argument_count > KMaxStackArguments) {
         error = "permanent IAT gateway prototype supports at most one stack argument";
         return false;
     }
@@ -395,7 +395,7 @@ bool createPermanentIatGateway(void *original, std::uint32_t stack_argument_coun
         error = "VirtualAlloc permanent IAT gateway state failed: " + std::to_string(::GetLastError());
         return false;
     }
-    void *code_memory_raw = ::VirtualAlloc(nullptr, kGatewayAllocationSize, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    void *code_memory_raw = ::VirtualAlloc(nullptr, KGatewayAllocationSize, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
     if (code_memory_raw == nullptr) {
         const DWORD failure = ::GetLastError();
         ::VirtualFree(state_memory_raw, 0, MEM_RELEASE);
@@ -408,7 +408,7 @@ bool createPermanentIatGateway(void *original, std::uint32_t stack_argument_coun
     state->gateway = code_memory_raw;
     state->stack_argument_count = stack_argument_count;
 
-    std::array<std::uint8_t, kGatewayImageCapacity> image{};
+    std::array<std::uint8_t, KGatewayImageCapacity> image{};
     GatewayImageLayout layout;
     if (!buildGatewayImage(state, image, layout, error)) {
         ::VirtualFree(code_memory_raw, 0, MEM_RELEASE);
@@ -422,14 +422,14 @@ bool createPermanentIatGateway(void *original, std::uint32_t stack_argument_coun
     std::memcpy(code_memory_raw, image.data(), layout.image_size);
 
     DWORD old_code_protection = 0;
-    if (::VirtualProtect(code_memory_raw, kGatewayAllocationSize, PAGE_EXECUTE_READ, &old_code_protection) == FALSE) {
+    if (::VirtualProtect(code_memory_raw, KGatewayAllocationSize, PAGE_EXECUTE_READ, &old_code_protection) == FALSE) {
         const DWORD failure = ::GetLastError();
         ::VirtualFree(code_memory_raw, 0, MEM_RELEASE);
         ::VirtualFree(state_memory_raw, 0, MEM_RELEASE);
         error = "VirtualProtect permanent IAT gateway RX failed: " + std::to_string(failure);
         return false;
     }
-    if (::FlushInstructionCache(::GetCurrentProcess(), code_memory_raw, kGatewayAllocationSize) == FALSE) {
+    if (::FlushInstructionCache(::GetCurrentProcess(), code_memory_raw, KGatewayAllocationSize) == FALSE) {
         const DWORD failure = ::GetLastError();
         ::VirtualFree(code_memory_raw, 0, MEM_RELEASE);
         ::VirtualFree(state_memory_raw, 0, MEM_RELEASE);
@@ -496,9 +496,9 @@ bool discoverPermanentIatGateway(void *gateway, PermanentIatGatewayHandle &handl
         return false;
     }
 
-    std::uint64_t state_value = 0;
-    std::memcpy(&state_value, code + 2, sizeof(state_value));
-    auto *state = reinterpret_cast<GatewayState *>(state_value);
+    GatewayState *state = nullptr;
+    static_assert(sizeof(state) == sizeof(std::uint64_t));
+    std::memcpy(&state, code + 2, sizeof(state));
     MEMORY_BASIC_INFORMATION state_memory{};
     if (!queryCommitted(state, state_memory, error) || !isWritableNonExecutable(state_memory.Protect)) {
         error = "decoded permanent IAT gateway state is not committed non-executable writable memory";
@@ -508,7 +508,7 @@ bool discoverPermanentIatGateway(void *gateway, PermanentIatGatewayHandle &handl
         return false;
     }
 
-    std::array<std::uint8_t, kGatewayImageCapacity> expected_image{};
+    std::array<std::uint8_t, KGatewayImageCapacity> expected_image{};
     GatewayImageLayout expected_layout;
     if (!buildGatewayImage(state, expected_image, expected_layout, error) ||
         expected_layout.code_size != state->code_size || expected_layout.call_stub_offset != state->call_stub_offset ||
@@ -552,7 +552,7 @@ bool bindPermanentIatGateway(PermanentIatGatewayHandle &handle, void *handler, s
         error = "permanent IAT gateway handler is not committed executable read-only memory";
         return false;
     }
-    if (state->gate.load(std::memory_order_acquire) != kGateClosed ||
+    if (state->gate.load(std::memory_order_acquire) != KGateClosed ||
         state->handler.load(std::memory_order_acquire) != nullptr) {
         error = "permanent IAT gateway bind requires a detached state";
         return false;
@@ -568,7 +568,7 @@ bool bindPermanentIatGateway(PermanentIatGatewayHandle &handle, void *handler, s
     }
     const std::uint64_t generation = state->generation.fetch_add(1, std::memory_order_acq_rel) + 1;
     state->handler.store(handler, std::memory_order_release);
-    state->gate.store(kGateOpen, std::memory_order_seq_cst);
+    state->gate.store(KGateOpen, std::memory_order_seq_cst);
     handle.generation = generation;
     return true;
 }
@@ -584,7 +584,7 @@ bool detachPermanentIatGateway(PermanentIatGatewayHandle &handle, std::uint64_t 
         return false;
     }
 
-    state->gate.store(kGateClosed, std::memory_order_seq_cst);
+    state->gate.store(KGateClosed, std::memory_order_seq_cst);
     const std::uint64_t current = state->generation.load(std::memory_order_acquire);
     if (current == (std::numeric_limits<std::uint64_t>::max)()) {
         error = "permanent IAT gateway generation exhausted after admission close";
@@ -627,7 +627,7 @@ std::uint64_t permanentIatGatewayGeneration(const PermanentIatGatewayHandle &han
 bool permanentIatGatewayAdmissionOpen(const PermanentIatGatewayHandle &handle) noexcept
 {
     GatewayState *state = stateFromHandle(handle);
-    return state != nullptr && state->gate.load(std::memory_order_acquire) == kGateOpen;
+    return state != nullptr && state->gate.load(std::memory_order_acquire) == KGateOpen;
 }
 
 }  // namespace spark::permanent_iat_gateway
