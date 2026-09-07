@@ -1,7 +1,7 @@
-#include "native/alloc/windows_permanent_iat_gateway_experiment.h"
+#include "native/alloc/windows_permanent_iat_gateway.h"
 
 #ifndef _WIN32
-#error "windows_permanent_iat_gateway_experiment.cpp must only be compiled on Windows"
+#error "windows_permanent_iat_gateway.cpp must only be compiled on Windows"
 #endif
 
 #ifndef WIN32_LEAN_AND_MEAN
@@ -22,7 +22,7 @@
 #include <new>
 #include <string>
 
-namespace spark::permanent_iat_gateway_experiment {
+namespace spark::permanent_iat_gateway {
 namespace {
 
 constexpr std::uint64_t kGatewayMagic = 0x3154414947504B53ULL;  // "SKPGIAT1" marker.
@@ -630,4 +630,4 @@ bool permanentIatGatewayAdmissionOpen(const PermanentIatGatewayHandle &handle) n
     return state != nullptr && state->gate.load(std::memory_order_acquire) == kGateOpen;
 }
 
-}  // namespace spark::permanent_iat_gateway_experiment
+}  // namespace spark::permanent_iat_gateway
