@@ -23,7 +23,7 @@
 #include <windows.h>
 
 #include "native/alloc/windows_iat_hooks.h"
-#include "native/alloc/windows_permanent_iat_gateway_registry_experiment.h"
+#include "native/alloc/windows_permanent_iat_gateway_registry.h"
 
 namespace {
 
@@ -35,7 +35,7 @@ struct HookRecord {
     void *handler = nullptr;
     bool required_coverage = false;
     std::uint32_t stack_argument_count = 0;
-    spark::permanent_iat_gateway_experiment::PermanentIatGatewayHandle gateway;
+    spark::permanent_iat_gateway::PermanentIatGatewayHandle gateway;
 };
 
 struct TargetDescription {
@@ -107,12 +107,12 @@ std::vector<spark::WindowsIatHookTarget> makeTargets(const std::vector<HookRecor
 bool acquireGateways(std::vector<HookRecord> &records, std::string &error)
 {
     for (HookRecord &record : records) {
-        if (!spark::permanent_iat_gateway_experiment::acquirePermanentIatGateway(
-                record.original, record.stack_argument_count, record.gateway, error)) {
+        if (!spark::permanent_iat_gateway::acquirePermanentIatGateway(record.original, record.stack_argument_count,
+                                                                      record.gateway, error)) {
             return false;
         }
-        if (spark::permanent_iat_gateway_experiment::permanentIatGatewayAdmissionOpen(record.gateway) ||
-            spark::permanent_iat_gateway_experiment::permanentIatGatewayHandler(record.gateway) != nullptr) {
+        if (spark::permanent_iat_gateway::permanentIatGatewayAdmissionOpen(record.gateway) ||
+            spark::permanent_iat_gateway::permanentIatGatewayHandler(record.gateway) != nullptr) {
             error = std::string("permanent IAT gateway is still bound from an earlier Spark image: ") + record.name;
             return false;
         }
@@ -182,13 +182,13 @@ bool detachGateways(std::vector<HookRecord> &records, std::string &error) noexce
         if (record.gateway.state == nullptr) {
             continue;
         }
-        if (!spark::permanent_iat_gateway_experiment::permanentIatGatewayAdmissionOpen(record.gateway) &&
-            spark::permanent_iat_gateway_experiment::permanentIatGatewayHandler(record.gateway) == nullptr) {
+        if (!spark::permanent_iat_gateway::permanentIatGatewayAdmissionOpen(record.gateway) &&
+            spark::permanent_iat_gateway::permanentIatGatewayHandler(record.gateway) == nullptr) {
             continue;
         }
         std::string detach_error;
-        if (!spark::permanent_iat_gateway_experiment::detachPermanentIatGateway(record.gateway, KGatewayDrainTimeoutMs,
-                                                                                detach_error)) {
+        if (!spark::permanent_iat_gateway::detachPermanentIatGateway(record.gateway, KGatewayDrainTimeoutMs,
+                                                                     detach_error)) {
             try {
                 error = std::string("failed to detach permanent IAT gateway ") + record.name + ": " + detach_error;
             }
@@ -278,8 +278,8 @@ extern "C" int funchook_install(funchook_t *funchook, int flags)
         }
 
         for (HookRecord &record : funchook->records) {
-            if (!spark::permanent_iat_gateway_experiment::bindPermanentIatGateway(
-                    record.gateway, record.handler, KGatewayDrainTimeoutMs, funchook->error)) {
+            if (!spark::permanent_iat_gateway::bindPermanentIatGateway(record.gateway, record.handler,
+                                                                       KGatewayDrainTimeoutMs, funchook->error)) {
                 std::string detach_error;
                 (void)detachGateways(funchook->records, detach_error);
                 std::string uninstall_error;
