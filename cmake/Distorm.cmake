@@ -13,7 +13,6 @@ function(endstone_spark_add_distorm)
         return()
     endif ()
 
-    enable_language(C)
     FetchContent_Declare(distorm_source
             GIT_REPOSITORY https://github.com/gdabah/distorm.git
             GIT_TAG ${ENDSTONE_SPARK_DISTORM_GIT_TAG})
