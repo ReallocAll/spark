@@ -27,7 +27,7 @@
 
 namespace {
 
-constexpr std::uint64_t kGatewayDrainTimeoutMs = 5000;
+constexpr std::uint64_t KGatewayDrainTimeoutMs = 5000;
 
 struct HookRecord {
     const char *name = nullptr;
@@ -187,7 +187,7 @@ bool detachGateways(std::vector<HookRecord> &records, std::string &error) noexce
             continue;
         }
         std::string detach_error;
-        if (!spark::permanent_iat_gateway_experiment::detachPermanentIatGateway(record.gateway, kGatewayDrainTimeoutMs,
+        if (!spark::permanent_iat_gateway_experiment::detachPermanentIatGateway(record.gateway, KGatewayDrainTimeoutMs,
                                                                                 detach_error)) {
             try {
                 error = std::string("failed to detach permanent IAT gateway ") + record.name + ": " + detach_error;
@@ -279,7 +279,7 @@ extern "C" int funchook_install(funchook_t *funchook, int flags)
 
         for (HookRecord &record : funchook->records) {
             if (!spark::permanent_iat_gateway_experiment::bindPermanentIatGateway(
-                    record.gateway, record.handler, kGatewayDrainTimeoutMs, funchook->error)) {
+                    record.gateway, record.handler, KGatewayDrainTimeoutMs, funchook->error)) {
                 std::string detach_error;
                 (void)detachGateways(funchook->records, detach_error);
                 std::string uninstall_error;
