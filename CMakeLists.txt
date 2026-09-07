@@ -99,8 +99,7 @@ if (WIN32)
             src/native/alloc/windows_thread_suspension.cpp
             src/native/alloc/windows_permanent_iat_gateway.cpp
             src/native/alloc/windows_permanent_iat_gateway_registry.cpp
-            src/native/alloc/windows_allocation_iat_hooks.cpp
-            src/native/alloc/windows_permanent_iat_funchook_compat.cpp)
+            src/native/alloc/windows_allocation_iat_hooks.cpp)
 elseif (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
     target_sources(spark_native PRIVATE
             src/native/sampler/capture_linux.cpp
@@ -196,18 +195,16 @@ endif ()
 add_library(spark_application STATIC
         src/application/activity/activity_command.cpp
         src/application/command/command_registry.cpp
-        src/application/command/profiler_action_resolver.cpp
         src/application/health/health_command.cpp
-        src/application/health/health_command_report.cpp
+        src/application/health/health_dashboard.cpp
+        src/application/health/health_dashboard_connection.cpp
+        src/application/health/health_dashboard_worker.cpp
         src/application/health/health_report.cpp
         src/application/monitoring/monitoring_schedule.cpp
-        src/application/health/health_dashboard.cpp
-        src/application/health/health_dashboard_worker.cpp
-        src/application/health/health_dashboard_connection.cpp
         src/application/placeholder/spark_placeholder_resolver.cpp
-        src/application/profiler/profile_exporter.cpp
         src/application/profiler/live_statistics_payload.cpp
         src/application/profiler/live_viewer_schedule.cpp
+        src/application/profiler/profile_exporter.cpp
         src/application/profiler/profiler_open_orchestrator.cpp
         src/application/profiler/profiler_service.cpp
         src/application/profiler/profiler_service_commands.cpp
