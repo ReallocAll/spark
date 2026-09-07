@@ -39,13 +39,11 @@
 #include <winternl.h>
 // clang-format on
 
-#include <funchook.h>
-
 #include "native/alloc/allocation_profile_aggregation.h"
 #include "native/alloc/bounded_event_queue.h"
 #include "native/alloc/byte_sampler.h"
 #include "native/alloc/stable_shard_snapshot.h"
-#include "native/alloc/windows_thread_suspension.h"
+#include "native/alloc/windows_allocation_iat_hooks.h"
 #include "native/sampler/thread_info.h"
 #include "profiling_window.h"
 
@@ -67,7 +65,6 @@ constexpr std::size_t KMaxProfileNodes = 131072;
 constexpr std::size_t KMaxPendingSamples = 32768;
 constexpr std::size_t KMaxTickDecisions = 100000;
 constexpr std::size_t KTickEventCapacity = 4096;
-constexpr std::size_t KHookPatchSize = 5;  // funchook 1.1.3 x86/x64 entry jump
 constexpr std::uint32_t KFramesToSkip = 2;
 constexpr std::uint64_t KHookRefreshIntervalMs = 2000;
 
@@ -77,9 +74,8 @@ void *tombstonePointer() noexcept
     return reinterpret_cast<void *>(static_cast<std::uintptr_t>(1));
 }
 
-struct PreparedTarget {
+struct RegisteredHookTarget {
     void *address = nullptr;
-    std::array<std::byte, KHookPatchSize> original{};
     std::string export_name;
 };
 
@@ -128,7 +124,7 @@ bool isSparkAllocationInstrumentation(const std::string &path)
 {
     const std::string name = moduleBasename(path);
     return equalsIgnoreCase(name, "spark.dll") || equalsIgnoreCase(name, "endstone_spark.dll") ||
-           startsWithIgnoreCase(name, "endstone_spark-") || equalsIgnoreCase(name, "spark_allocation_shim.dll");
+           startsWithIgnoreCase(name, "endstone_spark-");
 }
 
 bool isLeadingAllocatorRuntime(const std::string &path)
@@ -349,9 +345,8 @@ struct AllocationSampler::Impl {
         bool previous_ = false;
     };
 
-    funchook_t *hooks = nullptr;
-    bool hooks_prepared = false;
-    bool hook_state_unknown = false;
+    std::unique_ptr<WindowsAllocationIatHooks> hooks;
+    bool hooks_configured = false;
     DWORD tls_index = TLS_OUT_OF_INDEXES;
     std::atomic<bool> hooks_installed{false};
     std::atomic<bool> tracking{false};
@@ -390,8 +385,7 @@ struct AllocationSampler::Impl {
     std::mutex lifecycle_mutex;
     std::mutex tick_mutex;
     std::timed_mutex aggregate_mutex;
-    std::vector<PreparedTarget> prepared_targets;
-    std::vector<WindowsCodeRange> protected_code_ranges;
+    std::vector<RegisteredHookTarget> registered_targets;
     std::vector<AllocationHookCapability> hook_capabilities;
     AllocationSamplerConfig config{};
     std::atomic<std::uint64_t> current_tick{0};
@@ -1469,25 +1463,9 @@ struct AllocationSampler::Impl {
 
     void recycleEvent(AllocationEvent *event) noexcept { ::InterlockedPushEntrySList(&free_events, &event->entry); }
 
-    std::string hookError(const char *operation, int code) const
-    {
-        std::string message(operation);
-        message += " failed (code ";
-        message += std::to_string(code);
-        message += ")";
-        if (hooks != nullptr) {
-            const char *detail = funchook_error_message(hooks);
-            if (detail != nullptr && *detail != '\0') {
-                message += ": ";
-                message += detail;
-            }
-        }
-        return message;
-    }
-
     template <typename Function>
-    bool prepareExport(HMODULE module, const char *name, Function &function, void *hook, bool required,
-                       std::string &error)
+    bool registerExport(HMODULE module, const char *name, Function &function, void *hook, bool required,
+                        std::string &error)
     {
         void *target = reinterpret_cast<void *>(::GetProcAddress(module, name));
         if (target == nullptr) {
@@ -1500,25 +1478,21 @@ struct AllocationSampler::Impl {
             }
             return true;
         }
-        auto alias = std::find_if(prepared_targets.begin(), prepared_targets.end(),
-                                  [target](const PreparedTarget &entry) { return entry.address == target; });
-        if (alias != prepared_targets.end()) {
-            // Some CRT exports are aliases for the same entry address. The first
-            // prepared hook already covers all aliases; preparing the same prologue
-            // twice would create an invalid hook chain.
+        auto alias = std::find_if(registered_targets.begin(), registered_targets.end(),
+                                  [target](const RegisteredHookTarget &entry) { return entry.address == target; });
+        if (alias != registered_targets.end()) {
+            // Some CRT exports are aliases for the same implementation address. The first
+            // registered target owns the shared gateway, so duplicate registrations are skipped.
             function = nullptr;
             hook_capabilities.push_back({name, AllocationHookStatus::Alias, alias->export_name});
             return true;
         }
 
-        PreparedTarget prepared;
-        prepared.address = target;
-        prepared.export_name = name;
-        std::memcpy(prepared.original.data(), target, prepared.original.size());
         function = reinterpret_cast<Function>(target);
-        const int code = funchook_prepare(hooks, reinterpret_cast<void **>(&function), hook);
-        if (code != FUNCHOOK_ERROR_SUCCESS) {
-            const std::string failure = hookError((std::string("funchook_prepare(") + name + ")").c_str(), code);
+        std::string backend_error;
+        if (hooks == nullptr || !hooks->addTarget(target, hook, backend_error)) {
+            const std::string failure = std::string("allocation IAT target registration failed for ") + name +
+                                        (backend_error.empty() ? std::string{} : ": " + backend_error);
             if (!required) {
                 function = nullptr;
                 hook_capabilities.push_back(
@@ -1530,102 +1504,14 @@ struct AllocationSampler::Impl {
             error = failure;
             return false;
         }
-        prepared_targets.push_back(prepared);
+        registered_targets.push_back({.address = target, .export_name = name});
         hook_capabilities.push_back({.name = name, .status = AllocationHookStatus::Active, .detail = {}});
         return true;
     }
 
-    void addProtectedCodeRange(void *address)
+    bool configureHooks(std::string &error)
     {
-        if (address == nullptr) {
-            return;
-        }
-        MEMORY_BASIC_INFORMATION memory{};
-        if (::VirtualQuery(address, &memory, sizeof(memory)) == 0) {
-            return;
-        }
-        WindowsCodeRange range;
-        range.begin = reinterpret_cast<std::uintptr_t>(memory.BaseAddress);
-        range.end = range.begin + memory.RegionSize;
-        if (std::ranges::none_of(protected_code_ranges, [&range](const WindowsCodeRange &existing) {
-                return existing.begin == range.begin && existing.end == range.end;
-            })) {
-            protected_code_ranges.push_back(range);
-        }
-    }
-
-    bool rebuildProtectedCodeRanges(std::string &error)
-    {
-        protected_code_ranges.clear();
-
-        HMODULE module = nullptr;
-        const auto *const hook_address = reinterpret_cast<LPCWSTR>(&AllocationSampler::Impl::hookMalloc);
-        if (::GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                                 hook_address, &module) == FALSE) {
-            error = "GetModuleHandleExW for Spark hook module failed: " + std::to_string(::GetLastError());
-            return false;
-        }
-        MODULEINFO module_info{};
-        if (::GetModuleInformation(::GetCurrentProcess(), module, &module_info, sizeof(module_info)) == FALSE) {
-            error = "GetModuleInformation for Spark hook module failed: " + std::to_string(::GetLastError());
-            return false;
-        }
-        protected_code_ranges.push_back(
-            {.begin = reinterpret_cast<std::uintptr_t>(module_info.lpBaseOfDll),
-             .end = reinterpret_cast<std::uintptr_t>(module_info.lpBaseOfDll) + module_info.SizeOfImage});
-
-        for (void *address : {
-                 reinterpret_cast<void *>(real_malloc),
-                 reinterpret_cast<void *>(real_calloc),
-                 reinterpret_cast<void *>(real_realloc),
-                 reinterpret_cast<void *>(real_recalloc),
-                 reinterpret_cast<void *>(real_free),
-                 reinterpret_cast<void *>(real_aligned_malloc),
-                 reinterpret_cast<void *>(real_aligned_realloc),
-                 reinterpret_cast<void *>(real_aligned_recalloc),
-                 reinterpret_cast<void *>(real_aligned_offset_malloc),
-                 reinterpret_cast<void *>(real_aligned_offset_realloc),
-                 reinterpret_cast<void *>(real_aligned_offset_recalloc),
-                 reinterpret_cast<void *>(real_aligned_free),
-                 reinterpret_cast<void *>(real_malloc_base),
-                 reinterpret_cast<void *>(real_calloc_base),
-                 reinterpret_cast<void *>(real_realloc_base),
-                 reinterpret_cast<void *>(real_free_base),
-                 reinterpret_cast<void *>(real_heap_alloc),
-                 reinterpret_cast<void *>(real_heap_realloc),
-                 reinterpret_cast<void *>(real_heap_free),
-             }) {
-            addProtectedCodeRange(address);
-        }
-        return true;
-    }
-
-    bool restoreOriginalTargets(DWORD &first_failure) noexcept
-    {
-        first_failure = ERROR_SUCCESS;
-        for (const PreparedTarget &target : prepared_targets) {
-            DWORD old_protection = 0;
-            if (::VirtualProtect(target.address, target.original.size(), PAGE_EXECUTE_READWRITE, &old_protection) ==
-                FALSE) {
-                if (first_failure == ERROR_SUCCESS) {
-                    first_failure = ::GetLastError();
-                }
-                continue;
-            }
-            std::memcpy(target.address, target.original.data(), target.original.size());
-            ::FlushInstructionCache(::GetCurrentProcess(), target.address, target.original.size());
-            DWORD ignored = 0;
-            if (::VirtualProtect(target.address, target.original.size(), old_protection, &ignored) == FALSE &&
-                first_failure == ERROR_SUCCESS) {
-                first_failure = ::GetLastError();
-            }
-        }
-        return first_failure == ERROR_SUCCESS;
-    }
-
-    bool prepareHooks(std::string &error)
-    {
-        if (hooks_prepared) {
+        if (hooks_configured) {
             return true;
         }
         if (tls_index == TLS_OUT_OF_INDEXES) {
@@ -1647,55 +1533,50 @@ struct AllocationSampler::Impl {
             return false;
         }
 
-        hooks = funchook_create();
-        if (hooks == nullptr) {
-            error = "funchook_create failed";
+        try {
+            hooks = std::make_unique<WindowsAllocationIatHooks>();
+        }
+        catch (...) {
+            error = "could not allocate the Windows allocation IAT backend";
             return false;
         }
 
-        bool ok =
-            prepareExport(ucrt, "malloc", real_malloc, reinterpret_cast<void *>(&hookMalloc), true, error) &&
-            prepareExport(ucrt, "calloc", real_calloc, reinterpret_cast<void *>(&hookCalloc), true, error) &&
-            prepareExport(ucrt, "realloc", real_realloc, reinterpret_cast<void *>(&hookRealloc), true, error) &&
-            prepareExport(ucrt, "_recalloc", real_recalloc, reinterpret_cast<void *>(&hookRecalloc), false, error) &&
-            prepareExport(ucrt, "free", real_free, reinterpret_cast<void *>(&hookFree), true, error) &&
-            prepareExport(ucrt, "_aligned_malloc", real_aligned_malloc, reinterpret_cast<void *>(&hookAlignedMalloc),
-                          false, error) &&
-            prepareExport(ucrt, "_aligned_realloc", real_aligned_realloc, reinterpret_cast<void *>(&hookAlignedRealloc),
-                          false, error) &&
-            prepareExport(ucrt, "_aligned_recalloc", real_aligned_recalloc,
-                          reinterpret_cast<void *>(&hookAlignedRecalloc), false, error) &&
-            prepareExport(ucrt, "_aligned_offset_malloc", real_aligned_offset_malloc,
-                          reinterpret_cast<void *>(&hookAlignedOffsetMalloc), false, error) &&
-            prepareExport(ucrt, "_aligned_offset_realloc", real_aligned_offset_realloc,
-                          reinterpret_cast<void *>(&hookAlignedOffsetRealloc), false, error) &&
-            prepareExport(ucrt, "_aligned_offset_recalloc", real_aligned_offset_recalloc,
-                          reinterpret_cast<void *>(&hookAlignedOffsetRecalloc), false, error) &&
-            prepareExport(ucrt, "_aligned_free", real_aligned_free, reinterpret_cast<void *>(&hookAlignedFree), true,
-                          error) &&
-            prepareExport(ucrt, "_malloc_base", real_malloc_base, reinterpret_cast<void *>(&hookMallocBase), false,
-                          error) &&
-            prepareExport(ucrt, "_calloc_base", real_calloc_base, reinterpret_cast<void *>(&hookCallocBase), false,
-                          error) &&
-            prepareExport(ucrt, "_realloc_base", real_realloc_base, reinterpret_cast<void *>(&hookReallocBase), false,
-                          error) &&
-            prepareExport(ucrt, "_free_base", real_free_base, reinterpret_cast<void *>(&hookFreeBase), false, error) &&
-            prepareExport(kernel32, "HeapAlloc", real_heap_alloc, reinterpret_cast<void *>(&hookHeapAlloc), false,
-                          error) &&
-            prepareExport(kernel32, "HeapReAlloc", real_heap_realloc, reinterpret_cast<void *>(&hookHeapReAlloc), false,
-                          error) &&
-            prepareExport(kernel32, "HeapFree", real_heap_free, reinterpret_cast<void *>(&hookHeapFree), true, error);
+        const bool ok =
+            registerExport(ucrt, "malloc", real_malloc, reinterpret_cast<void *>(&hookMalloc), true, error) &&
+            registerExport(ucrt, "calloc", real_calloc, reinterpret_cast<void *>(&hookCalloc), true, error) &&
+            registerExport(ucrt, "realloc", real_realloc, reinterpret_cast<void *>(&hookRealloc), true, error) &&
+            registerExport(ucrt, "_recalloc", real_recalloc, reinterpret_cast<void *>(&hookRecalloc), false, error) &&
+            registerExport(ucrt, "free", real_free, reinterpret_cast<void *>(&hookFree), true, error) &&
+            registerExport(ucrt, "_aligned_malloc", real_aligned_malloc, reinterpret_cast<void *>(&hookAlignedMalloc),
+                           false, error) &&
+            registerExport(ucrt, "_aligned_realloc", real_aligned_realloc,
+                           reinterpret_cast<void *>(&hookAlignedRealloc), false, error) &&
+            registerExport(ucrt, "_aligned_recalloc", real_aligned_recalloc,
+                           reinterpret_cast<void *>(&hookAlignedRecalloc), false, error) &&
+            registerExport(ucrt, "_aligned_offset_malloc", real_aligned_offset_malloc,
+                           reinterpret_cast<void *>(&hookAlignedOffsetMalloc), false, error) &&
+            registerExport(ucrt, "_aligned_offset_realloc", real_aligned_offset_realloc,
+                           reinterpret_cast<void *>(&hookAlignedOffsetRealloc), false, error) &&
+            registerExport(ucrt, "_aligned_offset_recalloc", real_aligned_offset_recalloc,
+                           reinterpret_cast<void *>(&hookAlignedOffsetRecalloc), false, error) &&
+            registerExport(ucrt, "_aligned_free", real_aligned_free, reinterpret_cast<void *>(&hookAlignedFree), true,
+                           error) &&
+            registerExport(ucrt, "_malloc_base", real_malloc_base, reinterpret_cast<void *>(&hookMallocBase), false,
+                           error) &&
+            registerExport(ucrt, "_calloc_base", real_calloc_base, reinterpret_cast<void *>(&hookCallocBase), false,
+                           error) &&
+            registerExport(ucrt, "_realloc_base", real_realloc_base, reinterpret_cast<void *>(&hookReallocBase), false,
+                           error) &&
+            registerExport(ucrt, "_free_base", real_free_base, reinterpret_cast<void *>(&hookFreeBase), false,
+                           error) &&
+            registerExport(kernel32, "HeapAlloc", real_heap_alloc, reinterpret_cast<void *>(&hookHeapAlloc), false,
+                           error) &&
+            registerExport(kernel32, "HeapReAlloc", real_heap_realloc, reinterpret_cast<void *>(&hookHeapReAlloc), false,
+                           error) &&
+            registerExport(kernel32, "HeapFree", real_heap_free, reinterpret_cast<void *>(&hookHeapFree), true, error);
 
         if (!ok) {
-            funchook_destroy(hooks);
-            hooks = nullptr;
-            clearFunctionPointers();
-            return false;
-        }
-
-        if (!rebuildProtectedCodeRanges(error)) {
-            funchook_destroy(hooks);
-            hooks = nullptr;
+            hooks.reset();
             clearFunctionPointers();
             return false;
         }
@@ -1705,13 +1586,12 @@ struct AllocationSampler::Impl {
                                                      std::memory_order_relaxed) &&
             expected != this) {
             error = "another native allocation sampler backend is already active";
-            funchook_destroy(hooks);
-            hooks = nullptr;
+            hooks.reset();
             clearFunctionPointers();
             return false;
         }
 
-        hooks_prepared = true;
+        hooks_configured = true;
         return true;
     }
 
@@ -1720,14 +1600,14 @@ struct AllocationSampler::Impl {
         if (hooks_installed.load(std::memory_order_acquire)) {
             return true;
         }
-        if (hook_state_unknown) {
-            error = "allocation hook state is unknown after an earlier lifecycle failure";
+        if (!hooks_configured || hooks == nullptr) {
+            error = "Windows allocation IAT backend is not configured";
             return false;
         }
-
-        const int code = funchook_install(hooks, 0);
-        if (code != FUNCHOOK_ERROR_SUCCESS) {
-            error = hookError("funchook_install", code);
+        if (!hooks->install(error)) {
+            if (error.empty()) {
+                error = hooks->lastError();
+            }
             return false;
         }
         hooks_installed.store(true, std::memory_order_release);
@@ -1746,65 +1626,22 @@ struct AllocationSampler::Impl {
         if (!hooks_installed.load(std::memory_order_acquire)) {
             return true;
         }
+        if (hooks == nullptr) {
+            error = "Windows allocation IAT backend is unavailable during detach";
+            return false;
+        }
 
-        // The IAT backend closes the pinned shim admission gate first, drains
-        // callbacks that already entered Spark, clears the callback table, and
-        // only then restores IAT slots that are still owned by us. Suspending
-        // process threads here would deadlock that drain and is unnecessary for
-        // ownership-safe IAT compare/exchange.
-        const int code = funchook_uninstall(hooks, 0);
-        if (code != FUNCHOOK_ERROR_SUCCESS) {
-            error = hookError("funchook_uninstall", code);
+        // Permanent-IAT teardown closes handler admission, drains callbacks already
+        // admitted into Spark, clears the handler, then restores only IAT slots still
+        // owned by the gateway. The process-lifetime gateway remains safe after unload.
+        if (!hooks->uninstall(error)) {
+            if (error.empty()) {
+                error = hooks->lastError();
+            }
             return false;
         }
         hooks_installed.store(false, std::memory_order_release);
-        hook_state_unknown = false;
         return true;
-    }
-
-    bool waitForQuiescence(std::string &error) const
-    {
-        const std::uint64_t deadline = monotonicMs() + 30000;
-        while (true) {
-            SuspendedProcessThreads suspended;
-            if (!suspended.suspendStable(error)) {
-                return false;
-            }
-            bool instruction_in_protected_code = false;
-            std::uint32_t inspect_failure = 0;
-            std::uint32_t inspect_thread = 0;
-            const bool inspected = suspended.anyInstructionPointerInRanges(
-                protected_code_ranges, instruction_in_protected_code, inspect_failure, inspect_thread);
-            const bool active_calls = anyActiveHookCalls();
-            std::string resume_error;
-            const bool resumed = suspended.resume(resume_error);
-            if (!inspected) {
-                if (!resumed) {
-                    error = resume_error;
-                    return false;
-                }
-                if (monotonicMs() >= deadline) {
-                    error = "timed out waiting for stable thread contexts; "
-                            "GetThreadContext failed for thread " +
-                            std::to_string(inspect_thread) + ": " + std::to_string(inspect_failure);
-                    return false;
-                }
-                ::Sleep(1);
-                continue;
-            }
-            if (!resumed) {
-                error = resume_error;
-                return false;
-            }
-            if (!instruction_in_protected_code && !active_calls) {
-                return true;
-            }
-            if (monotonicMs() >= deadline) {
-                error = "timed out waiting for allocation hook/trampoline calls to leave the plugin";
-                return false;
-            }
-            ::Sleep(1);
-        }
     }
 
     bool destroyHooks(std::string &error)
@@ -1814,18 +1651,12 @@ struct AllocationSampler::Impl {
             return true;
         }
         if (hooks_installed.load(std::memory_order_acquire)) {
-            error = "cannot destroy allocation hook trampolines while entry hooks are installed";
+            error = "cannot destroy the Windows allocation IAT backend while hooks are installed";
             return false;
         }
 
-        const int code = funchook_destroy(hooks);
-        if (code != FUNCHOOK_ERROR_SUCCESS) {
-            error = "funchook_destroy failed (code " + std::to_string(code) + ")";
-            return false;
-        }
-        hooks = nullptr;
-        hooks_prepared = false;
-        hook_state_unknown = false;
+        hooks.reset();
+        hooks_configured = false;
         Impl *expected = this;
         mActiveInstance.compare_exchange_strong(expected, nullptr, std::memory_order_release,
                                                 std::memory_order_relaxed);
@@ -1871,8 +1702,7 @@ struct AllocationSampler::Impl {
         real_heap_alloc = nullptr;
         real_heap_realloc = nullptr;
         real_heap_free = nullptr;
-        prepared_targets.clear();
-        protected_code_ranges.clear();
+        registered_targets.clear();
         hook_capabilities.clear();
     }
 
@@ -2086,10 +1916,10 @@ struct AllocationSampler::Impl {
         while (aggregator_running.load(std::memory_order_acquire)) {
             const std::uint64_t now_ms = monotonicMs();
             if (now_ms >= next_hook_refresh_ms) {
-                if (hooks == nullptr || funchook_refresh(hooks) != FUNCHOOK_ERROR_SUCCESS) {
-                    const char *hook_error = funchook_error_message(hooks);
+                std::string refresh_error;
+                if (hooks == nullptr || !hooks->refresh(refresh_error)) {
                     throw std::runtime_error(std::string("allocation hook refresh failed: ") +
-                                             (hook_error != nullptr ? hook_error : "unknown hook refresh failure"));
+                                             (refresh_error.empty() ? "unknown hook refresh failure" : refresh_error));
                 }
                 next_hook_refresh_ms = now_ms + KHookRefreshIntervalMs;
             }
@@ -2289,10 +2119,6 @@ struct AllocationSampler::Impl {
             error = "the previous allocation session has not finished cleanup";
             return false;
         }
-        if (hook_state_unknown) {
-            error = "allocation hook state is unknown after an earlier lifecycle failure";
-            return false;
-        }
         if (new_config.session_seed == 0) {
             error = "the allocation session seed is not available";
             return false;
@@ -2312,7 +2138,7 @@ struct AllocationSampler::Impl {
         const std::uint64_t new_generation = generation.fetch_add(1, std::memory_order_relaxed) + 1;
         sampling_seed.store(new_generation ^ monotonicMs() ^ new_config.session_seed, std::memory_order_relaxed);
 
-        if (!prepareHooks(error)) {
+        if (!configureHooks(error)) {
             return false;
         }
         if (!new_config.count_only && !allocateEventPool(error)) {
@@ -2416,10 +2242,6 @@ struct AllocationSampler::Impl {
         finishAggregationIfNeeded();
         freeEventPool();
 
-        // funchook_uninstall is the compatibility entry point for the native
-        // IAT backend. It performs the bounded pinned-shim gate/drain and
-        // ownership-safe detach, so a process-wide retry loop is neither
-        // necessary nor safe.
         if (hooks_installed.load(std::memory_order_acquire) && !uninstallHooks(error)) {
             return false;
         }
@@ -2443,10 +2265,13 @@ struct AllocationSampler::Impl {
         if (config.count_only) {
             if ((finished % 40U) == 0U && hooks != nullptr) {
                 std::unique_lock lock(lifecycle_mutex, std::try_to_lock);
-                if (lock.owns_lock() && funchook_refresh(hooks) != FUNCHOOK_ERROR_SUCCESS) {
-                    const char *hook_error = funchook_error_message(hooks);
-                    running.store(false, std::memory_order_release);
-                    markAggregatorFailure(hook_error != nullptr ? hook_error : "allocation hook refresh failed");
+                if (lock.owns_lock()) {
+                    std::string refresh_error;
+                    if (!hooks->refresh(refresh_error)) {
+                        running.store(false, std::memory_order_release);
+                        markAggregatorFailure(refresh_error.empty() ? "allocation hook refresh failed"
+                                                                    : refresh_error.c_str());
+                    }
                 }
             }
             return;
@@ -2690,7 +2515,7 @@ std::uint64_t AllocationSampler::threadStateDrops() const
 
 std::uint64_t AllocationSampler::hookedModuleCount() const
 {
-    return impl_->hooks_prepared ? 2 : 0;
+    return impl_->hooks_configured ? 2 : 0;
 }
 
 std::uint64_t AllocationSampler::skippedModuleCount() const  // NOLINT(readability-convert-member-functions-to-static)
@@ -2850,12 +2675,12 @@ bool AllocationSampler::failure(std::string &error) const
 
 const char *AllocationSampler::backendId() noexcept
 {
-    return funchook_backend_id();
+    return WindowsAllocationIatHooks::backendId();
 }
 
 const char *AllocationSampler::backendName() noexcept
 {
-    return funchook_backend_name();
+    return WindowsAllocationIatHooks::backendName();
 }
 
 const std::vector<AllocationHookCapability> &AllocationSampler::hookCapabilities() const
@@ -2865,7 +2690,7 @@ const std::vector<AllocationHookCapability> &AllocationSampler::hookCapabilities
 
 std::size_t AllocationSampler::hookTargetCount() const
 {
-    return impl_->prepared_targets.size();
+    return impl_->registered_targets.size();
 }
 
 }  // namespace spark
