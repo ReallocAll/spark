@@ -6,11 +6,6 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(ENDSTONE_SPARK_BUILD_SELFTEST "Build the offline sampler self-test tool" ON)
-option(ENDSTONE_SPARK_WINDOWS_PERMANENT_IAT_EXPERIMENT
-        "Build the experimental shimless permanent-IAT Windows allocation backend" OFF)
-if (ENDSTONE_SPARK_WINDOWS_PERMANENT_IAT_EXPERIMENT AND NOT WIN32)
-    message(FATAL_ERROR "ENDSTONE_SPARK_WINDOWS_PERMANENT_IAT_EXPERIMENT is Windows-only")
-endif ()
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
@@ -77,17 +72,6 @@ if (WIN32)
     add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
 endif ()
 
-# Production Windows builds retain the pinned process-lifetime shim. The
-# permanent-IAT experiment intentionally omits this target so the resulting
-# plugin artifact can prove a single-DLL deployment before any promotion.
-if (WIN32 AND NOT ENDSTONE_SPARK_WINDOWS_PERMANENT_IAT_EXPERIMENT)
-    add_library(spark_allocation_shim SHARED
-            src/native/alloc/windows_allocation_shim.cpp)
-    target_include_directories(spark_allocation_shim PRIVATE src)
-    target_compile_definitions(spark_allocation_shim PRIVATE NOMINMAX)
-    set_target_properties(spark_allocation_shim PROPERTIES OUTPUT_NAME "spark_allocation_shim")
-endif ()
-
 # --- shared profiling time primitives (no native or core dependencies) ---
 add_library(spark_profiling_time STATIC
         src/core/util/monotonic_time.cpp
@@ -122,17 +106,10 @@ if (WIN32)
             src/native/alloc/allocation_sampler_windows.cpp
             src/native/alloc/windows_iat_hooks.cpp
             src/native/alloc/windows_iat_hooks_windows.cpp
-            src/native/alloc/windows_thread_suspension.cpp)
-    if (ENDSTONE_SPARK_WINDOWS_PERMANENT_IAT_EXPERIMENT)
-        target_sources(spark_native PRIVATE
-                src/native/alloc/windows_permanent_iat_gateway_experiment.cpp
-                src/native/alloc/windows_permanent_iat_gateway_registry_experiment.cpp
-                src/native/alloc/windows_permanent_iat_funchook_compat.cpp)
-        target_compile_definitions(spark_native PRIVATE ENDSTONE_SPARK_WINDOWS_PERMANENT_IAT_EXPERIMENT=1)
-    else ()
-        target_sources(spark_native PRIVATE
-                src/native/alloc/windows_iat_funchook_compat.cpp)
-    endif ()
+            src/native/alloc/windows_thread_suspension.cpp
+            src/native/alloc/windows_permanent_iat_gateway_experiment.cpp
+            src/native/alloc/windows_permanent_iat_gateway_registry_experiment.cpp
+            src/native/alloc/windows_permanent_iat_funchook_compat.cpp)
 elseif (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
     target_sources(spark_native PRIVATE
             src/native/sampler/capture_linux.cpp
