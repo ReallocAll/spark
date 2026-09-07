@@ -16,7 +16,7 @@
 #include <cstdint>
 #include <string>
 
-namespace spark::permanent_iat_gateway_experiment {
+namespace spark::permanent_iat_gateway {
 namespace {
 
 constexpr std::uint64_t KRegistryMagic = 0x3152475441495053ULL;  // "SPIATGR1".
@@ -244,4 +244,4 @@ bool acquirePermanentIatGateway(void *original, std::uint32_t stack_argument_cou
     return true;
 }
 
-}  // namespace spark::permanent_iat_gateway_experiment
+}  // namespace spark::permanent_iat_gateway
