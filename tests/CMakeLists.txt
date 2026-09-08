@@ -520,3 +520,6 @@ add_test(NAME spark_profile_evaluator_test
 
 add_test(NAME spark_workflow_test
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/test_workflows.py)
+
+add_test(NAME spark_plugin_lifecycle_test
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/test_plugin_lifecycle.py)

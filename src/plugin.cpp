@@ -154,6 +154,7 @@ public:
             std::abort();
         }
         spark::setGlobalPythonStackProvider(nullptr);
+        app_.reset();
     }
 
     bool onCommand(const endstone::NotNull<endstone::CommandSender> &sender, const endstone::Command &command,
