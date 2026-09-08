@@ -105,22 +105,20 @@ void SparkApplication::registerCommands()
 
 bool SparkApplication::dispatchCommand(CommandSender &sender, const std::vector<std::string> &tokens)
 {
-    CiDiagnostics::Scope diagnostic_scope(globalCiDiagnostics(), CiDiagnosticContext::ApplicationCommand,
-                                          CiDiagnosticPhase::ApplicationCommandEnter,
-                                          CiDiagnosticPhase::ApplicationCommandExit,
-                                          CiDiagnosticPhase::ApplicationCommandExceptionalExit,
-                                          ciDiagnosticCurrentThreadId());
+    CiDiagnostics::Scope diagnostic_scope(
+        globalCiDiagnostics(), CiDiagnosticContext::ApplicationCommand, CiDiagnosticPhase::ApplicationCommandEnter,
+        CiDiagnosticPhase::ApplicationCommandExit, CiDiagnosticPhase::ApplicationCommandExceptionalExit,
+        ciDiagnosticCurrentThreadId());
     const bool handled = registry_.dispatch(sender, tokens);
     return handled;
 }
 
 void SparkApplication::onTick(double mspt)
 {
-    CiDiagnostics::Scope diagnostic_scope(globalCiDiagnostics(), CiDiagnosticContext::ApplicationTick,
-                                          CiDiagnosticPhase::ApplicationTickEnter,
-                                          CiDiagnosticPhase::ApplicationTickExit,
-                                          CiDiagnosticPhase::ApplicationTickExceptionalExit,
-                                          ciDiagnosticCurrentThreadId());
+    CiDiagnostics::Scope diagnostic_scope(
+        globalCiDiagnostics(), CiDiagnosticContext::ApplicationTick, CiDiagnosticPhase::ApplicationTickEnter,
+        CiDiagnosticPhase::ApplicationTickExit, CiDiagnosticPhase::ApplicationTickExceptionalExit,
+        ciDiagnosticCurrentThreadId());
     server_heartbeat_.beat();
     if (profiler_.allocationRateMetricsActive()) {
         statistics_.recordAllocationBytes(profiler_.persistentAllocationBytes());

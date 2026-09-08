@@ -15,10 +15,10 @@
 // clang-format on
 #endif
 
+#include "native/diagnostics/ci_diagnostics.h"
 #include "native/sampler/capture.h"
 #include "native/sampler/thread_info.h"
 #include "native/symbol/symbolicate.h"
-#include "native/diagnostics/ci_diagnostics.h"
 
 namespace spark {
 

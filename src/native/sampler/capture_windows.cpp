@@ -4,10 +4,10 @@
 #include <mutex>
 #include <unordered_map>
 
+#include "native/diagnostics/ci_diagnostics.h"
 #include "native/sampler/capture.h"
 #include "native/sampler/capture_windows_backend.h"
 #include "native/symbol/dbghelp_manager.h"
-#include "native/diagnostics/ci_diagnostics.h"
 
 namespace spark {
 
@@ -107,8 +107,8 @@ public:
             if (backend_.resumeThread(thread_) != (std::numeric_limits<DWORD>::max)()) {
                 suspended_ = false;
                 if (diagnostics_ != nullptr) {
-                    diagnostics_->publish(CiDiagnosticContext::Capture, CiDiagnosticPhase::CaptureResumed,
-                                          worker_tid_, target_tid_, CiDiagnosticCounter::ResumeSuccess, 1);
+                    diagnostics_->publish(CiDiagnosticContext::Capture, CiDiagnosticPhase::CaptureResumed, worker_tid_,
+                                          target_tid_, CiDiagnosticCounter::ResumeSuccess, 1);
                 }
                 return;
             }
@@ -121,8 +121,8 @@ public:
                 return;
             }
             if (diagnostics_ != nullptr) {
-                diagnostics_->publish(CiDiagnosticContext::Capture, CiDiagnosticPhase::CaptureResumeFailed,
-                                      worker_tid_, target_tid_);
+                diagnostics_->publish(CiDiagnosticContext::Capture, CiDiagnosticPhase::CaptureResumeFailed, worker_tid_,
+                                      target_tid_);
             }
             ::SwitchToThread();
         }
@@ -224,7 +224,8 @@ bool Capture::captureThread(std::uint64_t tid, CaptureBuffer &out)
     }
     if (backend.suspendThread(thread) == (std::numeric_limits<DWORD>::max)()) {
         if (diagnostics != nullptr) {
-            diagnostics->publish(CiDiagnosticContext::Capture, CiDiagnosticPhase::CaptureSuspendFailed, worker_tid, tid);
+            diagnostics->publish(CiDiagnosticContext::Capture, CiDiagnosticPhase::CaptureSuspendFailed, worker_tid,
+                                 tid);
         }
         return false;
     }

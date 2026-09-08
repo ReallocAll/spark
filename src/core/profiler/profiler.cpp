@@ -409,11 +409,10 @@ void Profiler::onTick(double mspt_ms)
 bool Profiler::stopSampling(std::string &error)
 {
     CiDiagnostics *diagnostics = globalCiDiagnostics();
-    CiDiagnostics::Scope diagnostic_scope(diagnostics, CiDiagnosticContext::Profiler,
-                                          CiDiagnosticPhase::ProfilerStopSamplingEnter,
-                                          CiDiagnosticPhase::ProfilerStopSamplingExit,
-                                          CiDiagnosticPhase::ProfilerStopSamplingExceptionalExit,
-                                          ciDiagnosticCurrentThreadId());
+    CiDiagnostics::Scope diagnostic_scope(
+        diagnostics, CiDiagnosticContext::Profiler, CiDiagnosticPhase::ProfilerStopSamplingEnter,
+        CiDiagnosticPhase::ProfilerStopSamplingExit, CiDiagnosticPhase::ProfilerStopSamplingExceptionalExit,
+        ciDiagnosticCurrentThreadId());
     sampling_stop_requested_.store(true, std::memory_order_release);
     if (stop_requested_hook_) {
         stop_requested_hook_();
@@ -640,11 +639,10 @@ void Profiler::cancel()
 bool Profiler::shutdown(std::string &error)
 {
     CiDiagnostics *diagnostics = globalCiDiagnostics();
-    CiDiagnostics::Scope diagnostic_scope(diagnostics, CiDiagnosticContext::Profiler,
-                                          CiDiagnosticPhase::ProfilerShutdownEnter,
-                                          CiDiagnosticPhase::ProfilerShutdownExit,
-                                          CiDiagnosticPhase::ProfilerShutdownExceptionalExit,
-                                          ciDiagnosticCurrentThreadId());
+    CiDiagnostics::Scope diagnostic_scope(
+        diagnostics, CiDiagnosticContext::Profiler, CiDiagnosticPhase::ProfilerShutdownEnter,
+        CiDiagnosticPhase::ProfilerShutdownExit, CiDiagnosticPhase::ProfilerShutdownExceptionalExit,
+        ciDiagnosticCurrentThreadId());
     sampling_stop_requested_.store(true, std::memory_order_release);
     std::scoped_lock lifecycle_lock(lifecycle_mutex_);
     error.clear();

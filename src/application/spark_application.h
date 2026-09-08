@@ -17,10 +17,10 @@
 #include "core/activity/activity_log.h"
 #include "core/config/spark_config.h"
 #include "core/config/trusted_viewers.h"
-#include "native/diagnostics/ci_diagnostics.h"
 #include "core/recovery/recovery_player.h"
 #include "core/recovery/stall_watchdog.h"
 #include "core/stats/statistics_service.h"
+#include "native/diagnostics/ci_diagnostics.h"
 
 namespace spark {
 

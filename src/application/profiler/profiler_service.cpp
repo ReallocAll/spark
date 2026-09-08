@@ -8,8 +8,8 @@
 #include <utility>
 #include <vector>
 
-#include "native/diagnostics/ci_diagnostics.h"
 #include "core/util/monotonic_time.h"
+#include "native/diagnostics/ci_diagnostics.h"
 
 namespace spark {
 
