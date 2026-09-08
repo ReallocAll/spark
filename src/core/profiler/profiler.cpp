@@ -7,7 +7,7 @@
 #include <stdexcept>
 
 #include "core/util/monotonic_time.h"
-#include "core/diagnostics/ci_diagnostics.h"
+#include "native/diagnostics/ci_diagnostics.h"
 #include "profiling_window.h"
 #include "spark_constants.h"
 

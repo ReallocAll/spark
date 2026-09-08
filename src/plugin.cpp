@@ -21,7 +21,7 @@
 #include "core/command/arguments.h"
 #include "core/config/spark_config.h"
 #include "core/config/trusted_viewers.h"
-#include "core/diagnostics/ci_diagnostics.h"
+#include "native/diagnostics/ci_diagnostics.h"
 #include "core/stats/executable_hash.h"
 #include "native/python/python_profile_bridge.h"
 #include "net/profile_file.h"

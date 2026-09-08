@@ -234,7 +234,7 @@ public:
                  std::uint64_t counter_delta = 0) noexcept;
 
 private:
-    void initializeRegion(CiDiagnosticsRegion &region, std::uint64_t mapping_lifetime_generation) noexcept;
+    static void initializeRegion(CiDiagnosticsRegion &region, std::uint64_t mapping_lifetime_generation) noexcept;
     bool openMapping() noexcept;
     CiDiagnosticRecord *record(CiDiagnosticContext context) noexcept;
 

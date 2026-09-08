@@ -1,4 +1,4 @@
-#include "core/diagnostics/ci_diagnostics.h"
+#include "native/diagnostics/ci_diagnostics.h"
 
 #include <cstdlib>
 #include <limits>
@@ -217,7 +217,7 @@ bool CiDiagnostics::openMapping() noexcept
     CiDiagnosticsRegion *mapped = nullptr;
     bool ready_published = false;
     try {
-        const std::uint64_t pid = static_cast<std::uint64_t>(::GetCurrentProcessId());
+        const auto pid = static_cast<std::uint64_t>(::GetCurrentProcessId());
         mapping_name_ = mappingNameForPid(pid);
         const std::wstring wide_name(mapping_name_.begin(), mapping_name_.end());
         static_assert(sizeof(CiDiagnosticsRegion) <= (std::numeric_limits<DWORD>::max)());

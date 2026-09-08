@@ -96,7 +96,7 @@ set_target_properties(spark_profiling_time PROPERTIES POSITION_INDEPENDENT_CODE 
 
 # --- opt-in CI lifecycle diagnostics (no native, core, or Endstone dependencies) ---
 add_library(spark_diagnostics STATIC
-        src/core/diagnostics/ci_diagnostics.cpp)
+        src/native/diagnostics/ci_diagnostics.cpp)
 target_include_directories(spark_diagnostics PUBLIC src)
 target_link_libraries(spark_diagnostics PUBLIC Threads::Threads)
 set_target_properties(spark_diagnostics PROPERTIES POSITION_INDEPENDENT_CODE ON)

@@ -7,7 +7,7 @@
 #include "native/sampler/capture.h"
 #include "native/sampler/capture_windows_backend.h"
 #include "native/symbol/dbghelp_manager.h"
-#include "core/diagnostics/ci_diagnostics.h"
+#include "native/diagnostics/ci_diagnostics.h"
 
 namespace spark {
 

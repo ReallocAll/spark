@@ -18,7 +18,7 @@
 #include "native/sampler/capture.h"
 #include "native/sampler/thread_info.h"
 #include "native/symbol/symbolicate.h"
-#include "core/diagnostics/ci_diagnostics.h"
+#include "native/diagnostics/ci_diagnostics.h"
 
 namespace spark {
 

@@ -16,7 +16,7 @@
 #endif
 
 #include "application/profiler/profiler_service.h"
-#include "core/diagnostics/ci_diagnostics.h"
+#include "native/diagnostics/ci_diagnostics.h"
 
 namespace spark {
 

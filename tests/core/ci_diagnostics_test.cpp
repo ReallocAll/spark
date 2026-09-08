@@ -7,7 +7,7 @@
 #include <string>
 #include <thread>
 
-#include "core/diagnostics/ci_diagnostics.h"
+#include "native/diagnostics/ci_diagnostics.h"
 
 #if defined(_WIN32) && (defined(_M_X64) || defined(__x86_64__))
 #ifndef WIN32_LEAN_AND_MEAN
@@ -75,7 +75,7 @@ public:
 #endif
     }
 
-    bool set(const char *value)
+    static bool set(const char *value)
     {
 #if defined(_WIN32)
         return _putenv_s("ENDSTONE_SPARK_CI_DIAGNOSTICS", value != nullptr ? value : "") == 0;
@@ -119,7 +119,7 @@ public:
         return true;
     }
 
-    CiDiagnosticsRegion *region() const { return static_cast<CiDiagnosticsRegion *>(view_); }
+    [[nodiscard]] CiDiagnosticsRegion *region() const { return static_cast<CiDiagnosticsRegion *>(view_); }
 
 private:
     HANDLE handle_ = nullptr;
@@ -181,7 +181,7 @@ bool testDisabledAndSchema()
 bool testEnvironmentOptIn()
 {
     EnvironmentGuard environment;
-    if (!require(environment.set("1"), "failed to set diagnostics environment")) {
+    if (!require(EnvironmentGuard::set("1"), "failed to set diagnostics environment")) {
         return false;
     }
 
@@ -206,7 +206,7 @@ bool testEnvironmentOptIn()
 bool testMappingOwnershipAndReopen()
 {
     EnvironmentGuard environment;
-    if (!require(environment.set("1"), "failed to set diagnostics environment for mapping test")) {
+    if (!require(EnvironmentGuard::set("1"), "failed to set diagnostics environment for mapping test")) {
         return false;
     }
 
@@ -447,6 +447,7 @@ bool testScopeAndRegistration()
                  "scope did not publish normal exit")) {
         return false;
     }
+    bool caught = false;
     try {
         CiDiagnostics::Scope scope(
             &diagnostics, CiDiagnosticContext::ApplicationCommand, CiDiagnosticPhase::ApplicationCommandEnter,
@@ -454,8 +455,10 @@ bool testScopeAndRegistration()
         throw 1;
     }
     catch (...) {
+        caught = true;
     }
-    if (!require(spark::readCiDiagnosticSnapshot(record).phase == CiDiagnosticPhase::ApplicationCommandExceptionalExit,
+    if (!require(caught, "scope did not throw") ||
+        !require(spark::readCiDiagnosticSnapshot(record).phase == CiDiagnosticPhase::ApplicationCommandExceptionalExit,
                  "scope did not publish exceptional exit")) {
         return false;
     }
