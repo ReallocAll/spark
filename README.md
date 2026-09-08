@@ -254,8 +254,9 @@ TPS marker, and Minecraft color codes. These placeholders are player-independent
 
 `--alloc` profiles successful native allocation requests across process threads on
 Linux x86-64 and Windows x64. Linux redirects supported ELF allocator imports;
-Windows redirects supported allocator IAT slots through a process-lifetime pinned
-shim whose callbacks fall back safely after Spark-owned handlers are detached.
+Windows redirects supported allocator IAT slots through Spark-owned process-lifetime
+Permanent-IAT gateways whose callbacks fall back safely after Spark-owned handlers
+are detached.
 Every thread has an independent randomized byte-sampling phase and a non-reused
 session identity, so short-lived threads and operating-system thread-ID reuse do
 not merge unrelated stacks. Samples are weighted by requested bytes using a

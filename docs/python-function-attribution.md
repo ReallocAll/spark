@@ -57,4 +57,4 @@ Synthetic Python frames use profiling-session-local `PythonCodeId` values. They 
 
 Export metadata includes backend/version/support state, event counts, registered threads, maximum and overflow depth, snapshot attempts/failures, attributed/native-only samples, native/Python boundary misses, thread mismatches, unknown IDs, code-category counts, cache hits/misses and monitoring callback failures.
 
-These counters are intended both for production diagnosis and for the real-BDS validation/performance harness in `ReallocAll/bds-test-lab`.
+These counters are intended both for production diagnosis and for the real-BDS validation and performance harnesses.

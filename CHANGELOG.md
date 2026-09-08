@@ -46,9 +46,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Attribute sampled Python plugin call chains on CPython 3.12+ using a bounded PEP
   669 shadow stack while keeping sampling native; CPython 3.11 remains native-only.
 
-- Add Windows x64 native allocation profiling through a process-lifetime pinned
-  shim and IAT redirection, with fail-closed callback draining and ownership-safe
-  teardown before unloadable Spark plugin code is detached.
+- Add Windows x64 native allocation profiling through Spark-owned process-lifetime
+  Permanent-IAT gateways and IAT redirection, with fail-closed callback draining
+  and ownership-safe teardown before unloadable Spark plugin code is detached.
 
 ### Changed
 
