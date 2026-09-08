@@ -16,6 +16,7 @@
 #endif
 
 #include "application/profiler/profiler_service.h"
+#include "core/diagnostics/ci_diagnostics.h"
 
 namespace spark {
 
@@ -71,7 +72,16 @@ public:
 
 class ThrowingNotifier final : public spark::ResultNotifier {
 public:
-    void notify(const std::string &, const std::string &) override { throw std::runtime_error("notify failed"); }
+    void notify(const std::string &, const std::string &) override
+    {
+        ++calls;
+        if (throwing) {
+            throw std::runtime_error("notify failed");
+        }
+    }
+
+    bool throwing = true;
+    std::size_t calls = 0;
 };
 
 class Sender final : public spark::CommandSender {
@@ -103,11 +113,38 @@ void test_throwing_notifier_does_not_strand_export()
     Dispatcher dispatcher;
     ThrowingNotifier notifier;
     spark::TrustedViewersState trusted(std::filesystem::temp_directory_path() / "spark-profiler-failure-viewers.json");
+    spark::CiDiagnostics diagnostics;
+    assert(diagnostics.openForTesting(true));
     spark::ProfilerService service(statistics, {}, {}, {}, {}, {}, false, 10, "by-pool", "default", trusted, dispatcher,
                                    metadata, notifier);
 
     spark::ProfilerServiceTestAccess::announceResult(service);
     assert(!service.exporting());
+    assert(notifier.calls == 2);
+    const auto notification = spark::readCiDiagnosticSnapshot(
+        diagnostics.regionForTesting()->records[static_cast<std::size_t>(spark::CiDiagnosticContext::Notification)]);
+    assert(notification.phase == spark::CiDiagnosticPhase::NotificationExceptionalExit);
+}
+
+void test_normal_notifier_publishes_normal_exit()
+{
+    spark::StatisticsService statistics;
+    Metadata metadata;
+    Dispatcher dispatcher;
+    ThrowingNotifier notifier;
+    notifier.throwing = false;
+    spark::TrustedViewersState trusted(std::filesystem::temp_directory_path() / "spark-profiler-failure-viewers.json");
+    spark::CiDiagnostics diagnostics;
+    assert(diagnostics.openForTesting(true));
+    spark::ProfilerService service(statistics, {}, {}, {}, {}, {}, false, 10, "by-pool", "default", trusted, dispatcher,
+                                   metadata, notifier);
+
+    spark::ProfilerServiceTestAccess::announceResult(service);
+    assert(!service.exporting());
+    assert(notifier.calls == 2);
+    const auto notification = spark::readCiDiagnosticSnapshot(
+        diagnostics.regionForTesting()->records[static_cast<std::size_t>(spark::CiDiagnosticContext::Notification)]);
+    assert(notification.phase == spark::CiDiagnosticPhase::NotificationExit);
 }
 
 void test_background_start_fails_closed_on_metadata_exception()
@@ -147,6 +184,8 @@ void test_export_metadata_exception_restores_background()
     Dispatcher dispatcher;
     ThrowingNotifier notifier;
     spark::TrustedViewersState trusted(std::filesystem::temp_directory_path() / "spark-profiler-failure-viewers.json");
+    spark::CiDiagnostics diagnostics;
+    assert(diagnostics.openForTesting(true));
     spark::ProfilerService service(statistics, {}, {}, {}, {}, {}, true, 10, "by-pool", "default", trusted, dispatcher,
                                    metadata, notifier);
     service.setMainThreadId(worker_tid.load(std::memory_order_acquire));
@@ -161,6 +200,9 @@ void test_export_metadata_exception_restores_background()
     assert(!service.exporting());
     assert(service.running());
     assert(service.isBackgroundRunning());
+    const auto notification = spark::readCiDiagnosticSnapshot(
+        diagnostics.regionForTesting()->records[static_cast<std::size_t>(spark::CiDiagnosticContext::Notification)]);
+    assert(notification.phase == spark::CiDiagnosticPhase::NotificationExceptionalExit);
     service.cmdCancel(sender);
     service.shutdown();
 
@@ -173,6 +215,7 @@ void test_export_metadata_exception_restores_background()
 int main()
 {
     test_throwing_notifier_does_not_strand_export();
+    test_normal_notifier_publishes_normal_exit();
     test_background_start_fails_closed_on_metadata_exception();
     test_export_metadata_exception_restores_background();
     return 0;

@@ -17,6 +17,7 @@
 #include "core/activity/activity_log.h"
 #include "core/config/spark_config.h"
 #include "core/config/trusted_viewers.h"
+#include "core/diagnostics/ci_diagnostics.h"
 #include "core/recovery/recovery_player.h"
 #include "core/recovery/stall_watchdog.h"
 #include "core/stats/statistics_service.h"
@@ -72,6 +73,8 @@ private:
     ProfileMetadataProvider &metadata_provider_;
     ResultNotifier &notifier_;
 
+    // Declared before profiler_ so the mapping outlives all sampler workers.
+    CiDiagnostics ci_diagnostics_;
     ProfilerService profiler_;
     HealthCommand health_;
     ActivityLog activity_log_;

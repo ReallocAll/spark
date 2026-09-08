@@ -94,6 +94,13 @@ add_library(spark_profiling_time STATIC
 target_include_directories(spark_profiling_time PUBLIC src)
 set_target_properties(spark_profiling_time PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
+# --- opt-in CI lifecycle diagnostics (no native, core, or Endstone dependencies) ---
+add_library(spark_diagnostics STATIC
+        src/core/diagnostics/ci_diagnostics.cpp)
+target_include_directories(spark_diagnostics PUBLIC src)
+target_link_libraries(spark_diagnostics PUBLIC Threads::Threads)
+set_target_properties(spark_diagnostics PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
 # --- native backend: sampler, symbol guesser, allocation hooks (no Endstone) ---
 add_library(spark_native STATIC
         src/native/alloc/allocation_profile_aggregation.cpp
@@ -135,7 +142,7 @@ else ()
             src/native/alloc/allocation_sampler_stub.cpp)
 endif ()
 target_include_directories(spark_native PUBLIC src)
-target_link_libraries(spark_native PUBLIC spark_profiling_time cpptrace::cpptrace concurrentqueue::concurrentqueue
+target_link_libraries(spark_native PUBLIC spark_profiling_time spark_diagnostics cpptrace::cpptrace concurrentqueue::concurrentqueue
         Threads::Threads)
 set_target_properties(spark_native PROPERTIES POSITION_INDEPENDENT_CODE ON)
 if (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
@@ -197,13 +204,13 @@ if (WIN32)
     target_sources(spark_core PRIVATE
             src/core/stats/network_monitor_windows.cpp
             src/core/ws/crypto_cng.cpp)
-    target_link_libraries(spark_core PUBLIC spark_native ZLIB::ZLIB CURL::libcurl tomlplusplus::tomlplusplus
+    target_link_libraries(spark_core PUBLIC spark_diagnostics spark_native ZLIB::ZLIB CURL::libcurl tomlplusplus::tomlplusplus
         nlohmann_json::nlohmann_json bcrypt)
 else ()
     target_sources(spark_core PRIVATE
             src/core/stats/network_monitor_linux.cpp
             src/core/ws/crypto.cpp)
-    target_link_libraries(spark_core PUBLIC spark_native ZLIB::ZLIB CURL::libcurl tomlplusplus::tomlplusplus
+    target_link_libraries(spark_core PUBLIC spark_diagnostics spark_native ZLIB::ZLIB CURL::libcurl tomlplusplus::tomlplusplus
         nlohmann_json::nlohmann_json OpenSSL::Crypto)
 endif ()
 if (WIN32)

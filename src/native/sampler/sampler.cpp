@@ -18,6 +18,7 @@
 #include "native/sampler/capture.h"
 #include "native/sampler/thread_info.h"
 #include "native/symbol/symbolicate.h"
+#include "core/diagnostics/ci_diagnostics.h"
 
 namespace spark {
 
@@ -90,10 +91,17 @@ bool Sampler::failure(std::string &error) const
 
 bool Sampler::startServiceThreads()
 {
+    CiDiagnostics *diagnostics = globalCiDiagnostics();
     try {
         running_.store(true);
         agg_running_.store(true);
         aggregator_thread_ = std::thread([this] {
+            CiDiagnostics *diagnostics = globalCiDiagnostics();
+            const std::uint64_t worker_tid = ciDiagnosticCurrentThreadId();
+            if (diagnostics != nullptr) {
+                diagnostics->publish(CiDiagnosticContext::AggregatorWorker, CiDiagnosticPhase::AggregatorWorkerStart,
+                                     worker_tid);
+            }
             try {
                 if (aggregator_thread_hook_) {
                     aggregator_thread_hook_();
@@ -103,8 +111,18 @@ bool Sampler::startServiceThreads()
             catch (...) {
                 markWorkerFailure();
             }
+            if (diagnostics != nullptr) {
+                diagnostics->publish(CiDiagnosticContext::AggregatorWorker, CiDiagnosticPhase::AggregatorWorkerExit,
+                                     worker_tid);
+            }
         });
         sampler_thread_ = std::thread([this] {
+            CiDiagnostics *diagnostics = globalCiDiagnostics();
+            const std::uint64_t worker_tid = ciDiagnosticCurrentThreadId();
+            if (diagnostics != nullptr) {
+                diagnostics->publish(CiDiagnosticContext::SamplerWorker, CiDiagnosticPhase::SamplerWorkerStart,
+                                     worker_tid);
+            }
             try {
                 if (sampler_thread_hook_) {
                     sampler_thread_hook_();
@@ -114,10 +132,18 @@ bool Sampler::startServiceThreads()
             catch (...) {
                 markWorkerFailure();
             }
+            if (diagnostics != nullptr) {
+                diagnostics->publish(CiDiagnosticContext::SamplerWorker, CiDiagnosticPhase::SamplerWorkerExit,
+                                     worker_tid);
+            }
         });
         service_start_count_.fetch_add(1, std::memory_order_relaxed);
     }
     catch (...) {
+        if (diagnostics != nullptr) {
+            diagnostics->publish(samplerLifecycleDiagnosticContext(), CiDiagnosticPhase::SamplerStartFailed,
+                                 ciDiagnosticCurrentThreadId());
+        }
         running_.store(false);
         wait_cv_.notify_all();
         if (sampler_thread_.joinable()) {
@@ -144,6 +170,7 @@ Sampler::~Sampler()
 bool Sampler::start(const SamplerConfig &config)
 {
     std::scoped_lock lifecycle_lock(lifecycle_mutex_);
+    CiDiagnostics *diagnostics = globalCiDiagnostics();
     last_error_.clear();
     if (running_.load()) {
         last_error_ = "sampler is already running";
@@ -151,10 +178,23 @@ bool Sampler::start(const SamplerConfig &config)
     }
     config_ = config;
     if (!thread_selector_.configure(config_.all_threads, config_.regex_threads, config_.thread_patterns, last_error_)) {
+        if (diagnostics != nullptr) {
+            diagnostics->publish(samplerLifecycleDiagnosticContext(), CiDiagnosticPhase::SamplerStartFailed,
+                                 ciDiagnosticCurrentThreadId());
+        }
         return false;
+    }
+    if (diagnostics != nullptr) {
+        diagnostics->beginGeneration();
+        diagnostics->publish(samplerLifecycleDiagnosticContext(), CiDiagnosticPhase::SamplerStart,
+                             ciDiagnosticCurrentThreadId());
     }
     if (!Capture::arm()) {
         last_error_ = "the platform stack-capture backend could not be initialized";
+        if (diagnostics != nullptr) {
+            diagnostics->publish(samplerLifecycleDiagnosticContext(), CiDiagnosticPhase::SamplerStartFailed,
+                                 ciDiagnosticCurrentThreadId());
+        }
         return false;
     }
     resetSession();
@@ -167,6 +207,11 @@ bool Sampler::start(const SamplerConfig &config)
 bool Sampler::stop()
 {
     std::scoped_lock lifecycle_lock(lifecycle_mutex_);
+    CiDiagnostics *diagnostics = globalCiDiagnostics();
+    if (diagnostics != nullptr) {
+        diagnostics->publish(samplerLifecycleDiagnosticContext(), CiDiagnosticPhase::SamplerStopRequested,
+                             ciDiagnosticCurrentThreadId());
+    }
     {
         std::scoped_lock tick_lock(tick_mutex_);
         tick_admission_open_.store(false, std::memory_order_release);
@@ -175,24 +220,56 @@ bool Sampler::stop()
         running_.store(false, std::memory_order_release);
     }
 #ifdef _WIN32
+    if (diagnostics != nullptr) {
+        diagnostics->publish(samplerLifecycleDiagnosticContext(), CiDiagnosticPhase::SamplerCancel,
+                             ciDiagnosticCurrentThreadId());
+    }
     Capture::cancelPending();
 #endif
     wait_cv_.notify_all();
+    if (diagnostics != nullptr) {
+        diagnostics->publish(samplerLifecycleDiagnosticContext(), CiDiagnosticPhase::SamplerJoin,
+                             ciDiagnosticCurrentThreadId());
+    }
     if (sampler_thread_.joinable()) {
         sampler_thread_.join();  // no more samples are produced after this
     }
+    if (diagnostics != nullptr) {
+        diagnostics->publish(samplerLifecycleDiagnosticContext(), CiDiagnosticPhase::SamplerJoinComplete,
+                             ciDiagnosticCurrentThreadId());
+    }
     agg_running_.store(false);
+    if (diagnostics != nullptr) {
+        diagnostics->publish(samplerLifecycleDiagnosticContext(), CiDiagnosticPhase::SamplerAggregatorJoin,
+                             ciDiagnosticCurrentThreadId());
+    }
     if (aggregator_thread_.joinable()) {
         aggregator_thread_.join();  // drains everything the sampler left behind
+    }
+    if (diagnostics != nullptr) {
+        diagnostics->publish(samplerLifecycleDiagnosticContext(), CiDiagnosticPhase::SamplerAggregatorJoinComplete,
+                             ciDiagnosticCurrentThreadId());
     }
     drainQueues();
     if (finalize_pending_.load(std::memory_order_acquire) && !pending_finalized_.load(std::memory_order_acquire)) {
         finishPending(terminal_tick_.load(std::memory_order_acquire));
         pending_finalized_.store(true, std::memory_order_release);
     }
+    if (diagnostics != nullptr) {
+        diagnostics->publish(samplerLifecycleDiagnosticContext(), CiDiagnosticPhase::SamplerDisarm,
+                             ciDiagnosticCurrentThreadId());
+    }
     if (!Capture::disarm()) {
         last_error_ = "the stack-capture handler is still active";
+        if (diagnostics != nullptr) {
+            diagnostics->publish(samplerLifecycleDiagnosticContext(), CiDiagnosticPhase::SamplerDisarmComplete,
+                                 ciDiagnosticCurrentThreadId());
+        }
         return false;
+    }
+    if (diagnostics != nullptr) {
+        diagnostics->publish(samplerLifecycleDiagnosticContext(), CiDiagnosticPhase::SamplerDisarmComplete,
+                             ciDiagnosticCurrentThreadId());
     }
     return true;
 }
@@ -210,6 +287,11 @@ void Sampler::requestStop() noexcept
 void Sampler::pauseForExport()
 {
     std::scoped_lock lifecycle_lock(lifecycle_mutex_);
+    CiDiagnostics *diagnostics = globalCiDiagnostics();
+    if (diagnostics != nullptr) {
+        diagnostics->publish(samplerLifecycleDiagnosticContext(), CiDiagnosticPhase::SamplerPause,
+                             ciDiagnosticCurrentThreadId());
+    }
     {
         std::scoped_lock tick_lock(tick_mutex_);
         running_.store(false, std::memory_order_release);
@@ -219,12 +301,28 @@ void Sampler::pauseForExport()
     Capture::cancelPending();
 #endif
     wait_cv_.notify_all();
+    if (diagnostics != nullptr) {
+        diagnostics->publish(samplerLifecycleDiagnosticContext(), CiDiagnosticPhase::SamplerPauseJoin,
+                             ciDiagnosticCurrentThreadId());
+    }
     if (sampler_thread_.joinable()) {
         sampler_thread_.join();
     }
+    if (diagnostics != nullptr) {
+        diagnostics->publish(samplerLifecycleDiagnosticContext(), CiDiagnosticPhase::SamplerPauseJoinComplete,
+                             ciDiagnosticCurrentThreadId());
+    }
     agg_running_.store(false);
+    if (diagnostics != nullptr) {
+        diagnostics->publish(samplerLifecycleDiagnosticContext(), CiDiagnosticPhase::SamplerAggregatorJoin,
+                             ciDiagnosticCurrentThreadId());
+    }
     if (aggregator_thread_.joinable()) {
         aggregator_thread_.join();
+    }
+    if (diagnostics != nullptr) {
+        diagnostics->publish(samplerLifecycleDiagnosticContext(), CiDiagnosticPhase::SamplerAggregatorJoinComplete,
+                             ciDiagnosticCurrentThreadId());
     }
     // Keep capture armed and session data intact for resume.
 }
@@ -232,6 +330,7 @@ void Sampler::pauseForExport()
 bool Sampler::resumeAfterExport()
 {
     std::scoped_lock lifecycle_lock(lifecycle_mutex_);
+    CiDiagnostics *diagnostics = globalCiDiagnostics();
     if (running_.load()) {
         return true;
     }
@@ -242,6 +341,10 @@ bool Sampler::resumeAfterExport()
     if (!startServiceThreads()) {
         last_error_ = "the sampler service threads could not be resumed";
         return false;
+    }
+    if (diagnostics != nullptr) {
+        diagnostics->publish(samplerLifecycleDiagnosticContext(), CiDiagnosticPhase::SamplerResume,
+                             ciDiagnosticCurrentThreadId());
     }
     return true;
 }
@@ -341,7 +444,11 @@ void Sampler::samplerLoop()
 
     CaptureBuffer buf;
     const auto interval = std::chrono::microseconds(config_.interval_us);
-    sampler_tid_.store(currentNativeThreadId(), std::memory_order_release);
+    const std::uint64_t worker_tid = currentNativeThreadId();
+    if (CiDiagnostics *diagnostics = globalCiDiagnostics(); diagnostics != nullptr) {
+        diagnostics->publish(CiDiagnosticContext::SamplerWorker, CiDiagnosticPhase::SamplerWorkerRunning, worker_tid);
+    }
+    sampler_tid_.store(worker_tid, std::memory_order_release);
     while (running_.load() && aggregator_tid_.load(std::memory_order_acquire) == 0) {
         std::this_thread::yield();
     }
@@ -522,6 +629,9 @@ void Sampler::samplerLoop()
             break;
         }
         sampler_heartbeat_.beat();
+    }
+    if (CiDiagnostics *diagnostics = globalCiDiagnostics(); diagnostics != nullptr) {
+        diagnostics->publish(CiDiagnosticContext::SamplerWorker, CiDiagnosticPhase::SamplerWorkerExit, worker_tid);
     }
     sampler_tid_.store(0, std::memory_order_release);
 }

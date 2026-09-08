@@ -38,6 +38,7 @@ SparkApplication::SparkApplication(std::string bds_executable_sha256, const std:
       activity_log_(std::move(activity_log_file)), activity_command_(activity_log_), tick_monitor_(notifier_),
       watchdog_(server_heartbeat_)
 {
+    ci_diagnostics_.open();
     recovery_dir_ = profile_storage_dir / "recovery";
     profiler_.configureAllocationRateMetrics(config_.allocation_rate_metrics_enabled);
     activity_log_.load();
@@ -104,11 +105,22 @@ void SparkApplication::registerCommands()
 
 bool SparkApplication::dispatchCommand(CommandSender &sender, const std::vector<std::string> &tokens)
 {
-    return registry_.dispatch(sender, tokens);
+    CiDiagnostics::Scope diagnostic_scope(globalCiDiagnostics(), CiDiagnosticContext::ApplicationCommand,
+                                          CiDiagnosticPhase::ApplicationCommandEnter,
+                                          CiDiagnosticPhase::ApplicationCommandExit,
+                                          CiDiagnosticPhase::ApplicationCommandExceptionalExit,
+                                          ciDiagnosticCurrentThreadId());
+    const bool handled = registry_.dispatch(sender, tokens);
+    return handled;
 }
 
 void SparkApplication::onTick(double mspt)
 {
+    CiDiagnostics::Scope diagnostic_scope(globalCiDiagnostics(), CiDiagnosticContext::ApplicationTick,
+                                          CiDiagnosticPhase::ApplicationTickEnter,
+                                          CiDiagnosticPhase::ApplicationTickExit,
+                                          CiDiagnosticPhase::ApplicationTickExceptionalExit,
+                                          ciDiagnosticCurrentThreadId());
     server_heartbeat_.beat();
     if (profiler_.allocationRateMetricsActive()) {
         statistics_.recordAllocationBytes(profiler_.persistentAllocationBytes());

@@ -38,6 +38,12 @@ target_link_libraries(spark_allocation_benchmark PRIVATE spark_core)
 set_target_properties(spark_allocation_benchmark PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 
+add_executable(spark_ci_diagnostics_test core/ci_diagnostics_test.cpp)
+target_link_libraries(spark_ci_diagnostics_test PRIVATE spark_diagnostics)
+set_target_properties(spark_ci_diagnostics_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME spark_ci_diagnostics_test COMMAND spark_ci_diagnostics_test)
+
 add_executable(spark_symbol_guess_evidence_test native/symbol/symbol_guess_evidence_test.cpp)
 target_link_libraries(spark_symbol_guess_evidence_test PRIVATE spark_core)
 set_target_properties(spark_symbol_guess_evidence_test PROPERTIES
