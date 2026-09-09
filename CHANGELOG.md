@@ -94,6 +94,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Preserve the real Linux allocation caller frame by correcting the cpptrace stack
   skip count used by allocation hooks.
 - Ensure Windows execution sampling snapshots and resumes the target thread before unwind, preventing a blocked stack walk from leaving BDS suspended.
+- Bound how long a Windows allocation profile may stop or finalize, so a slow allocation
+  aggregator can no longer freeze the server main thread. Aggregation that does not fit inside
+  the stop budget is truncated and reported as incomplete profile data; if the aggregator
+  still cannot finish, the profile fails with an explicit error instead of hanging BDS.
 
 ## [0.5.3][0.5.3] - 2026-08-14
 

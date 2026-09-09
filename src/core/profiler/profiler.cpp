@@ -214,7 +214,8 @@ bool Profiler::start(const ProfilerOptions &options, std::uint64_t main_tid, std
         return false;
     }
     if (!reapRecoveryWriter()) {
-        error = "previous recovery writer is still stopping";
+        error = allocation_sampler_.aggregatorMayBeAlive() ? "the allocation aggregator is still finishing"
+                                                           : "previous recovery writer is still stopping";
         return false;
     }
     sampling_stop_requested_.store(false, std::memory_order_release);
@@ -609,9 +610,16 @@ bool Profiler::cancel(std::string &error)
     std::string stop_error;
     if (stopSampling(stop_error)) {
         std::string resume_error;
-        resumePersistentAllocationCounting(resume_error);
-        error.clear();
+        if (!resumePersistentAllocationCounting(resume_error)) {
+            error = resume_error.empty() ? "the allocation backend cleanup is incomplete" : std::move(resume_error);
+            return false;
+        }
         discardRecoveryJournal();
+        if (hasPendingRecoveryWriter()) {
+            error = "recovery writer shutdown timed out";
+            return false;
+        }
+        error.clear();
         return true;
     }
 
@@ -620,9 +628,16 @@ bool Profiler::cancel(std::string &error)
     // export phase to do it for us.
     if (!running_.load()) {
         std::string resume_error;
-        resumePersistentAllocationCounting(resume_error);
+        if (!resumePersistentAllocationCounting(resume_error)) {
+            error = resume_error.empty() ? "the allocation backend cleanup is incomplete" : std::move(resume_error);
+            return false;
+        }
         error.clear();
         discardRecoveryJournal();
+        if (hasPendingRecoveryWriter()) {
+            error = "recovery writer shutdown timed out";
+            return false;
+        }
         return true;
     }
 
@@ -670,6 +685,10 @@ bool Profiler::shutdown(std::string &error)
         stopRecoveryWriter();
         running_.store(false);
     }
+    // The allocation sampler must consolidate before its recovery sink goes away.
+    if (!allocation_sampler_.shutdown(error)) {
+        return false;
+    }
     // Clean shutdown: discard the journal so the next startup does not treat
     // it as a crash.  This is safe even if no journal exists.
     discardRecoveryJournal();
@@ -677,7 +696,7 @@ bool Profiler::shutdown(std::string &error)
         error = "recovery writer shutdown timed out";
         return false;
     }
-    return allocation_sampler_.shutdown(error);
+    return true;
 }
 
 }  // namespace spark

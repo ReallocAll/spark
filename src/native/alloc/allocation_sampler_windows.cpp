@@ -68,6 +68,12 @@ constexpr std::size_t KMaxTickDecisions = 100000;
 constexpr std::size_t KTickEventCapacity = 4096;
 constexpr std::uint32_t KFramesToSkip = 2;
 constexpr std::uint64_t KHookRefreshIntervalMs = 2000;
+constexpr std::uint64_t KDrainBudgetMs = 1500;
+constexpr std::size_t KDrainBudgetEvents = KEventCapacity;
+constexpr std::uint64_t KDrainOvershootAllowanceMs = 500;
+constexpr std::uint64_t KAggregatorExitTimeoutMs = 2000;
+static_assert(KAggregatorExitTimeoutMs >= KDrainBudgetMs + KDrainOvershootAllowanceMs,
+              "the aggregator exit deadline must cover a full drain budget plus one in-flight event");
 
 void *tombstonePointer() noexcept
 {
@@ -358,6 +364,9 @@ struct AllocationSampler::Impl {
     std::atomic<std::uint64_t> terminal_tick{0};
     std::atomic<bool> aggregator_running{false};
     std::atomic<bool> aggregator_failed{false};
+    std::atomic<bool> drain_abort{false};
+    std::atomic<bool> aggregator_exited{false};
+    std::atomic<bool> stop_wait_timed_out{false};
     std::array<char, 256> aggregator_failure{};
 
     MallocFn real_malloc = nullptr;
@@ -416,6 +425,7 @@ struct AllocationSampler::Impl {
     std::atomic<std::uint64_t> lifetime_ms_max{0};
     std::atomic<std::uint64_t> lifecycle_dropped{0};
     std::atomic<std::uint64_t> contention_dropped{0};
+    std::atomic<std::uint64_t> drain_truncated{0};
     std::atomic<std::uint64_t> lifecycle_version{0};
     std::atomic<std::uint64_t> lifecycle_readers{0};
     std::atomic<std::uint64_t> lifecycle_writers{0};
@@ -437,7 +447,7 @@ struct AllocationSampler::Impl {
     AllocationProfileAggregation aggregation;
     std::unordered_map<std::uintptr_t, ModuleId> module_cache;
 
-    RecoverySink *recovery_sink = nullptr;
+    std::atomic<RecoverySink *> recovery_sink{nullptr};
 
     ~Impl() = default;
 
@@ -1822,6 +1832,9 @@ struct AllocationSampler::Impl {
 
     void processEvent(AllocationEvent *event)
     {
+        if (config.aggregator_per_event_delay_us_for_testing != 0) {
+            std::this_thread::sleep_for(std::chrono::microseconds(config.aggregator_per_event_delay_us_for_testing));
+        }
         if (event->thread_observation) {
             aggregation.observeThread(event->thread_id, event->os_thread_id);
             return;
@@ -1839,14 +1852,26 @@ struct AllocationSampler::Impl {
     {
         const std::uint64_t stopped_ms = monotonicMs();
         const std::uint64_t terminal = terminal_tick.load(std::memory_order_acquire);
+        const std::uint64_t retained_total = live_samples.load(std::memory_order_relaxed);
         std::uint64_t total_age = 0;
         std::uint64_t maximum_age = 0;
+        std::uint64_t visited = 0;
+        bool walk_truncated = false;
         for (std::size_t i = 0; i < KLiveIndexCapacity; ++i) {
+            if (monotonicMs() - stopped_ms >= KDrainBudgetMs) {
+                walk_truncated = true;
+                break;
+            }
             const LiveIndexEntry &entry = live_index[i];
             void *pointer = entryPointer(entry);
             LiveAllocation *entry_allocation = entryAllocation(entry);
             if (pointer == nullptr || pointer == tombstonePointer() || entry_allocation == nullptr) {
                 continue;
+            }
+            ++visited;
+            if (config.live_finalize_per_record_delay_us_for_testing != 0) {
+                std::this_thread::sleep_for(
+                    std::chrono::microseconds(config.live_finalize_per_record_delay_us_for_testing));
             }
             const LiveAllocation &allocation = *entry_allocation;
             if (!aggregation.tickAccepts(allocation.tick_id)) {
@@ -1863,26 +1888,68 @@ struct AllocationSampler::Impl {
                 (void)aggregation.acceptLiveSample(std::move(sample));
             }
         }
+        if (walk_truncated) {
+            drain_truncated.fetch_add(retained_total > visited ? retained_total - visited : 0,
+                                      std::memory_order_relaxed);
+        }
         retained_age_ms_total.store(total_age, std::memory_order_relaxed);
         retained_age_ms_max.store(maximum_age, std::memory_order_relaxed);
     }
 
-    void drainQueues()
+    bool drainBudgetExhausted(std::uint64_t started_ms, std::uint64_t processed) const noexcept
     {
+        return drain_abort.load(std::memory_order_acquire) || processed >= KDrainBudgetEvents ||
+               monotonicMs() - started_ms >= KDrainBudgetMs;
+    }
+
+    bool drainStopped(std::uint64_t started_ms, std::uint64_t processed,
+                      bool abort_when_aggregator_stopped) const noexcept
+    {
+        if (abort_when_aggregator_stopped && !aggregator_running.load(std::memory_order_acquire)) {
+            return true;
+        }
+        return drainBudgetExhausted(started_ms, processed);
+    }
+
+    void recycleReadyEvents(PSLIST_ENTRY list) noexcept
+    {
+        std::uint64_t discarded = 0;
+        while (list != nullptr) {
+            PSLIST_ENTRY next = list->Next;
+            auto *event = CONTAINING_RECORD(list, AllocationEvent, entry);
+            ready_event_count.fetch_sub(1, std::memory_order_relaxed);
+            recycleEvent(event);
+            list = next;
+            ++discarded;
+        }
+        drain_truncated.fetch_add(discarded, std::memory_order_relaxed);
+    }
+
+    void drainQueues(bool abort_when_aggregator_stopped)
+    {
+        const std::uint64_t started_ms = monotonicMs();
+        std::uint64_t processed = 0;
         TickEvent tick;
-        while (ticks.dequeue(tick)) {
+        while (!drainStopped(started_ms, processed, abort_when_aggregator_stopped) && ticks.dequeue(tick)) {
             aggregation.processTick(tick.tick_id, tick.mspt_ms);
+            ++processed;
+        }
+        TickEvent stranded;
+        if (drainBudgetExhausted(started_ms, processed) && ticks.dequeue(stranded)) {
+            drain_truncated.fetch_add(1, std::memory_order_relaxed);
         }
 
         PSLIST_ENTRY list = ::InterlockedFlushSList(&ready_events);
-        while (list != nullptr) {
+        while (!drainStopped(started_ms, processed, abort_when_aggregator_stopped) && list != nullptr) {
             PSLIST_ENTRY next = list->Next;
             auto *event = CONTAINING_RECORD(list, AllocationEvent, entry);
             processEvent(event);
             ready_event_count.fetch_sub(1, std::memory_order_relaxed);
             recycleEvent(event);
             list = next;
+            ++processed;
         }
+        recycleReadyEvents(list);
     }
 
     void requestFinalization()
@@ -1897,7 +1964,7 @@ struct AllocationSampler::Impl {
     void finishAggregationIfNeeded()
     {
         std::scoped_lock lock(aggregate_mutex);
-        drainQueues();
+        drainQueues(false);
         if (finalize_pending.load(std::memory_order_acquire) && !pending_finalized.load(std::memory_order_acquire)) {
             aggregation.finishPending(terminal_tick.load(std::memory_order_acquire));
             pending_finalized.store(true, std::memory_order_release);
@@ -1916,7 +1983,7 @@ struct AllocationSampler::Impl {
         std::uint64_t next_hook_refresh_ms = monotonicMs() + KHookRefreshIntervalMs;
         while (aggregator_running.load(std::memory_order_acquire)) {
             const std::uint64_t now_ms = monotonicMs();
-            if (now_ms >= next_hook_refresh_ms) {
+            if (!drain_abort.load(std::memory_order_acquire) && now_ms >= next_hook_refresh_ms) {
                 std::string refresh_error;
                 if (hooks == nullptr || !hooks->refresh(refresh_error)) {
                     throw std::runtime_error(std::string("allocation hook refresh failed: ") +
@@ -1926,14 +1993,14 @@ struct AllocationSampler::Impl {
             }
             {
                 std::scoped_lock lock(aggregate_mutex);
-                drainQueues();
+                drainQueues(true);
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
         {
             std::scoped_lock lock(aggregate_mutex);
-            drainQueues();
-            if (finalize_pending.load(std::memory_order_acquire)) {
+            drainQueues(false);
+            if (!drain_abort.load(std::memory_order_acquire) && finalize_pending.load(std::memory_order_acquire)) {
                 aggregation.finishPending(terminal_tick.load(std::memory_order_acquire));
                 pending_finalized.store(true, std::memory_order_release);
             }
@@ -1958,7 +2025,7 @@ struct AllocationSampler::Impl {
             error = "timed out waiting for the allocation aggregator snapshot";
             return false;
         }
-        drainQueues();
+        drainQueues(false);
         snapshot = AllocationSnapshot{};
         snapshot.number_of_ticks = current_tick.load(std::memory_order_relaxed);
 
@@ -2086,6 +2153,10 @@ struct AllocationSampler::Impl {
         retained_age_ms_max.store(0, std::memory_order_relaxed);
         aggregator_failure.fill('\0');
         aggregator_failed.store(false, std::memory_order_release);
+        drain_abort.store(false, std::memory_order_relaxed);
+        aggregator_exited.store(false, std::memory_order_relaxed);
+        stop_wait_timed_out.store(false, std::memory_order_relaxed);
+        drain_truncated.store(0, std::memory_order_relaxed);
     }
 
     bool waitForTrackingQuiescence(std::string &error) noexcept
@@ -2108,6 +2179,20 @@ struct AllocationSampler::Impl {
         return false;
     }
 
+    bool aggregatorMayBeAlive() const noexcept { return aggregator_thread.joinable(); }
+
+    bool waitForAggregatorExit() noexcept
+    {
+        const std::uint64_t deadline = monotonicMs() + KAggregatorExitTimeoutMs;
+        while (!aggregator_exited.load(std::memory_order_acquire)) {
+            if (monotonicMs() >= deadline) {
+                return false;
+            }
+            ::Sleep(1);
+        }
+        return true;
+    }
+
     bool startSession(const AllocationSamplerConfig &new_config, std::string &error)
     {
         std::scoped_lock lock(lifecycle_mutex);
@@ -2116,7 +2201,7 @@ struct AllocationSampler::Impl {
             error = "allocation profiler is already running";
             return false;
         }
-        if (aggregator_thread.joinable()) {
+        if (aggregatorMayBeAlive()) {
             error = "the previous allocation session has not finished cleanup";
             return false;
         }
@@ -2131,7 +2216,7 @@ struct AllocationSampler::Impl {
 
         resetSession();
         config = new_config;
-        aggregation.reset(config, recovery_sink);
+        aggregation.reset(config, recovery_sink.load(std::memory_order_acquire));
         if (!aggregation.configure(error)) {
             return false;
         }
@@ -2142,8 +2227,11 @@ struct AllocationSampler::Impl {
         if (!configureHooks(error)) {
             return false;
         }
-        if (!new_config.count_only && !allocateEventPool(error)) {
-            return false;
+        if (!new_config.count_only) {
+            freeEventPool();
+            if (!allocateEventPool(error)) {
+                return false;
+            }
         }
 
         if (!installHooks(error)) {
@@ -2171,6 +2259,7 @@ struct AllocationSampler::Impl {
                 catch (...) {
                     markAggregatorFailure("allocation aggregator failed with an unknown exception");
                 }
+                aggregator_exited.store(true, std::memory_order_release);
             });
         }
         catch (...) {
@@ -2193,7 +2282,7 @@ struct AllocationSampler::Impl {
     {
         std::scoped_lock lock(lifecycle_mutex);
         error.clear();
-        if (!running.load(std::memory_order_acquire) && !aggregator_thread.joinable()) {
+        if (!running.load(std::memory_order_acquire) && !aggregatorMayBeAlive()) {
             return true;
         }
 
@@ -2204,8 +2293,16 @@ struct AllocationSampler::Impl {
             return false;
         }
         aggregator_running.store(false, std::memory_order_release);
-        if (aggregator_thread.joinable()) {
-            aggregator_thread.join();
+        if (aggregatorMayBeAlive()) {
+            if (!waitForAggregatorExit()) {
+                drain_abort.store(true, std::memory_order_release);
+                stop_wait_timed_out.store(true, std::memory_order_release);
+                error = "timed out waiting for the allocation aggregator to stop; finalization skipped";
+                return false;
+            }
+            if (aggregator_thread.joinable()) {
+                aggregator_thread.join();
+            }
         }
         finishAggregationIfNeeded();
         if (config.live_only && !aggregator_failed.load(std::memory_order_acquire)) {
@@ -2228,7 +2325,7 @@ struct AllocationSampler::Impl {
         std::scoped_lock lock(lifecycle_mutex);
         error.clear();
 
-        if (running.load(std::memory_order_acquire) || aggregator_thread.joinable()) {
+        if (running.load(std::memory_order_acquire) || aggregatorMayBeAlive()) {
             requestFinalization();
         }
         tracking.store(false, std::memory_order_release);
@@ -2236,9 +2333,17 @@ struct AllocationSampler::Impl {
         if (!waitForTrackingQuiescence(error)) {
             return false;
         }
+        drain_abort.store(true, std::memory_order_release);
         aggregator_running.store(false, std::memory_order_release);
-        if (aggregator_thread.joinable()) {
-            aggregator_thread.join();
+        if (aggregatorMayBeAlive()) {
+            if (!waitForAggregatorExit()) {
+                stop_wait_timed_out.store(true, std::memory_order_release);
+                error = "timed out waiting for the allocation aggregator to exit before shutdown";
+                return false;
+            }
+            if (aggregator_thread.joinable()) {
+                aggregator_thread.join();
+            }
         }
         finishAggregationIfNeeded();
         freeEventPool();
@@ -2312,7 +2417,7 @@ bool AllocationSampler::start(const AllocationSamplerConfig &config, std::string
 
 void AllocationSampler::setRecoverySink(RecoverySink *sink)
 {
-    impl_->recovery_sink = sink;
+    impl_->recovery_sink.store(sink, std::memory_order_release);
     impl_->aggregation.setRecoverySink(sink);
 }
 
@@ -2620,6 +2725,8 @@ bool AllocationSampler::dataIncomplete() const
            impl_->contention_dropped.load(std::memory_order_relaxed) != 0 ||
            impl_->dropped_tick_events.load(std::memory_order_relaxed) != 0 ||
            impl_->thread_state_drops.load(std::memory_order_relaxed) != 0 ||
+           impl_->drain_truncated.load(std::memory_order_relaxed) != 0 ||
+           impl_->stop_wait_timed_out.load(std::memory_order_acquire) ||
            impl_->aggregation.threadIdentityCacheDrops() != 0 || impl_->aggregation.dataIncomplete();
 }
 
@@ -2641,6 +2748,21 @@ std::uint64_t AllocationSampler::lifecycleDropped() const
 std::uint64_t AllocationSampler::contentionDropped() const
 {
     return impl_->contention_dropped.load(std::memory_order_relaxed);
+}
+
+std::uint64_t AllocationSampler::drainTruncated() const
+{
+    return impl_->drain_truncated.load(std::memory_order_relaxed);
+}
+
+bool AllocationSampler::stopWaitTimedOut() const
+{
+    return impl_->stop_wait_timed_out.load(std::memory_order_acquire);
+}
+
+bool AllocationSampler::aggregatorMayBeAlive() const
+{
+    return impl_->aggregatorMayBeAlive();
 }
 
 std::uint64_t AllocationSampler::retainedAverageAgeMs() const

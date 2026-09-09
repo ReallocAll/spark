@@ -404,6 +404,10 @@ std::string Profiler::exportData(const ExportContext &ctx, const AllocationSnaps
             std::to_string(allocation_sampler_.lifecycleDropped());
         meta.extra_platform_metadata["Allocation lock contention records dropped"] =
             std::to_string(allocation_sampler_.contentionDropped());
+        meta.extra_platform_metadata["Allocation stop budget truncated records"] =
+            std::to_string(allocation_sampler_.drainTruncated());
+        meta.extra_platform_metadata["Allocation stop wait timed out"] =
+            allocation_sampler_.stopWaitTimedOut() ? "true" : "false";
         meta.extra_platform_metadata["Allocation profile sampled bytes"] = std::to_string(
             allocation_snapshot != nullptr ? allocation_snapshot->sampled_bytes : allocation_sampler_.sampledBytes());
         meta.extra_platform_metadata["Allocation observed request bytes (process-wide)"] =

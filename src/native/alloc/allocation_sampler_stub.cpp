@@ -293,6 +293,21 @@ std::uint64_t AllocationSampler::contentionDropped() const
 {
     return 0;
 }
+
+std::uint64_t AllocationSampler::drainTruncated() const
+{
+    return 0;
+}
+
+bool AllocationSampler::stopWaitTimedOut() const
+{
+    return false;
+}
+
+bool AllocationSampler::aggregatorMayBeAlive() const
+{
+    return false;
+}
 std::uint64_t AllocationSampler::retainedAverageAgeMs() const
 {
     return 0;

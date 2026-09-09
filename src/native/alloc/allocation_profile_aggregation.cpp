@@ -18,7 +18,7 @@ bool AllocationProfileAggregation::configure(std::string &error)
 void AllocationProfileAggregation::reset(const AllocationSamplerConfig &config, RecoverySink *recovery_sink)
 {
     config_ = config;
-    recovery_sink_ = recovery_sink;
+    recovery_sink_.store(recovery_sink, std::memory_order_release);
     thread_filter_.clear();
     tree_ = CallTree{};
     thread_trees_.clear();
@@ -75,8 +75,9 @@ FrameKey AllocationProfileAggregation::internFrame(std::string_view path, std::u
         module_overflow_frames_.fetch_add(1, std::memory_order_relaxed);
         journalSentinelModule();
     }
-    if (recovery_sink_ != nullptr && modules_.size() > previous_size) {
-        recovery_sink_->journalModuleDef(module, path);
+    RecoverySink *sink = recovery_sink_.load(std::memory_order_acquire);
+    if (sink != nullptr && modules_.size() > previous_size) {
+        sink->journalModuleDef(module, path);
     }
     return FrameKey{.module = module, .rva = rva, .raw_address = raw_address};
 }
@@ -153,8 +154,9 @@ bool AllocationProfileAggregation::acceptSample(Sample sample)
         }
     }
     journalThread(sample);
-    if (recovery_sink_ != nullptr) {
-        recovery_sink_->journalSample(sample);
+    RecoverySink *sample_sink = recovery_sink_.load(std::memory_order_acquire);
+    if (sample_sink != nullptr) {
+        sample_sink->journalSample(sample);
     }
     return true;
 }
@@ -186,8 +188,9 @@ void AllocationProfileAggregation::processTick(std::uint64_t tick_id, double msp
         }
         tick_decisions_[static_cast<std::size_t>(tick_id)] = keep ? 2 : 1;
     }
-    if (recovery_sink_ != nullptr) {
-        recovery_sink_->journalTickEvent(tick_id, mspt_ms);
+    RecoverySink *tick_sink = recovery_sink_.load(std::memory_order_acquire);
+    if (tick_sink != nullptr) {
+        tick_sink->journalTickEvent(tick_id, mspt_ms);
     }
     if (config_.only_ticks_over_ms > 0 && tick_id >= kMaxTickDecisions) {
         tick_event_seen_ = true;
@@ -473,21 +476,23 @@ void AllocationProfileAggregation::pruneTickHistory(std::int32_t current_window)
 void AllocationProfileAggregation::journalThread(const Sample &sample)
 {
     const std::size_t root = sample.thread_id > kNamedThreadRootCapacity ? 0 : sample.thread_id;
-    if (journaled_thread_roots_[root] || recovery_sink_ == nullptr) {
+    RecoverySink *sink = recovery_sink_.load(std::memory_order_acquire);
+    if (journaled_thread_roots_[root] || sink == nullptr) {
         return;
     }
     journaled_thread_roots_[root] = true;
-    recovery_sink_->journalThreadDef(static_cast<std::uint64_t>(root), sample.os_thread_id,
-                                     root == 0 ? std::string_view("<other threads>") : sample.thread_name);
+    sink->journalThreadDef(static_cast<std::uint64_t>(root), sample.os_thread_id,
+                           root == 0 ? std::string_view("<other threads>") : sample.thread_name);
 }
 
 void AllocationProfileAggregation::journalSentinelModule()
 {
-    if (journaled_module_sentinel_ || recovery_sink_ == nullptr) {
+    RecoverySink *sink = recovery_sink_.load(std::memory_order_acquire);
+    if (journaled_module_sentinel_ || sink == nullptr) {
         return;
     }
     journaled_module_sentinel_ = true;
-    recovery_sink_->journalModuleDef(0, kOtherModulesSentinel);
+    sink->journalModuleDef(0, kOtherModulesSentinel);
 }
 
 }  // namespace spark

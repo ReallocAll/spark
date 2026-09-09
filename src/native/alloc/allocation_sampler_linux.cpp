@@ -481,7 +481,7 @@ struct AllocationSampler::Impl {
     BoundedEventQueue<TickEvent, KTickEventCapacity> ticks;
     AllocationProfileAggregation aggregation;
 
-    RecoverySink *recovery_sink = nullptr;
+    std::atomic<RecoverySink *> recovery_sink{nullptr};
 
     static Impl *activeOrAbort() noexcept
     {
@@ -1699,7 +1699,7 @@ struct AllocationSampler::Impl {
         }
         resetSession();
         config = new_config;
-        aggregation.reset(config, recovery_sink);
+        aggregation.reset(config, recovery_sink.load(std::memory_order_acquire));
         if (!aggregation.configure(error)) {
             return false;
         }
@@ -1898,7 +1898,7 @@ bool AllocationSampler::start(const AllocationSamplerConfig &config, std::string
 
 void AllocationSampler::setRecoverySink(RecoverySink *sink)
 {
-    impl_->recovery_sink = sink;
+    impl_->recovery_sink.store(sink, std::memory_order_release);
     impl_->aggregation.setRecoverySink(sink);
 }
 
@@ -2189,6 +2189,21 @@ std::uint64_t AllocationSampler::lifecycleDropped() const
 std::uint64_t AllocationSampler::contentionDropped() const
 {
     return impl_->contention_dropped.load(std::memory_order_relaxed);
+}
+
+std::uint64_t AllocationSampler::drainTruncated() const
+{
+    return 0;
+}
+
+bool AllocationSampler::stopWaitTimedOut() const
+{
+    return false;
+}
+
+bool AllocationSampler::aggregatorMayBeAlive() const
+{
+    return impl_->aggregator_thread.joinable();
 }
 std::uint64_t AllocationSampler::retainedAverageAgeMs() const
 {

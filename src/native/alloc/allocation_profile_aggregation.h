@@ -35,7 +35,10 @@ public:
 
     void reset(const AllocationSamplerConfig &config, RecoverySink *recovery_sink);
     bool configure(std::string &error);
-    void setRecoverySink(RecoverySink *recovery_sink) noexcept { recovery_sink_ = recovery_sink; }
+    void setRecoverySink(RecoverySink *recovery_sink) noexcept
+    {
+        recovery_sink_.store(recovery_sink, std::memory_order_release);
+    }
 
     AllocationThreadSelection resolveThread(std::uint64_t session_thread_id, std::uint64_t os_thread_id);
     void observeThread(std::uint64_t session_thread_id, std::uint64_t os_thread_id);
@@ -142,7 +145,7 @@ private:
     std::int32_t session_start_window_ = 0;
     std::int32_t last_history_window_ = 0;
     std::int32_t last_tick_window_ = 0;
-    RecoverySink *recovery_sink_ = nullptr;
+    std::atomic<RecoverySink *> recovery_sink_{nullptr};
     std::atomic<std::uint64_t> sample_count_{0};
     std::atomic<std::uint64_t> sampled_bytes_{0};
     std::atomic<std::uint64_t> dropped_samples_{0};

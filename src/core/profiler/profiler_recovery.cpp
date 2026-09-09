@@ -6,6 +6,10 @@ namespace spark {
 
 void Profiler::stopRecoveryWriter()
 {
+    // An un-reaped aggregator may still journal: keep the writer and both sinks intact.
+    if (allocation_sampler_.aggregatorMayBeAlive()) {
+        return;
+    }
     RecoveryWriter *writer = nullptr;
     {
         std::scoped_lock lock(recovery_mutex_);
@@ -34,6 +38,9 @@ void Profiler::stopRecoveryWriter()
 
 bool Profiler::reapRecoveryWriter()
 {
+    if (allocation_sampler_.aggregatorMayBeAlive()) {
+        return false;
+    }
     std::scoped_lock lock(recovery_mutex_);
     if (!recovery_writer_) {
         return true;

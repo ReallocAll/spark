@@ -35,6 +35,10 @@ struct AllocationSamplerConfig {
     // Deterministic fault injection used only by the offline selftest.
     bool fail_aggregator_for_testing = false;
     std::uint32_t aggregator_delay_ms_for_testing = 0;
+    // Deterministic per-event aggregator cost, used by the bounded-drain test.
+    std::uint32_t aggregator_per_event_delay_us_for_testing = 0;
+    // Deterministic per-record cost for the retained live-profile walk.
+    std::uint32_t live_finalize_per_record_delay_us_for_testing = 0;
     // Keeps the consumer side of the allocation event queue parked until a
     // producer has observed a bounded queue drop (or the session is stopped).
     // This makes queue-capacity pressure tests independent of host speed.
@@ -174,6 +178,9 @@ public:
     std::uint64_t maximumLifetimeMs() const;
     std::uint64_t lifecycleDropped() const;
     std::uint64_t contentionDropped() const;
+    std::uint64_t drainTruncated() const;
+    bool stopWaitTimedOut() const;
+    bool aggregatorMayBeAlive() const;
     std::uint64_t retainedAverageAgeMs() const;
     std::uint64_t retainedMaximumAgeMs() const;
     bool running() const;

@@ -461,6 +461,12 @@ if (WIN32)
             RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
     add_test(NAME spark_windows_allocation_backend_test COMMAND spark_windows_allocation_backend_test)
 
+    add_executable(spark_windows_allocation_stop_test native/alloc/windows_allocation_stop_test.cpp)
+    target_link_libraries(spark_windows_allocation_stop_test PRIVATE spark_core)
+    set_target_properties(spark_windows_allocation_stop_test PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+    add_test(NAME spark_windows_allocation_stop_test COMMAND spark_windows_allocation_stop_test)
+
     add_executable(spark_capture_windows_lifecycle_test native/sampler/capture_windows_lifecycle_test.cpp)
     target_link_libraries(spark_capture_windows_lifecycle_test PRIVATE spark_core)
     set_target_properties(spark_capture_windows_lifecycle_test PROPERTIES

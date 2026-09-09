@@ -175,6 +175,10 @@ private:
     bool stopPersistentAllocationCounting(std::string &error);
     void accumulatePersistentAllocationBytes() noexcept;
 
+    // Declared first so the journal outlives both samplers and any abandoned aggregator.
+    std::filesystem::path recovery_dir_;
+    mutable std::mutex recovery_mutex_;
+    std::unique_ptr<RecoveryWriter> recovery_writer_;
     Sampler sampler_;
     AllocationSampler allocation_sampler_;
     std::atomic<bool> persistent_allocation_counting_enabled_{false};
@@ -189,9 +193,6 @@ private:
     std::int64_t end_time_ms_ = 0;
     std::int64_t auto_end_time_ms_ = -1;
     std::int32_t interval_ = 4000;  // execution: microseconds; allocation: bytes
-    std::filesystem::path recovery_dir_;
-    mutable std::mutex recovery_mutex_;
-    std::unique_ptr<RecoveryWriter> recovery_writer_;
     mutable std::mutex lifecycle_mutex_;
     std::atomic<bool> sampling_stop_requested_{false};
     std::atomic<std::int32_t> included_ticks_{0};
