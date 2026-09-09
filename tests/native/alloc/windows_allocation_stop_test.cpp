@@ -46,6 +46,16 @@ constexpr std::uint64_t KDeadlineSlackMs = 1500;
 constexpr std::uint64_t KQuiesceWaitMs = 500;
 constexpr std::uint64_t KReapRetryBoundMs = KAggregatorParkMs * 3;
 constexpr std::uint32_t KJournalParkMs = 7000;
+constexpr std::uint32_t KSteadyEventDelayUs = 20000;
+constexpr std::uint32_t KSteadyParkMs = 1200;
+constexpr std::size_t KSteadyBacklogAllocations = 200;
+constexpr std::size_t KStopPathBacklogAllocations = 400;
+// Events that one wall-clock drain budget can absorb at the injected per-event cost.
+constexpr std::uint64_t KSteadyBudgetEvents = KDrainBudgetMs * 1000U / KSteadyEventDelayUs;
+constexpr std::uint64_t KSteadyProgressEvents = KSteadyBudgetEvents * 8 / 5;
+constexpr std::uint64_t KSteadyAttributionSlack = 1024;
+constexpr std::uint64_t KSteadyPollDeadlineMs = 10000;
+constexpr std::uint64_t KSteadyStopBoundMs = KDrainBudgetMs + KSteadyEventDelayUs / 1000U + 400U;
 
 int fail(const char *message)
 {
@@ -286,6 +296,105 @@ bool verifyHealthyDrainKeepsProfileComplete()
     return true;
 }
 
+bool verifySteadyStatePassesDoNotTruncate()
+{
+    spark::AllocationSampler sampler;
+    spark::AllocationSamplerConfig config = makeConfig();
+    config.aggregator_delay_ms_for_testing = KSteadyParkMs;
+    config.aggregator_per_event_delay_us_for_testing = KSteadyEventDelayUs;
+    std::string error;
+    if (!sampler.start(config, error)) {
+        return report("steady session did not start", error, 0, 0);
+    }
+
+    const Clock::time_point burst_started = Clock::now();
+    allocationBurst(KSteadyBacklogAllocations, KHealthyAllocationBytes);
+    const std::uint64_t burst_ms = elapsedMs(burst_started);
+    const std::uint64_t queued = sampler.enqueuedSamples();
+    note("steady backlog", burst_ms, queued, sampler.drainTruncated());
+    if (queued < KSteadyBacklogAllocations || sampler.droppedEvents() != 0) {
+        return report("steady backlog did not queue", error, burst_ms, queued);
+    }
+    if (sampler.drainTruncated() != 0) {
+        return report("a parked consumer truncated its queue", error, burst_ms, sampler.drainTruncated());
+    }
+
+    // The parked queue is deeper than one drain budget, so in-session passes must keep it.
+    const Clock::time_point progress_started = Clock::now();
+    while (sampler.sampleCount() < KSteadyProgressEvents) {
+        if (sampler.drainTruncated() != 0) {
+            return report("a steady-state pass destroyed queued events", error, elapsedMs(progress_started),
+                          sampler.drainTruncated());
+        }
+        if (elapsedMs(progress_started) > KSteadyPollDeadlineMs) {
+            return report("steady-state aggregation stalled", error, elapsedMs(progress_started),
+                          sampler.sampleCount());
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    // Past one drain budget with a backlog still queued.
+    if (sampler.drainTruncated() != 0 || sampler.enqueuedSamples() <= sampler.sampleCount()) {
+        return report("steady-state passes did not survive the drain budget", error, elapsedMs(progress_started),
+                      sampler.drainTruncated());
+    }
+
+    const Clock::time_point settle_started = Clock::now();
+    // Every event queued during the session must reach the aggregation.
+    while (sampler.sampleCount() < queued) {
+        if (sampler.drainTruncated() != 0) {
+            return report("steady-state aggregation lost events", error, elapsedMs(settle_started),
+                          sampler.drainTruncated());
+        }
+        if (elapsedMs(settle_started) > KSteadyPollDeadlineMs) {
+            return report("steady-state backlog was never aggregated", error, elapsedMs(settle_started),
+                          sampler.sampleCount());
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    if (sampler.drainTruncated() != 0) {
+        return report("steady-state backlog was not aggregated", error, elapsedMs(settle_started),
+                      sampler.sampleCount());
+    }
+
+    allocationBurst(KStopPathBacklogAllocations, KHealthyAllocationBytes);
+    const std::uint64_t deep_queued = sampler.enqueuedSamples();
+    const std::uint64_t deep_accepted = sampler.sampleCount();
+    const std::uint64_t running_truncated = sampler.drainTruncated();
+    if (deep_queued - deep_accepted <= KSteadyBudgetEvents) {
+        return report("stop-path backlog was too shallow", error, 0, deep_queued - deep_accepted);
+    }
+    const Clock::time_point stop_started = Clock::now();
+    const bool stopped = sampler.stop(error);
+    const std::uint64_t stop_ms = elapsedMs(stop_started);
+    const std::uint64_t truncated = sampler.drainTruncated();
+    note("steady stop", stop_ms, truncated, deep_queued - deep_accepted);
+    if (!stopped || !error.empty()) {
+        return report("steady session did not stop", error, stop_ms, truncated);
+    }
+    if (sampler.stopWaitTimedOut()) {
+        return report("steady stop waited past its deadline", error, stop_ms, truncated);
+    }
+    if (stop_ms > KSteadyStopBoundMs) {
+        return report("steady stop exceeded the drain budget plus one event", error, stop_ms, truncated);
+    }
+    if (running_truncated != 0) {
+        return report("the session truncated before it stopped", error, stop_ms, running_truncated);
+    }
+    if (truncated == 0 || truncated > deep_queued - deep_accepted + KSteadyAttributionSlack) {
+        return report("stop-path truncation does not match the queued backlog", error, stop_ms, truncated);
+    }
+    if (sampler.sampleCount() < deep_accepted || sampler.droppedEvents() != 0) {
+        return report("the stop path lost aggregated work", error, stop_ms, truncated);
+    }
+    if (!sampler.dataIncomplete()) {
+        return report("a truncated profile was not reported incomplete", error, stop_ms, truncated);
+    }
+    if (!sampler.shutdown(error) || sampler.running() || sampler.hooksInstalled()) {
+        return report("steady shutdown failed", error, stop_ms, truncated);
+    }
+    return true;
+}
+
 bool verifyLiveProfileFinalizationTruncates()
 {
     spark::AllocationSampler sampler;
@@ -483,6 +592,9 @@ int main()
     }
     if (!verifyHealthyDrainKeepsProfileComplete()) {
         return fail("healthy completeness check failed");
+    }
+    if (!verifySteadyStatePassesDoNotTruncate()) {
+        return fail("steady-state retention check failed");
     }
     if (!verifyLiveProfileFinalizationTruncates()) {
         return fail("live finalization truncation check failed");

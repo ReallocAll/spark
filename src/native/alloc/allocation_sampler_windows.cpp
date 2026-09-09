@@ -1896,19 +1896,29 @@ struct AllocationSampler::Impl {
         retained_age_ms_max.store(maximum_age, std::memory_order_relaxed);
     }
 
-    bool drainBudgetExhausted(std::uint64_t started_ms, std::uint64_t processed) const noexcept
+    enum class DrainMode {
+        kBounded,      // stop and snapshot drains: the drain budgets apply and may truncate
+        kSteadyState,  // in-session drain: the stop flags alone end the pass
+    };
+
+    bool drainBudgetExhausted(std::uint64_t started_ms, std::uint64_t processed, DrainMode mode) const noexcept
     {
-        return drain_abort.load(std::memory_order_acquire) || processed >= KDrainBudgetEvents ||
-               monotonicMs() - started_ms >= KDrainBudgetMs;
+        if (drain_abort.load(std::memory_order_acquire)) {
+            return true;
+        }
+        if (mode == DrainMode::kSteadyState) {
+            return false;
+        }
+        return processed >= KDrainBudgetEvents || monotonicMs() - started_ms >= KDrainBudgetMs;
     }
 
-    bool drainStopped(std::uint64_t started_ms, std::uint64_t processed,
-                      bool abort_when_aggregator_stopped) const noexcept
+    bool drainStopped(std::uint64_t started_ms, std::uint64_t processed, bool abort_when_aggregator_stopped,
+                      DrainMode mode) const noexcept
     {
         if (abort_when_aggregator_stopped && !aggregator_running.load(std::memory_order_acquire)) {
             return true;
         }
-        return drainBudgetExhausted(started_ms, processed);
+        return drainBudgetExhausted(started_ms, processed, mode);
     }
 
     void recycleReadyEvents(PSLIST_ENTRY list) noexcept
@@ -1925,22 +1935,23 @@ struct AllocationSampler::Impl {
         drain_truncated.fetch_add(discarded, std::memory_order_relaxed);
     }
 
-    void drainQueues(bool abort_when_aggregator_stopped)
+    void drainQueues(bool abort_when_aggregator_stopped, DrainMode mode)
     {
         const std::uint64_t started_ms = monotonicMs();
         std::uint64_t processed = 0;
         TickEvent tick;
-        while (!drainStopped(started_ms, processed, abort_when_aggregator_stopped) && ticks.dequeue(tick)) {
+        while (!drainStopped(started_ms, processed, abort_when_aggregator_stopped, mode) && ticks.dequeue(tick)) {
             aggregation.processTick(tick.tick_id, tick.mspt_ms);
             ++processed;
         }
         TickEvent stranded;
-        if (drainBudgetExhausted(started_ms, processed) && ticks.dequeue(stranded)) {
+        if (mode == DrainMode::kBounded && drainBudgetExhausted(started_ms, processed, mode) &&
+            ticks.dequeue(stranded)) {
             drain_truncated.fetch_add(1, std::memory_order_relaxed);
         }
 
         PSLIST_ENTRY list = ::InterlockedFlushSList(&ready_events);
-        while (!drainStopped(started_ms, processed, abort_when_aggregator_stopped) && list != nullptr) {
+        while (!drainStopped(started_ms, processed, abort_when_aggregator_stopped, mode) && list != nullptr) {
             PSLIST_ENTRY next = list->Next;
             auto *event = CONTAINING_RECORD(list, AllocationEvent, entry);
             processEvent(event);
@@ -1964,7 +1975,7 @@ struct AllocationSampler::Impl {
     void finishAggregationIfNeeded()
     {
         std::scoped_lock lock(aggregate_mutex);
-        drainQueues(false);
+        drainQueues(false, DrainMode::kBounded);
         if (finalize_pending.load(std::memory_order_acquire) && !pending_finalized.load(std::memory_order_acquire)) {
             aggregation.finishPending(terminal_tick.load(std::memory_order_acquire));
             pending_finalized.store(true, std::memory_order_release);
@@ -1993,13 +2004,13 @@ struct AllocationSampler::Impl {
             }
             {
                 std::scoped_lock lock(aggregate_mutex);
-                drainQueues(true);
+                drainQueues(true, DrainMode::kSteadyState);
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
         {
             std::scoped_lock lock(aggregate_mutex);
-            drainQueues(false);
+            drainQueues(false, DrainMode::kBounded);
             if (!drain_abort.load(std::memory_order_acquire) && finalize_pending.load(std::memory_order_acquire)) {
                 aggregation.finishPending(terminal_tick.load(std::memory_order_acquire));
                 pending_finalized.store(true, std::memory_order_release);
@@ -2025,7 +2036,7 @@ struct AllocationSampler::Impl {
             error = "timed out waiting for the allocation aggregator snapshot";
             return false;
         }
-        drainQueues(false);
+        drainQueues(false, DrainMode::kBounded);
         snapshot = AllocationSnapshot{};
         snapshot.number_of_ticks = current_tick.load(std::memory_order_relaxed);
 
