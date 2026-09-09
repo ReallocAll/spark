@@ -1,5 +1,6 @@
 #include <array>
 #include <atomic>
+#include <bit>
 #include <cstdlib>
 #include <limits>
 #include <mutex>
@@ -18,6 +19,11 @@ constexpr std::size_t KResumeAttempts = 32;
 bool GArmed = false;
 std::atomic<std::uint64_t> GCancellationGeneration{0};
 std::unordered_map<DWORD, ULONG64> GThreadCycles;  // NOLINT(bugprone-throwing-static-initialization)
+
+const void *addressPointer(std::uintptr_t address) noexcept
+{
+    return std::bit_cast<const void *>(address);
+}
 
 class SystemWindowsCaptureBackend final : public WindowsCaptureBackend {
 public:
@@ -47,15 +53,15 @@ public:
              query_count < kWindowsStackSnapshotRegionQueryLimit && copied < WindowsStackSnapshot::kMaxBytes;
              ++query_count) {
             MEMORY_BASIC_INFORMATION memory{};
-            if (::VirtualQuery(reinterpret_cast<const void *>(cursor), &memory, sizeof(memory)) == 0 ||
-                memory.BaseAddress == nullptr || memory.RegionSize == 0 || memory.State != MEM_COMMIT ||
-                (memory.Protect & PAGE_GUARD) != 0 || (memory.Protect & 0xffU) == PAGE_NOACCESS ||
+            if (::VirtualQuery(addressPointer(cursor), &memory, sizeof(memory)) == 0 || memory.BaseAddress == nullptr ||
+                memory.RegionSize == 0 || memory.State != MEM_COMMIT || (memory.Protect & PAGE_GUARD) != 0 ||
+                (memory.Protect & 0xffU) == PAGE_NOACCESS ||
                 (memory.Protect & (PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READ |
                                    PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY)) == 0) {
                 break;
             }
             const auto region_begin = reinterpret_cast<std::uintptr_t>(memory.BaseAddress);
-            if (region_begin > (std::numeric_limits<std::uintptr_t>::max)() - memory.RegionSize) {
+            if (region_begin > std::numeric_limits<std::uintptr_t>::max() - memory.RegionSize) {
                 break;
             }
             const auto region_end = region_begin + memory.RegionSize;
@@ -65,12 +71,12 @@ public:
             const auto region_remaining = region_end - cursor;
             const auto capacity_remaining = WindowsStackSnapshot::kMaxBytes - copied;
             const auto to_copy = region_remaining < capacity_remaining ? region_remaining : capacity_remaining;
-            if (to_copy == 0 || cursor > (std::numeric_limits<std::uintptr_t>::max)() - to_copy) {
+            if (to_copy == 0 || cursor > std::numeric_limits<std::uintptr_t>::max() - to_copy) {
                 break;
             }
             SIZE_T bytes_read = 0;
-            if (::ReadProcessMemory(::GetCurrentProcess(), reinterpret_cast<const void *>(cursor),
-                                    snapshot.data() + copied, to_copy, &bytes_read) == FALSE ||
+            if (::ReadProcessMemory(::GetCurrentProcess(), addressPointer(cursor), snapshot.data() + copied, to_copy,
+                                    &bytes_read) == FALSE ||
                 bytes_read == 0) {
                 break;
             }
@@ -112,11 +118,11 @@ private:
         }
         if (image_base == 0 || runtime_function->BeginAddress >= runtime_function->EndAddress ||
             static_cast<std::uintptr_t>(runtime_function->BeginAddress) >
-                (std::numeric_limits<std::uintptr_t>::max)() - static_cast<std::uintptr_t>(image_base) ||
+                std::numeric_limits<std::uintptr_t>::max() - static_cast<std::uintptr_t>(image_base) ||
             static_cast<std::uintptr_t>(runtime_function->EndAddress) >
-                (std::numeric_limits<std::uintptr_t>::max)() - static_cast<std::uintptr_t>(image_base) ||
+                std::numeric_limits<std::uintptr_t>::max() - static_cast<std::uintptr_t>(image_base) ||
             static_cast<std::uintptr_t>(runtime_function->UnwindData) >
-                (std::numeric_limits<std::uintptr_t>::max)() - static_cast<std::uintptr_t>(image_base)) {
+                std::numeric_limits<std::uintptr_t>::max() - static_cast<std::uintptr_t>(image_base)) {
             return WindowsFunctionLookupStatus::Failure;
         }
         function.begin = static_cast<std::uintptr_t>(image_base) + runtime_function->BeginAddress;
@@ -129,12 +135,12 @@ private:
     static bool readMemory(std::uintptr_t address, void *destination, std::size_t bytes, void *) noexcept
     {
         if (address == 0 || destination == nullptr || bytes == 0 ||
-            address > (std::numeric_limits<std::uintptr_t>::max)() - bytes) {
+            address > std::numeric_limits<std::uintptr_t>::max() - bytes) {
             return false;
         }
         SIZE_T bytes_read = 0;
-        return ::ReadProcessMemory(::GetCurrentProcess(), reinterpret_cast<const void *>(address), destination, bytes,
-                                   &bytes_read) != FALSE &&
+        return ::ReadProcessMemory(::GetCurrentProcess(), addressPointer(address), destination, bytes, &bytes_read) !=
+                   FALSE &&
                bytes_read == bytes;
     }
 };
@@ -176,7 +182,7 @@ public:
                 diagnostics_->publish(CiDiagnosticContext::Capture, CiDiagnosticPhase::CaptureResumeAttempt,
                                       worker_tid_, target_tid_);
             }
-            if (backend_.resumeThread(thread_) != (std::numeric_limits<DWORD>::max)()) {
+            if (backend_.resumeThread(thread_) != std::numeric_limits<DWORD>::max()) {
                 suspended_ = false;
                 if (diagnostics_ != nullptr) {
                     diagnostics_->publish(CiDiagnosticContext::Capture, CiDiagnosticPhase::CaptureResumed, worker_tid_,
@@ -295,7 +301,7 @@ bool Capture::captureThread(std::uint64_t tid, CaptureBuffer &out)
     if (diagnostics != nullptr) {
         diagnostics->publish(CiDiagnosticContext::Capture, CiDiagnosticPhase::CaptureSuspendAttempt, worker_tid, tid);
     }
-    if (backend.suspendThread(thread) == (std::numeric_limits<DWORD>::max)()) {
+    if (backend.suspendThread(thread) == std::numeric_limits<DWORD>::max()) {
         if (diagnostics != nullptr) {
             diagnostics->publish(CiDiagnosticContext::Capture, CiDiagnosticPhase::CaptureSuspendFailed, worker_tid,
                                  tid);

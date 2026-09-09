@@ -148,7 +148,7 @@ public:
     DWORD suspendThread(HANDLE) noexcept override
     {
         bool cancel = false;
-        DWORD previous = (std::numeric_limits<DWORD>::max)();
+        DWORD previous = std::numeric_limits<DWORD>::max();
         {
             std::scoped_lock lock(mutex_);
             if (suspend_ok_) {
@@ -223,7 +223,7 @@ public:
             return spark::WindowsWalkStatus::Frame;
         }
         if (unwind_mode_ == UnwindMode::Forever) {
-            instruction_pointer = static_cast<std::uintptr_t>(0x2000 + index * 8);
+            instruction_pointer = std::uintptr_t{0x2000} + static_cast<std::uintptr_t>(index) * 8U;
             context.Rip = instruction_pointer;
             context.Rsp = 0x3008 + static_cast<DWORD64>(index) * 8;
             return spark::WindowsWalkStatus::Frame;
@@ -243,11 +243,11 @@ public:
         ++resume_calls_;
         if (resume_failures_remaining_ > 0) {
             --resume_failures_remaining_;
-            return (std::numeric_limits<DWORD>::max)();
+            return std::numeric_limits<DWORD>::max();
         }
         if (suspend_count_ <= baseline_suspend_count_) {
             resume_without_suspend_ = true;
-            return (std::numeric_limits<DWORD>::max)();
+            return std::numeric_limits<DWORD>::max();
         }
         const DWORD previous = suspend_count_;
         --suspend_count_;
@@ -427,7 +427,7 @@ public:
         primary_.fill(0);
         chain_.fill(0);
         instructions_.fill(0x90);
-        function_ = {KFunctionBegin, KFunctionEnd, KMetadataAddress, 0};
+        function_ = {.begin = KFunctionBegin, .end = KFunctionEnd, .unwind_info = KMetadataAddress, .image_base = 0};
         context_ = CONTEXT{};
         snapshot_.clear();
         last_instruction_pointer_ = 0;
@@ -452,9 +452,9 @@ public:
     void setRsp(std::uint64_t value) { context_.Rsp = value; }
     void setPrimaryByte(std::size_t offset, std::uint8_t value) { primary_[offset] = value; }
 
-    void setQword(std::uintptr_t address, std::uint64_t value)
+    void setQword(std::uintptr_t stack_location, std::uint64_t stored_value)
     {
-        std::memcpy(snapshot_.data() + (address - KStackBase), &value, sizeof(value));
+        std::memcpy(snapshot_.data() + (stack_location - KStackBase), &stored_value, sizeof(stored_value));
     }
 
     void setXmm(std::uintptr_t address, const M128A &value)
@@ -462,8 +462,9 @@ public:
         std::memcpy(snapshot_.data() + (address - KStackBase), &value, sizeof(value));
     }
 
-    void setInfo(std::array<std::uint8_t, 1024> &storage, std::uint8_t flags, std::uint8_t prolog,
-                 std::uint8_t frame_register, std::uint8_t frame_offset, std::initializer_list<std::uint16_t> slots)
+    static void setInfo(std::array<std::uint8_t, 1024> &storage, std::uint8_t flags, std::uint8_t prolog,
+                        std::uint8_t frame_register, std::uint8_t frame_offset,
+                        std::initializer_list<std::uint16_t> slots)
     {
         storage.fill(0);
         storage[0] = static_cast<std::uint8_t>(1U | (flags << 3U));
@@ -679,7 +680,8 @@ bool testSyntheticUnwindOperations()
     fixture.reset();
     fixture.setContext();
     fixture.setPrimaryInfo(0, 6, 0, 0, {slot(6, 8, 6), 0x0001U});
-    M128A xmm_value{static_cast<LONGLONG>(0x1122334455667788ULL), static_cast<LONGLONG>(0x8877665544332211ULL)};
+    M128A xmm_value{.Low = static_cast<LONGLONG>(0x1122334455667788ULL),
+                    .High = static_cast<LONGLONG>(0x8877665544332211ULL)};
     fixture.setXmm(SyntheticUnwindFixture::KStackBase + 16U, xmm_value);
     fixture.setQword(SyntheticUnwindFixture::KStackBase, return_address);
     if (!require(fixture.step() == spark::WindowsWalkStatus::Frame && fixture.context().Xmm6.Low == xmm_value.Low &&
