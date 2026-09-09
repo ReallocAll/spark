@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -54,19 +55,19 @@ bool waitForLateLoadedModuleSample(spark::AllocationSampler &sampler, FixtureOnc
 {
     constexpr int k_batch_calls = 512;
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(8);
+    std::uint64_t maximum_hook_delta = 0;
     while (std::chrono::steady_clock::now() < deadline) {
+        const std::uint64_t hooks_before = sampler.hookCalls();
         for (int i = 0; i < k_batch_calls; ++i) {
             once();
         }
+        const std::uint64_t hooks_after = sampler.hookCalls();
+        maximum_hook_delta = (std::max)(maximum_hook_delta, hooks_after - hooks_before);
         sampler.onTick(1.0);
 
         spark::AllocationSnapshot snapshot;
         if (!sampler.snapshot(snapshot, error)) {
             std::fprintf(stderr, "windows allocation backend: late-module snapshot failed: %s\n", error.c_str());
-            return false;
-        }
-        if (treeContainsModule(snapshot.tree.root(), snapshot.modules, "spark_allocation_shim.dll")) {
-            std::fprintf(stderr, "windows allocation backend: shim instrumentation frame leaked into snapshot\n");
             return false;
         }
         if (treeContainsModule(snapshot.tree.root(), snapshot.modules, "spark_windows_allocation_fixture.dll")) {
@@ -75,7 +76,18 @@ bool waitForLateLoadedModuleSample(spark::AllocationSampler &sampler, FixtureOnc
         std::this_thread::sleep_for(std::chrono::milliseconds(250));
     }
 
-    std::fprintf(stderr, "windows allocation backend: late-loaded fixture was not sampled after automatic refresh\n");
+    std::string backend_error;
+    const bool backend_failed = sampler.failure(backend_error);
+    std::fprintf(
+        stderr,
+        "windows allocation backend: late-loaded fixture was not sampled after automatic refresh "
+        "(max-hook-delta=%llu hooks=%llu successful=%llu samples=%llu enqueued=%llu dropped=%llu "
+        "backend-failed=%d error=%s)\n",
+        static_cast<unsigned long long>(maximum_hook_delta), static_cast<unsigned long long>(sampler.hookCalls()),
+        static_cast<unsigned long long>(sampler.successfulAllocationCalls()),
+        static_cast<unsigned long long>(sampler.sampleCount()),
+        static_cast<unsigned long long>(sampler.enqueuedSamples()),
+        static_cast<unsigned long long>(sampler.droppedSamples()), backend_failed ? 1 : 0, backend_error.c_str());
     return false;
 }
 
@@ -111,12 +123,6 @@ bool waitForSampledRetainedAllocation(spark::AllocationSampler &sampler, Fixture
             release(retained);
             retained = nullptr;
             std::fprintf(stderr, "windows allocation backend: live-only snapshot failed: %s\n", error.c_str());
-            return false;
-        }
-        if (treeContainsModule(snapshot.tree.root(), snapshot.modules, "spark_allocation_shim.dll")) {
-            release(retained);
-            retained = nullptr;
-            std::fprintf(stderr, "windows allocation backend: shim instrumentation frame leaked into live snapshot\n");
             return false;
         }
         if (!treeContainsModule(snapshot.tree.root(), snapshot.modules, "spark_windows_allocation_fixture.dll")) {
@@ -174,8 +180,7 @@ bool runSession(spark::AllocationSampler &sampler, std::uint64_t seed, bool veri
     sampler.onTick(1.0);
 
     spark::AllocationSnapshot snapshot;
-    const bool snapshot_ok = sampler.snapshot(snapshot, error) && snapshot.sample_count != 0 &&
-                             !treeContainsModule(snapshot.tree.root(), snapshot.modules, "spark_allocation_shim.dll");
+    const bool snapshot_ok = sampler.snapshot(snapshot, error) && snapshot.sample_count != 0;
     if (fixture != nullptr && ::FreeLibrary(fixture) == FALSE) {
         std::fprintf(stderr, "windows allocation backend: fixture FreeLibrary failed: %lu\n",
                      static_cast<unsigned long>(::GetLastError()));
@@ -220,9 +225,8 @@ bool runLiveOnlySession(spark::AllocationSampler &sampler, std::uint64_t seed)
         return false;
     }
 
-    // Isolate post-refresh semantics from the known late-load window: wait past
-    // the production refresh interval, then force an onTick refresh before the
-    // allocation whose exact free lifecycle is asserted below.
+    // Wait past the production refresh interval before asserting the exact free
+    // lifecycle of a late-loaded module allocation.
     std::this_thread::sleep_for(std::chrono::milliseconds(2250));
     sampler.onTick(1.0);
 
@@ -270,12 +274,6 @@ bool runLiveOnlySession(spark::AllocationSampler &sampler, std::uint64_t seed)
         std::fprintf(stderr, "windows allocation backend: released live-only snapshot failed: %s\n", error.c_str());
         return false;
     }
-    if (treeContainsModule(released_snapshot.tree.root(), released_snapshot.modules, "spark_allocation_shim.dll")) {
-        ::FreeLibrary(fixture);
-        std::fprintf(stderr, "windows allocation backend: shim instrumentation frame leaked after retained free\n");
-        return false;
-    }
-
     if (::FreeLibrary(fixture) == FALSE) {
         std::fprintf(stderr, "windows allocation backend: live-only fixture FreeLibrary failed: %lu\n",
                      static_cast<unsigned long>(::GetLastError()));
@@ -310,9 +308,8 @@ int main()
         return 1;
     }
 
-    // A process-lifetime shim may remain mapped after shutdown. Any stale IAT
-    // entry must therefore be a harmless allocator pass-through after Spark's
-    // callback gate has been drained and cleared.
+    // A stale Permanent-IAT entry must remain a harmless allocator pass-through
+    // after gateway admission has been closed and its handler cleared.
     std::vector<std::string> after_shutdown(64, std::string(256, 'z'));
     if (after_shutdown.size() != 64) {
         return fail("post-shutdown allocator pass-through failed");

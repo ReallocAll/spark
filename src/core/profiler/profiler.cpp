@@ -7,6 +7,7 @@
 #include <stdexcept>
 
 #include "core/util/monotonic_time.h"
+#include "native/diagnostics/ci_diagnostics.h"
 #include "profiling_window.h"
 #include "spark_constants.h"
 
@@ -203,6 +204,7 @@ void Profiler::requestStop() noexcept
 bool Profiler::start(const ProfilerOptions &options, std::uint64_t main_tid, std::string &error)
 {
     std::scoped_lock lifecycle_lock(lifecycle_mutex_);
+    CiDiagnostics *diagnostics = globalCiDiagnostics();
     if (running_.load()) {
         error = "profiler is already running";
         return false;
@@ -244,6 +246,9 @@ bool Profiler::start(const ProfilerOptions &options, std::uint64_t main_tid, std
 
     bool started = false;
     if (mode_ == ProfileMode::Allocation) {
+        if (diagnostics != nullptr) {
+            diagnostics->beginGeneration();
+        }
         if (options.allocation_interval_bytes <= 0) {
             error = "allocation sampling interval must be greater than zero";
             return false;
@@ -260,6 +265,7 @@ bool Profiler::start(const ProfilerOptions &options, std::uint64_t main_tid, std
         }
         config.live_only = options.alloc_live_only;
         config.fail_aggregator_for_testing = options.fail_allocation_aggregator_for_testing;
+        config.aggregator_delay_ms_for_testing = options.allocation_aggregator_delay_ms_for_testing;
         if (persistent_allocation_counting_active_.load(std::memory_order_acquire) &&
             !stopPersistentAllocationCounting(error)) {
             return false;
@@ -337,6 +343,9 @@ bool Profiler::start(const ProfilerOptions &options, std::uint64_t main_tid, std
     }
 
     if (!started) {
+        if (diagnostics != nullptr) {
+            diagnostics->publish(CiDiagnosticContext::Profiler, CiDiagnosticPhase::ProfilerStartFailed, main_tid);
+        }
         stopRecoveryWriter();
         if (mode_ == ProfileMode::Allocation &&
             persistent_allocation_counting_enabled_.load(std::memory_order_acquire)) {
@@ -351,6 +360,9 @@ bool Profiler::start(const ProfilerOptions &options, std::uint64_t main_tid, std
     end_time_ms_ = 0;
     auto_end_time_ms_ =
         options.timeout_seconds > 0 ? start_time_ms_ + static_cast<std::int64_t>(options.timeout_seconds) * 1000 : -1;
+    if (diagnostics != nullptr) {
+        diagnostics->publish(CiDiagnosticContext::Profiler, CiDiagnosticPhase::ProfilerStart, main_tid);
+    }
     return true;
 }
 
@@ -396,6 +408,11 @@ void Profiler::onTick(double mspt_ms)
 
 bool Profiler::stopSampling(std::string &error)
 {
+    CiDiagnostics *diagnostics = globalCiDiagnostics();
+    CiDiagnostics::Scope diagnostic_scope(
+        diagnostics, CiDiagnosticContext::Profiler, CiDiagnosticPhase::ProfilerStopSamplingEnter,
+        CiDiagnosticPhase::ProfilerStopSamplingExit, CiDiagnosticPhase::ProfilerStopSamplingExceptionalExit,
+        ciDiagnosticCurrentThreadId());
     sampling_stop_requested_.store(true, std::memory_order_release);
     if (stop_requested_hook_) {
         stop_requested_hook_();
@@ -515,6 +532,7 @@ std::string Profiler::stop(const ExportContext &ctx)
 
 std::string Profiler::liveExport(const ExportContext &ctx)
 {
+    CiDiagnostics::LiveExportScope live_export_scope;
     std::scoped_lock lifecycle_lock(lifecycle_mutex_);
     if (!running_.load() || sampling_stop_requested_.load(std::memory_order_acquire)) {
         return {};
@@ -620,6 +638,11 @@ void Profiler::cancel()
 
 bool Profiler::shutdown(std::string &error)
 {
+    CiDiagnostics *diagnostics = globalCiDiagnostics();
+    CiDiagnostics::Scope diagnostic_scope(
+        diagnostics, CiDiagnosticContext::Profiler, CiDiagnosticPhase::ProfilerShutdownEnter,
+        CiDiagnosticPhase::ProfilerShutdownExit, CiDiagnosticPhase::ProfilerShutdownExceptionalExit,
+        ciDiagnosticCurrentThreadId());
     sampling_stop_requested_.store(true, std::memory_order_release);
     std::scoped_lock lifecycle_lock(lifecycle_mutex_);
     error.clear();

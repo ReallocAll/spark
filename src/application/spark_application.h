@@ -20,6 +20,7 @@
 #include "core/recovery/recovery_player.h"
 #include "core/recovery/stall_watchdog.h"
 #include "core/stats/statistics_service.h"
+#include "native/diagnostics/ci_diagnostics.h"
 
 namespace spark {
 
@@ -72,6 +73,8 @@ private:
     ProfileMetadataProvider &metadata_provider_;
     ResultNotifier &notifier_;
 
+    // Declared before profiler_ so the mapping outlives all sampler workers.
+    CiDiagnostics ci_diagnostics_;
     ProfilerService profiler_;
     HealthCommand health_;
     ActivityLog activity_log_;

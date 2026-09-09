@@ -22,6 +22,7 @@
 #include "core/config/spark_config.h"
 #include "core/config/trusted_viewers.h"
 #include "core/stats/executable_hash.h"
+#include "native/diagnostics/ci_diagnostics.h"
 #include "native/python/python_profile_bridge.h"
 #include "net/profile_file.h"
 #include "platform/endstone/adapters.h"
@@ -153,11 +154,16 @@ public:
             std::abort();
         }
         spark::setGlobalPythonStackProvider(nullptr);
+        app_.reset();
     }
 
     bool onCommand(const endstone::NotNull<endstone::CommandSender> &sender, const endstone::Command &command,
                    const std::vector<std::string> &args) override
     {
+        spark::CiDiagnostics::Scope diagnostic_scope(
+            spark::globalCiDiagnostics(), spark::CiDiagnosticContext::PluginCommand,
+            spark::CiDiagnosticPhase::PluginCommandEnter, spark::CiDiagnosticPhase::PluginCommandExit,
+            spark::CiDiagnosticPhase::PluginCommandExceptionalExit, spark::ciDiagnosticCurrentThreadId());
         if (command.getName() != "spark") {
             return false;
         }
@@ -187,6 +193,10 @@ public:
 
     void onServerTick()
     {
+        spark::CiDiagnostics::Scope diagnostic_scope(
+            spark::globalCiDiagnostics(), spark::CiDiagnosticContext::PluginTick,
+            spark::CiDiagnosticPhase::PluginTickEnter, spark::CiDiagnosticPhase::PluginTickExit,
+            spark::CiDiagnosticPhase::PluginTickExceptionalExit, spark::ciDiagnosticCurrentThreadId());
         if (main_tid_.load() == 0) {
             main_tid_.store(currentThreadId());
         }

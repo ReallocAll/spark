@@ -244,6 +244,7 @@ bool verifyTerminalMetadataExportWithSamples()
     options.alloc = true;
     options.only_ticks_over_ms = 10;
     options.allocation_interval_bytes = 1;
+    options.allocation_aggregator_delay_ms_for_testing = 500;
     std::string error;
     if (!allocation.start(options, spark::currentNativeThreadId(), error)) {
         std::fprintf(stderr, "terminal metadata: allocation start failed: %s\n", error.c_str());

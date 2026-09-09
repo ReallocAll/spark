@@ -38,6 +38,12 @@ target_link_libraries(spark_allocation_benchmark PRIVATE spark_core)
 set_target_properties(spark_allocation_benchmark PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 
+add_executable(spark_ci_diagnostics_test core/ci_diagnostics_test.cpp)
+target_link_libraries(spark_ci_diagnostics_test PRIVATE spark_diagnostics)
+set_target_properties(spark_ci_diagnostics_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME spark_ci_diagnostics_test COMMAND spark_ci_diagnostics_test)
+
 add_executable(spark_symbol_guess_evidence_test native/symbol/symbol_guess_evidence_test.cpp)
 target_link_libraries(spark_symbol_guess_evidence_test PRIVATE spark_core)
 set_target_properties(spark_symbol_guess_evidence_test PROPERTIES
@@ -447,13 +453,13 @@ if (WIN32)
             RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
             OUTPUT_NAME "spark_windows_allocation_fixture")
 
-    add_executable(spark_windows_allocation_unavailable_test
-            native/alloc/windows_allocation_unavailable_test.cpp)
-    add_dependencies(spark_windows_allocation_unavailable_test spark_windows_allocation_fixture)
-    target_link_libraries(spark_windows_allocation_unavailable_test PRIVATE spark_core)
-    set_target_properties(spark_windows_allocation_unavailable_test PROPERTIES
+    add_executable(spark_windows_allocation_backend_test
+            native/alloc/windows_allocation_backend_test.cpp)
+    add_dependencies(spark_windows_allocation_backend_test spark_windows_allocation_fixture)
+    target_link_libraries(spark_windows_allocation_backend_test PRIVATE spark_core)
+    set_target_properties(spark_windows_allocation_backend_test PROPERTIES
             RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
-    add_test(NAME spark_windows_allocation_unavailable_test COMMAND spark_windows_allocation_unavailable_test)
+    add_test(NAME spark_windows_allocation_backend_test COMMAND spark_windows_allocation_backend_test)
 
     add_executable(spark_capture_windows_lifecycle_test native/sampler/capture_windows_lifecycle_test.cpp)
     target_link_libraries(spark_capture_windows_lifecycle_test PRIVATE spark_core)
@@ -514,3 +520,6 @@ add_test(NAME spark_profile_evaluator_test
 
 add_test(NAME spark_workflow_test
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/test_workflows.py)
+
+add_test(NAME spark_plugin_lifecycle_test
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/test_plugin_lifecycle.py)

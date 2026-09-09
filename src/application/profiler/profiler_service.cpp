@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "core/util/monotonic_time.h"
+#include "native/diagnostics/ci_diagnostics.h"
 
 namespace spark {
 
@@ -87,6 +88,9 @@ void ProfilerService::closeViewerSocket()
 
 void ProfilerService::resetProfilerTimeout() noexcept
 {
+    if (CiDiagnostics *diagnostics = globalCiDiagnostics(); diagnostics != nullptr) {
+        diagnostics->publish(CiDiagnosticContext::Timeout, CiDiagnosticPhase::TimeoutCancel);
+    }
     profiler_timeout_.cancel();
     timeout_completion_pending_.store(false, std::memory_order_release);
 }
@@ -109,7 +113,14 @@ bool ProfilerService::armProfilerTimeout(std::int64_t timeout_seconds) noexcept
     timeout_completion_pending_.store(false, std::memory_order_release);
     const auto delay = std::chrono::milliseconds(static_cast<MillisecondsRep>(timeout_seconds) *
                                                  static_cast<MillisecondsRep>(k_milliseconds_per_second));
+    if (CiDiagnostics *diagnostics = globalCiDiagnostics(); diagnostics != nullptr) {
+        diagnostics->publish(CiDiagnosticContext::Timeout, CiDiagnosticPhase::TimeoutArm);
+    }
     return profiler_timeout_.arm(delay, [this]() noexcept {
+        if (CiDiagnostics *diagnostics = globalCiDiagnostics(); diagnostics != nullptr) {
+            diagnostics->publish(CiDiagnosticContext::TimeoutWorker, CiDiagnosticPhase::TimeoutFired,
+                                 ciDiagnosticCurrentThreadId());
+        }
         profiler_.requestStop();
         timeout_completion_pending_.store(true, std::memory_order_release);
     });
@@ -120,7 +131,12 @@ void ProfilerService::finishProfiler(const std::string &sender_name, bool sender
 {
     const auto notify_best_effort = [this](const std::string &name, const std::string &message) noexcept {
         try {
-            notifier_.notify(name, message);
+            [&] {
+                CiDiagnostics::Scope diagnostic_scope(
+                    globalCiDiagnostics(), CiDiagnosticContext::Notification, CiDiagnosticPhase::NotificationEnter,
+                    CiDiagnosticPhase::NotificationExit, CiDiagnosticPhase::NotificationExceptionalExit);
+                notifier_.notify(name, message);
+            }();
         }
         catch (...) {  // NOLINT(bugprone-empty-catch): notification is best effort.
         }
@@ -221,7 +237,12 @@ void ProfilerService::finishProfiler(const std::string &sender_name, bool sender
 
 void ProfilerService::runExport() noexcept
 {
+    CiDiagnostics *diagnostics = globalCiDiagnostics();
+    const std::uint64_t worker_tid = ciDiagnosticCurrentThreadId();
     try {
+        CiDiagnostics::Scope diagnostic_scope(diagnostics, CiDiagnosticContext::Export, CiDiagnosticPhase::ExportEnter,
+                                              CiDiagnosticPhase::ExportComplete, CiDiagnosticPhase::ExportFailed,
+                                              worker_tid);
         ProfileExporter::Result result = exporter_.exportProfile(profiler_, pending_ctx_, pending_save_);
         pending_outcome_ = result.outcome;
         pending_result_ = std::move(result.message);
@@ -242,14 +263,23 @@ void ProfilerService::runExport() noexcept
             }
             announceResult();
         });
+        if (diagnostics != nullptr) {
+            diagnostics->publish(CiDiagnosticContext::Export, CiDiagnosticPhase::ExportCompletionQueued, worker_tid);
+        }
     }
     catch (...) {
         export_completion_pending_.store(true, std::memory_order_release);
+        if (diagnostics != nullptr) {
+            diagnostics->publish(CiDiagnosticContext::Export, CiDiagnosticPhase::ExportCompletionFallback, worker_tid);
+        }
     }
 }
 
 void ProfilerService::announceResult() noexcept
 {
+    CiDiagnostics::Scope diagnostic_scope(globalCiDiagnostics(), CiDiagnosticContext::Completion,
+                                          CiDiagnosticPhase::CompletionEnter, CiDiagnosticPhase::CompletionExit,
+                                          CiDiagnosticPhase::CompletionExceptionalExit, ciDiagnosticCurrentThreadId());
     const ExportOutcome outcome = pending_outcome_;
     const std::string sender = std::move(pending_sender_);
     const bool sender_is_player = pending_sender_is_player_;
@@ -281,16 +311,20 @@ void ProfilerService::announceResult() noexcept
         background_started_ = startBackgroundSession();
     }
 
-    try {
-        notifier_.notify(sender, headline);
-    }
-    catch (...) {  // NOLINT(bugprone-empty-catch): completion notification is best effort.
-    }
-    try {
-        notifier_.notify(sender, result);
-    }
-    catch (...) {  // NOLINT(bugprone-empty-catch): completion notification is best effort.
-    }
+    const auto notify_best_effort = [this](const std::string &name, const std::string &message) noexcept {
+        try {
+            [&] {
+                CiDiagnostics::Scope diagnostic_scope(
+                    globalCiDiagnostics(), CiDiagnosticContext::Notification, CiDiagnosticPhase::NotificationEnter,
+                    CiDiagnosticPhase::NotificationExit, CiDiagnosticPhase::NotificationExceptionalExit);
+                notifier_.notify(name, message);
+            }();
+        }
+        catch (...) {  // NOLINT(bugprone-empty-catch): completion notification is best effort.
+        }
+    };
+    notify_best_effort(sender, headline);
+    notify_best_effort(sender, result);
 
     try {
         if (activity_log_provider_) {
@@ -316,6 +350,10 @@ void ProfilerService::onTick(double mspt)
         announceResult();
     }
     if (timeout_completion_pending_.exchange(false, std::memory_order_acq_rel)) {
+        if (CiDiagnostics *diagnostics = globalCiDiagnostics(); diagnostics != nullptr) {
+            diagnostics->publish(CiDiagnosticContext::Timeout, CiDiagnosticPhase::TimeoutCompletion,
+                                 ciDiagnosticCurrentThreadId());
+        }
         resetProfilerTimeout();
         if (profiler_.running()) {
             const bool save = profiler_.options().save_to_file;

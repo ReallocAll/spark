@@ -22,7 +22,7 @@ struct CaptureBuffer {
 
 // Platform stack-capture backend.
 //   Linux:   SIGPROF delivered to the target thread; cpptrace safe unwind in-handler.
-//   Windows: SuspendThread + StackWalk64 on the target's CONTEXT (see capture_windows.cpp).
+//   Windows: bounded stack snapshot while suspended, then unwind after resume.
 class Capture {
 public:
     // Install the handler / prime cpptrace's signal-safe path. Returns false if

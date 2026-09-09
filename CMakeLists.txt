@@ -24,21 +24,36 @@ find_package(Threads REQUIRED)
 include(FetchContent)
 
 # --- x86-64 instruction decoder ---
-# funchook 1.1.3 is not available from Conan Center. Fetch the same upstream
-# version used by Endstone. Its small distorm dependency provides the strict
-# instruction-boundary decoder used by both native symbol guessers.
+# Spark uses distorm directly for strict instruction-boundary decoding in both
+# supported x86-64 native symbol guessers.
 if (WIN32 OR (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64"))
-    set(FUNCHOOK_BUILD_SHARED OFF CACHE BOOL "" FORCE)
-    set(FUNCHOOK_BUILD_STATIC OFF CACHE BOOL "" FORCE)
-    set(FUNCHOOK_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-    set(FUNCHOOK_INSTALL OFF CACHE BOOL "" FORCE)
-    set(FUNCHOOK_DISASM distorm CACHE STRING "" FORCE)
-    FetchContent_Declare(funchook
-            GIT_REPOSITORY https://github.com/kubo/funchook.git
-            GIT_TAG v1.1.3
-            GIT_SHALLOW TRUE
-            GIT_SUBMODULES_RECURSE TRUE)
-    FetchContent_MakeAvailable(funchook)
+    enable_language(C)
+
+    if (NOT TARGET distorm)
+        FetchContent_Declare(distorm_source
+                GIT_REPOSITORY https://github.com/gdabah/distorm.git
+                GIT_TAG 7a02caa1a936f0a653fc75f1aaea9bd3fa654603)
+        FetchContent_MakeAvailable(distorm_source)
+
+        set(distorm_src_dir "${distorm_source_SOURCE_DIR}/src")
+        add_library(distorm STATIC
+                "${distorm_src_dir}/decoder.c"
+                "${distorm_src_dir}/distorm.c"
+                "${distorm_src_dir}/instructions.c"
+                "${distorm_src_dir}/insts.c"
+                "${distorm_src_dir}/mnemonics.c"
+                "${distorm_src_dir}/operands.c"
+                "${distorm_src_dir}/prefix.c"
+                "${distorm_src_dir}/textdefs.c")
+        set_target_properties(distorm PROPERTIES POSITION_INDEPENDENT_CODE ON)
+        target_include_directories(distorm PUBLIC "${distorm_source_SOURCE_DIR}/include")
+
+        if (MSVC)
+            set_source_files_properties("${distorm_src_dir}/prefix.c" PROPERTIES COMPILE_OPTIONS "/wd4819")
+        elseif (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+            target_compile_options(distorm PRIVATE -fvisibility=hidden)
+        endif ()
+    endif ()
 endif ()
 
 # --- Endstone: header-only API + endstone_add_plugin(), fetched standalone ---
@@ -79,6 +94,13 @@ add_library(spark_profiling_time STATIC
 target_include_directories(spark_profiling_time PUBLIC src)
 set_target_properties(spark_profiling_time PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
+# --- opt-in CI lifecycle diagnostics (no native, core, or Endstone dependencies) ---
+add_library(spark_diagnostics STATIC
+        src/native/diagnostics/ci_diagnostics.cpp)
+target_include_directories(spark_diagnostics PUBLIC src)
+target_link_libraries(spark_diagnostics PUBLIC Threads::Threads)
+set_target_properties(spark_diagnostics PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
 # --- native backend: sampler, symbol guesser, allocation hooks (no Endstone) ---
 add_library(spark_native STATIC
         src/native/alloc/allocation_profile_aggregation.cpp
@@ -106,10 +128,9 @@ if (WIN32)
             src/native/alloc/allocation_sampler_windows.cpp
             src/native/alloc/windows_iat_hooks.cpp
             src/native/alloc/windows_iat_hooks_windows.cpp
-            src/native/alloc/windows_thread_suspension.cpp
             src/native/alloc/windows_permanent_iat_gateway.cpp
             src/native/alloc/windows_permanent_iat_gateway_registry.cpp
-            src/native/alloc/windows_permanent_iat_funchook_compat.cpp)
+            src/native/alloc/windows_allocation_iat_hooks.cpp)
 elseif (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
     target_sources(spark_native PRIVATE
             src/native/sampler/capture_linux.cpp
@@ -121,7 +142,7 @@ else ()
             src/native/alloc/allocation_sampler_stub.cpp)
 endif ()
 target_include_directories(spark_native PUBLIC src)
-target_link_libraries(spark_native PUBLIC spark_profiling_time cpptrace::cpptrace concurrentqueue::concurrentqueue
+target_link_libraries(spark_native PUBLIC spark_profiling_time spark_diagnostics cpptrace::cpptrace concurrentqueue::concurrentqueue
         Threads::Threads)
 set_target_properties(spark_native PROPERTIES POSITION_INDEPENDENT_CODE ON)
 if (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
@@ -129,10 +150,8 @@ if (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Cl
     target_compile_options(spark_native PRIVATE -fvisibility=hidden -fvisibility-inlines-hidden)
 endif ()
 if (WIN32)
-    target_include_directories(spark_native PRIVATE "${funchook_SOURCE_DIR}/distorm/include")
     target_link_libraries(spark_native PUBLIC dbghelp psapi advapi32 distorm)
 elseif (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
-    target_include_directories(spark_native PRIVATE "${funchook_SOURCE_DIR}/distorm/include")
     target_link_libraries(spark_native PUBLIC distorm ${CMAKE_DL_LIBS})
 elseif (CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_link_libraries(spark_native PUBLIC ${CMAKE_DL_LIBS})
@@ -185,13 +204,13 @@ if (WIN32)
     target_sources(spark_core PRIVATE
             src/core/stats/network_monitor_windows.cpp
             src/core/ws/crypto_cng.cpp)
-    target_link_libraries(spark_core PUBLIC spark_native ZLIB::ZLIB CURL::libcurl tomlplusplus::tomlplusplus
+    target_link_libraries(spark_core PUBLIC spark_diagnostics spark_native ZLIB::ZLIB CURL::libcurl tomlplusplus::tomlplusplus
         nlohmann_json::nlohmann_json bcrypt)
 else ()
     target_sources(spark_core PRIVATE
             src/core/stats/network_monitor_linux.cpp
             src/core/ws/crypto.cpp)
-    target_link_libraries(spark_core PUBLIC spark_native ZLIB::ZLIB CURL::libcurl tomlplusplus::tomlplusplus
+    target_link_libraries(spark_core PUBLIC spark_diagnostics spark_native ZLIB::ZLIB CURL::libcurl tomlplusplus::tomlplusplus
         nlohmann_json::nlohmann_json OpenSSL::Crypto)
 endif ()
 if (WIN32)

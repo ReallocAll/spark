@@ -53,6 +53,7 @@ struct ProfilerOptions {
     bool is_background = false;
     // Deterministic service-failure injection used only by the offline selftest.
     bool fail_allocation_aggregator_for_testing = false;
+    std::uint32_t allocation_aggregator_delay_ms_for_testing = 0;
 };
 
 // Server facts needed only at export time (read from Endstone on the main thread).
@@ -153,8 +154,8 @@ public:
     void journalStallBegin(std::uint64_t detected_ns, std::uint64_t last_tick_ns);
     void journalStallEnd(std::uint64_t detected_ns, std::uint64_t recovered_ns);
 
-    // Unconditionally closes the active backend and destroys native hook
-    // trampolines. Must run before the plugin module is unloaded.
+    // Unconditionally closes the active backend and clears native hook handlers.
+    // Must run before the plugin module is unloaded.
     bool shutdown(std::string &error);
 
 private:
