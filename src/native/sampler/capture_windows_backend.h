@@ -15,16 +15,11 @@
 #endif
 // clang-format off
 #include <windows.h>
-#include <dbghelp.h>
 // clang-format on
 
-namespace spark {
+#include "native/sampler/windows_stack_snapshot.h"
 
-enum class WindowsWalkStatus {
-    Frame,
-    Complete,
-    Failure,
-};
+namespace spark {
 
 class WindowsCaptureBackend {
 public:
@@ -33,9 +28,10 @@ public:
     virtual HANDLE openThread(DWORD thread_id) noexcept = 0;
     virtual DWORD suspendThread(HANDLE thread) noexcept = 0;
     virtual bool getThreadContext(HANDLE thread, CONTEXT &context) noexcept = 0;
-    virtual bool initializeStackWalk(const CONTEXT &context, STACKFRAME64 &frame) noexcept = 0;
-    virtual WindowsWalkStatus walkNext(HANDLE thread, CONTEXT &context, STACKFRAME64 &frame,
-                                       std::uintptr_t &instruction_pointer) noexcept = 0;
+    virtual bool captureStackSnapshot(HANDLE thread, const CONTEXT &context,
+                                      WindowsStackSnapshot &snapshot) noexcept = 0;
+    virtual WindowsWalkStatus unwindNext(const WindowsStackSnapshot &snapshot, CONTEXT &context,
+                                         std::uintptr_t &instruction_pointer) noexcept = 0;
     virtual DWORD resumeThread(HANDLE thread) noexcept = 0;
     virtual bool threadExited(HANDLE thread) noexcept = 0;
     virtual void closeThread(HANDLE thread) noexcept = 0;

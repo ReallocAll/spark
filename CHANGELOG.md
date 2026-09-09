@@ -93,6 +93,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   frames without hiding unrelated user ctypes/libffi/native paths.
 - Preserve the real Linux allocation caller frame by correcting the cpptrace stack
   skip count used by allocation hooks.
+- Ensure Windows execution sampling snapshots and resumes the target thread before unwind, preventing a blocked stack walk from leaving BDS suspended.
 
 ## [0.5.3][0.5.3] - 2026-08-14
 
