@@ -2191,11 +2191,13 @@ std::uint64_t AllocationSampler::contentionDropped() const
     return impl_->contention_dropped.load(std::memory_order_relaxed);
 }
 
+// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
 std::uint64_t AllocationSampler::drainTruncated() const
 {
     return 0;
 }
 
+// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
 bool AllocationSampler::stopWaitTimedOut() const
 {
     return false;
