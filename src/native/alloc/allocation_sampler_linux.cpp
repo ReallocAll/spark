@@ -1443,12 +1443,8 @@ struct AllocationSampler::Impl {
         const bool quiesced = detail::waitForQuiescence<std::chrono::steady_clock>(
             std::chrono::seconds(5),
             [&counters] {
-                for (const auto &counter : counters) {
-                    if (counter.load(std::memory_order_acquire) != 0) {
-                        return true;
-                    }
-                }
-                return false;
+                return std::ranges::any_of(
+                    counters, [](const auto &counter) { return counter.load(std::memory_order_acquire) != 0; });
             },
             [](std::chrono::steady_clock::duration) {
                 const timespec delay{.tv_sec = 0, .tv_nsec = 1000000};
@@ -2357,7 +2353,7 @@ bool AllocationDiagnosticsTestAccess::seedFixtureQueues(AllocationSampler &sampl
             return false;
         }
 
-        const std::size_t event_count =
+        const auto event_count =
             static_cast<std::size_t>(requested.allocation_events + requested.thread_observation_events);
         std::array<AllocationSampler::Impl::AllocationEvent, 5> events{};
         for (std::size_t i = 0; i < event_count; ++i) {

@@ -330,7 +330,7 @@ void ProfilerService::exportWorkerLoop() noexcept
             {
                 std::unique_lock lock(export_mutex_);
                 export_cv_.wait(lock, [this] { return export_stop_requested_ || export_job_.has_value(); });
-                if (export_stop_requested_ && !export_job_.has_value()) {
+                if (!export_job_.has_value()) {
                     break;
                 }
                 active_job = std::move(*export_job_);

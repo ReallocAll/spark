@@ -85,7 +85,17 @@ private:
 
 class TestNotifier final : public spark::ResultNotifier {
 public:
-    void notify(const std::string & /*sender_name*/, const std::string & /*text*/) override {}
+    void notify(const std::string & /*sender_name*/, const std::string &text) override
+    {
+        if (text == "Profiler stopped & saved locally!") {
+            saved_success_.store(true, std::memory_order_relaxed);
+        }
+    }
+
+    bool savedSuccess() const { return saved_success_.load(std::memory_order_relaxed); }
+
+private:
+    std::atomic<bool> saved_success_{false};
 };
 
 std::uint64_t currentThreadId()
@@ -131,6 +141,7 @@ void verifyProfilerTimeoutLifecycle(std::uint64_t worker_tid, const std::filesys
                                    dispatcher, metadata_provider, notifier);
     spark::ProfilerOptions options;
     options.interval_ms = 1;
+    options.save_to_file = true;
     std::string error;
 
     assert(spark::ProfilerServiceTestAccess::start(service, options, worker_tid, error));
@@ -148,7 +159,23 @@ void verifyProfilerTimeoutLifecycle(std::uint64_t worker_tid, const std::filesys
     service.onTick(1.0);
     assert(metadata_provider.serverMetadataCalls() != 0);
     assert(!service.running());
-    assert(waitFor([&] { return !service.exporting(); }, 3s));
+    assert(service.exporting());
+    const bool export_completed = waitFor(
+        [&] {
+            service.onTick(1.0);
+            return !service.exporting();
+        },
+        3s);
+    assert(export_completed);
+    assert(notifier.savedSuccess());
+
+    bool saved_profile_found = false;
+    for (const auto &entry : std::filesystem::directory_iterator(root)) {
+        if (entry.path().extension() == ".sparkprofile" && entry.is_regular_file() && entry.file_size() > 0) {
+            saved_profile_found = true;
+        }
+    }
+    assert(saved_profile_found);
 
     assert(spark::ProfilerServiceTestAccess::start(service, options, worker_tid, error));
     assert(spark::ProfilerServiceTestAccess::armTimeout(service, 1));
