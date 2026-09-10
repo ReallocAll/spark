@@ -99,6 +99,24 @@ bool waitFixtureWorkerGate(test::AllocationFixtureWorkerGate &gate) noexcept
 
 constexpr std::size_t KMaxAllocationModules = 512;
 constexpr std::size_t KMaxModuleCacheEntries = 1024;
+
+struct MainImageRange {
+    std::uintptr_t base = 0;
+    std::uintptr_t size = 0;
+
+    static MainImageRange validated(std::uintptr_t base, std::uintptr_t size) noexcept
+    {
+        if (base == 0 || size == 0 || size > (std::numeric_limits<std::uintptr_t>::max)() - base) {
+            return {};
+        }
+        return {.base = base, .size = size};
+    }
+
+    [[nodiscard]] bool contains(std::uintptr_t address) const noexcept
+    {
+        return address >= base && address - base < size;
+    }
+};
 constexpr std::size_t KMaxProfileNodes = 131072;
 constexpr std::size_t KMaxPendingSamples = 32768;
 constexpr std::size_t KMaxTickDecisions = 100000;
@@ -545,11 +563,15 @@ struct AllocationSampler::Impl {
     ThreadSamplingState fixture_thread_state_for_testing{};
     std::uint64_t fixture_thread_owner_for_testing = 0;
     bool fixture_thread_state_active_for_testing = false;
+    bool force_main_image_discovery_failure_for_testing = false;
+    std::uint64_t main_image_discoveries_for_testing = 0;
+    std::uint64_t fallback_queries_for_testing = 0;
 #endif
     BoundedEventQueue<TickEvent, KTickEventCapacity> ticks;
 
     AllocationProfileAggregation aggregation;
     std::unordered_map<std::uintptr_t, ModuleId> module_cache;
+    MainImageRange main_image_range;
 
     std::atomic<RecoverySink *> recovery_sink{nullptr};
 
@@ -1859,14 +1881,39 @@ struct AllocationSampler::Impl {
         }
     }
 
+    void discoverMainImage() noexcept
+    {
+#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+        ++main_image_discoveries_for_testing;
+        if (force_main_image_discovery_failure_for_testing) {
+            return;
+        }
+#endif
+        const HMODULE module = ::GetModuleHandleW(nullptr);
+        MODULEINFO info{};
+        if (module != nullptr && ::GetModuleInformation(::GetCurrentProcess(), module, &info, sizeof(info)) != 0 &&
+            info.lpBaseOfDll == module) {
+            main_image_range =
+                MainImageRange::validated(reinterpret_cast<std::uintptr_t>(info.lpBaseOfDll), info.SizeOfImage);
+        }
+    }
+
     FrameKey frameKeyForAddress(std::uint64_t raw_address, std::string &module_path)
     {
-        MEMORY_BASIC_INFORMATION memory{};
         std::uintptr_t module_base = 0;
-        // NOLINTNEXTLINE(performance-no-int-to-ptr)
-        if (::VirtualQuery(reinterpret_cast<void *>(static_cast<std::uintptr_t>(raw_address)), &memory,
-                           sizeof(memory)) != 0) {
-            module_base = reinterpret_cast<std::uintptr_t>(memory.AllocationBase);
+        if (main_image_range.contains(static_cast<std::uintptr_t>(raw_address))) {
+            module_base = main_image_range.base;
+        }
+        else {
+            MEMORY_BASIC_INFORMATION memory{};
+#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+            ++fallback_queries_for_testing;
+#endif
+            // NOLINTNEXTLINE(performance-no-int-to-ptr)
+            if (::VirtualQuery(reinterpret_cast<void *>(static_cast<std::uintptr_t>(raw_address)), &memory,
+                               sizeof(memory)) != 0) {
+                module_base = reinterpret_cast<std::uintptr_t>(memory.AllocationBase);
+            }
         }
 
         ModuleId module_id = kInvalidModule;
@@ -2635,6 +2682,11 @@ struct AllocationSampler::Impl {
         while (ticks.dequeue(tick)) {
         }
         module_cache.clear();
+        main_image_range = {};
+#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+        main_image_discoveries_for_testing = 0;
+        fallback_queries_for_testing = 0;
+#endif
         current_tick.store(0, std::memory_order_relaxed);
         for (HotCounters &counters : hot_counters) {
             counters.hook_calls.store(0, std::memory_order_relaxed);
@@ -2790,6 +2842,7 @@ struct AllocationSampler::Impl {
             if (!allocateEventPool(error)) {
                 return false;
             }
+            discoverMainImage();
         }
 
         if (!installHooks(error)) {
@@ -3051,6 +3104,7 @@ bool AllocationDiagnosticsTestAccess::releaseFixture(AllocationSampler &sampler)
     sampler.impl_->event_processing_gate_for_testing = nullptr;
     sampler.impl_->start_failure_gate_for_testing = nullptr;
     sampler.impl_->force_process_event_failure_for_testing = false;
+    sampler.impl_->force_main_image_discovery_failure_for_testing = false;
     sampler.impl_->fixture_no_hooks_for_testing = false;
     sampler.impl_->fixture_no_worker_for_testing = false;
     sampler.impl_->fixture_controls_configured_for_testing = false;
@@ -3505,6 +3559,87 @@ bool AllocationDiagnosticsTestAccess::fileTimeToNanoseconds(std::uint32_t high, 
                                                             std::uint64_t &value) noexcept
 {
     return spark::fileTimeToNanoseconds(high, low, value);
+}
+
+bool AllocationDiagnosticsTestAccess::mainImageRangeContains(std::uintptr_t base, std::uintptr_t size,
+                                                             std::uintptr_t address) noexcept
+{
+    return MainImageRange::validated(base, size).contains(address);
+}
+
+bool AllocationDiagnosticsTestAccess::mainImageState(AllocationSampler &sampler,
+                                                     AllocationMainImageState &state) noexcept
+{
+    try {
+        std::scoped_lock lifecycle_lock(sampler.impl_->lifecycle_mutex);
+        if (!sampler.impl_->fixture_controls_configured_for_testing || !sampler.impl_->fixture_no_hooks_for_testing ||
+            !sampler.impl_->fixture_no_worker_for_testing || sampler.impl_->aggregator_thread.joinable() ||
+            !sampler.impl_->running.load(std::memory_order_acquire)) {
+            return false;
+        }
+        std::scoped_lock aggregate_lock(sampler.impl_->aggregate_mutex);
+        state = {.base = sampler.impl_->main_image_range.base,
+                 .size = sampler.impl_->main_image_range.size,
+                 .discoveries = sampler.impl_->main_image_discoveries_for_testing,
+                 .fallback_queries = sampler.impl_->fallback_queries_for_testing};
+        return true;
+    }
+    catch (...) {
+        return false;
+    }
+}
+
+bool AllocationDiagnosticsTestAccess::forceMainImageDiscoveryFailure(AllocationSampler &sampler, bool force) noexcept
+{
+    try {
+        std::scoped_lock lifecycle_lock(sampler.impl_->lifecycle_mutex);
+        if (!sampler.impl_->fixture_controls_configured_for_testing || !sampler.impl_->fixture_no_hooks_for_testing ||
+            !sampler.impl_->fixture_no_worker_for_testing || sampler.impl_->aggregator_thread.joinable() ||
+            sampler.impl_->running.load(std::memory_order_acquire) || sampler.impl_->backendCleanupPending() ||
+            sampler.impl_->hooks_installed.load(std::memory_order_acquire) || sampler.impl_->event_storage != nullptr ||
+            sampler.impl_->live_storage != nullptr || sampler.impl_->live_index != nullptr) {
+            return false;
+        }
+        std::scoped_lock aggregate_lock(sampler.impl_->aggregate_mutex);
+        sampler.impl_->force_main_image_discovery_failure_for_testing = force;
+        return true;
+    }
+    catch (...) {
+        return false;
+    }
+}
+
+bool AllocationDiagnosticsTestAccess::resolveFrame(AllocationSampler &sampler, std::uintptr_t address,
+                                                   bool force_fallback, AllocationResolvedFrame &frame) noexcept
+{
+    try {
+        std::scoped_lock lifecycle_lock(sampler.impl_->lifecycle_mutex);
+        if (!sampler.impl_->fixture_controls_configured_for_testing || !sampler.impl_->fixture_no_hooks_for_testing ||
+            !sampler.impl_->fixture_no_worker_for_testing || sampler.impl_->aggregator_thread.joinable() ||
+            !sampler.impl_->running.load(std::memory_order_acquire) ||
+            sampler.impl_->accounting_state.load(std::memory_order_acquire) != AllocationAccountingState::Active ||
+            sampler.impl_->event_storage == nullptr || sampler.impl_->live_storage == nullptr ||
+            sampler.impl_->live_index == nullptr) {
+            return false;
+        }
+        std::scoped_lock aggregate_lock(sampler.impl_->aggregate_mutex);
+        struct RangeRestore {
+            MainImageRange &range;
+            MainImageRange saved;
+            ~RangeRestore() { range = saved; }
+        } restore{.range = sampler.impl_->main_image_range, .saved = sampler.impl_->main_image_range};
+        if (force_fallback) {
+            sampler.impl_->main_image_range = {};
+        }
+        const FrameKey key = sampler.impl_->frameKeyForAddress(address, frame.path);
+        frame.module = key.module;
+        frame.rva = key.rva;
+        frame.raw_address = key.raw_address;
+        return true;
+    }
+    catch (...) {
+        return false;
+    }
 }
 
 void AllocationDiagnosticsTestAccess::seedModuleCache(AllocationSampler &sampler, std::size_t entries) noexcept

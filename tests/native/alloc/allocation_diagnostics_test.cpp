@@ -12,6 +12,13 @@
 #include <thread>
 #include <vector>
 
+#if defined(_WIN32) && defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 #include "native/alloc/allocation_diagnostics_test_access.h"
 #include "native/alloc/allocation_lifecycle_test_access.h"
 #include "native/alloc/allocation_sampler.h"
@@ -1509,6 +1516,118 @@ bool verifyModuleCache()
     return true;
 }
 
+bool verifyMainImageRange()
+{
+#if defined(_WIN32) && defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+    using Access = spark::test::AllocationDiagnosticsTestAccess;
+    const auto limit = (std::numeric_limits<std::uintptr_t>::max)();
+    if (!Access::mainImageRangeContains(100, 10, 100) || !Access::mainImageRangeContains(100, 10, 109) ||
+        Access::mainImageRangeContains(100, 10, 99) || Access::mainImageRangeContains(100, 10, 110) ||
+        Access::mainImageRangeContains(0, 10, 0) || Access::mainImageRangeContains(100, 0, 100) ||
+        Access::mainImageRangeContains(limit - 9, 10, limit - 9) ||
+        !Access::mainImageRangeContains(limit - 10, 10, limit - 10) ||
+        !Access::mainImageRangeContains(limit - 10, 10, limit - 1) ||
+        Access::mainImageRangeContains(limit - 10, 10, limit)) {
+        return report("main image synthetic range oracle failed");
+    }
+
+    DiagnosticsFixture fixture;
+    auto config = makeFixtureConfig(0x2110);
+    std::string error;
+    if (!fixture.configure(true, true) || !fixture.sampler.start(config, error)) {
+        return report("main image fixture start failed");
+    }
+    const auto address = reinterpret_cast<std::uintptr_t>(&verifyMainImageRange);
+    spark::test::AllocationMainImageState initial;
+    if (!Access::mainImageState(fixture.sampler, initial) || initial.discoveries != 1 ||
+        initial.fallback_queries != 0 || !Access::mainImageRangeContains(initial.base, initial.size, address)) {
+        return report("main image discovery oracle failed");
+    }
+    spark::test::AllocationResolvedFrame fast;
+    spark::test::AllocationResolvedFrame repeated;
+    if (!Access::resolveFrame(fixture.sampler, address, false, fast) ||
+        !Access::resolveFrame(fixture.sampler, address, false, repeated) || fast != repeated ||
+        fast.raw_address != address || fast.rva != address - initial.base || fast.path == "unknown") {
+        return report("main image repeated resolution oracle failed");
+    }
+    const auto fast_cache = fixture.sampler.diagnostics();
+    spark::test::AllocationMainImageState state;
+    if (!Access::mainImageState(fixture.sampler, state) || state.fallback_queries != 0 ||
+        fast_cache.module_cache_misses != 1 || fast_cache.module_cache_hits != 1 || fast_cache.module_cache_size != 1 ||
+        fast_cache.module_cache_insertion_refusals != 0) {
+        return report("main image fast path query oracle failed");
+    }
+    spark::test::AllocationResolvedFrame fallback;
+    if (!Access::resolveFrame(fixture.sampler, address, true, fallback) || fast != fallback ||
+        !Access::mainImageState(fixture.sampler, state) || state.fallback_queries != 1 || state.base != initial.base ||
+        state.size != initial.size || !Access::resolveFrame(fixture.sampler, address, false, repeated) ||
+        fast != repeated || !Access::mainImageState(fixture.sampler, state) || state.fallback_queries != 1) {
+        return report("main image forced fallback restoration oracle failed");
+    }
+
+    if (!fixture.sampler.stop(error) || !fixture.sampler.start(config, error) ||
+        !Access::resolveFrame(fixture.sampler, address, true, fallback) ||
+        !Access::resolveFrame(fixture.sampler, address, true, repeated) || fast != fallback || fast != repeated) {
+        return report("main image cold fallback equivalence oracle failed");
+    }
+    const auto fallback_cache = fixture.sampler.diagnostics();
+    if (!Access::mainImageState(fixture.sampler, state) || state.fallback_queries != 2 || state.discoveries != 1 ||
+        state.base != initial.base || state.size != initial.size ||
+        fallback_cache.module_cache_misses != fast_cache.module_cache_misses ||
+        fallback_cache.module_cache_hits != fast_cache.module_cache_hits ||
+        fallback_cache.module_cache_size != fast_cache.module_cache_size ||
+        fallback_cache.module_cache_insertion_refusals != fast_cache.module_cache_insertion_refusals) {
+        return report("main image cold cache equivalence oracle failed");
+    }
+
+    const HMODULE other_module = ::GetModuleHandleW(L"ntdll.dll");
+    const auto other_address =
+        reinterpret_cast<std::uintptr_t>(other_module != nullptr ? ::GetProcAddress(other_module, "NtClose") : nullptr);
+    spark::test::AllocationResolvedFrame other;
+    if (other_address == 0 || Access::mainImageRangeContains(state.base, state.size, other_address) ||
+        !Access::resolveFrame(fixture.sampler, other_address, false, other) ||
+        !Access::resolveFrame(fixture.sampler, other_address, false, repeated) || other != repeated ||
+        other.path == "unknown" || other.module == fast.module || !Access::mainImageState(fixture.sampler, state) ||
+        state.fallback_queries != 4) {
+        return report("non-main module fallback query oracle failed");
+    }
+    const auto other_cache = fixture.sampler.diagnostics();
+    if (other_cache.module_cache_misses != fallback_cache.module_cache_misses + 1 ||
+        other_cache.module_cache_hits != fallback_cache.module_cache_hits + 1 ||
+        other_cache.module_cache_size != fallback_cache.module_cache_size + 1 ||
+        other_cache.module_cache_insertion_refusals != fallback_cache.module_cache_insertion_refusals) {
+        return report("non-main module cache oracle failed");
+    }
+
+    if (!fixture.sampler.stop(error) || !Access::forceMainImageDiscoveryFailure(fixture.sampler, true) ||
+        !fixture.sampler.start(config, error) || !Access::mainImageState(fixture.sampler, state) || state.base != 0 ||
+        state.size != 0 || state.discoveries != 1 || state.fallback_queries != 0 ||
+        !Access::resolveFrame(fixture.sampler, address, false, fallback) || fast != fallback) {
+        return report("main image failed discovery reset oracle failed");
+    }
+    spark::test::AllocationResolvedFrame invalid;
+    if (!Access::resolveFrame(fixture.sampler, limit, false, invalid) || invalid.path != "unknown" ||
+        invalid.rva != limit || invalid.raw_address != limit ||
+        !Access::resolveFrame(fixture.sampler, limit, true, repeated) || invalid != repeated ||
+        !Access::mainImageState(fixture.sampler, state) || state.fallback_queries != 3) {
+        return report("disabled main image fallback oracle failed");
+    }
+    if (!fixture.sampler.stop(error) || !Access::forceMainImageDiscoveryFailure(fixture.sampler, false) ||
+        !fixture.sampler.start(config, error) || !Access::mainImageState(fixture.sampler, state) ||
+        state.base != initial.base || state.size != initial.size || state.discoveries != 1 ||
+        state.fallback_queries != 0 || !fixture.sampler.stop(error)) {
+        return report("main image restart discovery oracle failed");
+    }
+    config.count_only = true;
+    if (!fixture.sampler.start(config, error) || !Access::mainImageState(fixture.sampler, state) || state.base != 0 ||
+        state.size != 0 || state.discoveries != 0 || state.fallback_queries != 0 || !fixture.sampler.stop(error) ||
+        !fixture.cleanup()) {
+        return report("count-only main image oracle failed");
+    }
+#endif
+    return true;
+}
+
 bool verifyFileTimeConversion()
 {
 #if defined(_WIN32) && defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
@@ -1550,7 +1669,7 @@ int main(int argc, char **argv)
     const bool fixture_phase2 = verifyFixtureWindowsBoundedAccounting() && verifyFixtureLinuxProcessAll() &&
                                 verifyFixtureAggregatorAttribution() && verifyFixtureRetainedBudget() &&
                                 verifyFixtureCapacityAccounting() && verifyFixtureProbeExhaustion() &&
-                                verifyModuleCache();
+                                verifyModuleCache() && verifyMainImageRange();
     if (fixture_phase2_only) {
         return fixture_smoke && fixture_phase2 ? 0 : 1;
     }

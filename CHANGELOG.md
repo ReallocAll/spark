@@ -56,6 +56,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Reduce Windows allocation-consumer overhead when resolving frames in the server executable.
 - Reduce allocation-profiler hot-path contention with sharded lifecycle/statistics
   state and bounded retries while preserving fail-closed drop reporting.
 - Cache the native Linux thread ID per PEP 669 callback thread instead of issuing a

@@ -5,10 +5,29 @@
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
+#include <string>
 
 #include "native/alloc/allocation_sampler.h"
 
 namespace spark::test {
+
+#if defined(_WIN32) && defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+struct AllocationMainImageState {
+    std::uintptr_t base = 0;
+    std::uintptr_t size = 0;
+    std::uint64_t discoveries = 0;
+    std::uint64_t fallback_queries = 0;
+};
+
+struct AllocationResolvedFrame {
+    std::uint64_t module = 0;
+    std::uint64_t rva = 0;
+    std::uint64_t raw_address = 0;
+    std::string path;
+
+    bool operator==(const AllocationResolvedFrame &) const = default;
+};
+#endif
 
 struct AllocationEventProcessingGate {
     std::atomic<bool> entered{false};
@@ -55,6 +74,13 @@ struct AllocationFixtureCpuWorkControl {
 };
 
 struct AllocationDiagnosticsTestAccess {
+#if defined(_WIN32) && defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+    static bool mainImageRangeContains(std::uintptr_t base, std::uintptr_t size, std::uintptr_t address) noexcept;
+    static bool mainImageState(AllocationSampler &, AllocationMainImageState &) noexcept;
+    static bool forceMainImageDiscoveryFailure(AllocationSampler &, bool) noexcept;
+    static bool resolveFrame(AllocationSampler &, std::uintptr_t address, bool force_fallback,
+                             AllocationResolvedFrame &) noexcept;
+#endif
     static bool configureFixture(AllocationSampler &, bool no_hooks, bool no_worker,
                                  AllocationFixtureWorkerGate *) noexcept;
     static bool releaseFixture(AllocationSampler &) noexcept;
