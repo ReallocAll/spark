@@ -416,8 +416,7 @@ with StackWalk64.
 
 The plugin is emitted as `build/endstone_spark.so` (Linux) /
 `build/endstone_spark.dll` (Windows). Drop it in your server's `plugins/`
-directory. The Windows Permanent-IAT gateway is embedded in the plugin and retains
-its process-lifetime executable state without a companion DLL.
+directory.
 
 > **Toolchain / ABI note.** A C++ Endstone plugin must use the runtime ABI expected
 > by the Endstone build it is loaded into. Match its compiler, compiler ABI, C++
