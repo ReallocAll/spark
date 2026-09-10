@@ -287,6 +287,7 @@ std::string Profiler::exportData(const ExportContext &ctx, const AllocationSnaps
     }
 
     if (mode_ == ProfileMode::Allocation) {
+        const AllocationDiagnostics allocation_diagnostics = allocation_sampler_.diagnostics();
         // Upstream SamplerMetadata has no dedicated native allocation diagnostics.
         // The viewer JSON-parses every map value, so textual values must be encoded
         // as JSON string literals; numbers and booleans are already valid JSON.
@@ -343,6 +344,8 @@ std::string Profiler::exportData(const ExportContext &ctx, const AllocationSnaps
             std::to_string(allocation_sampler_.peakLiveSamples());
         meta.extra_platform_metadata["Allocation live index capacity"] =
             std::to_string(spark::AllocationSampler::liveIndexCapacity());
+        meta.extra_platform_metadata["Allocation live record capacity"] =
+            std::to_string(spark::AllocationSampler::liveRecordCapacity());
         meta.extra_platform_metadata["Allocation sampled thread roots"] =
             std::to_string(allocation_snapshot != nullptr ? allocation_snapshot->thread_trees.size()
                                                           : allocation_sampler_.sampledThreadCount());
@@ -448,6 +451,77 @@ std::string Profiler::exportData(const ExportContext &ctx, const AllocationSnaps
             std::to_string(allocation_sampler_.hookTargetCount());
         meta.extra_platform_metadata["Allocation hook aliases"] = std::to_string(aliases);
         meta.extra_platform_metadata["Allocation hook capabilities"] = jsonString(allocationHookSummary(capabilities));
+
+        meta.extra_platform_metadata["Allocation diagnostics supported"] =
+            allocation_diagnostics.supported ? "true" : "false";
+        meta.extra_platform_metadata["Allocation diagnostics accounting state"] =
+            jsonString(allocationAccountingStateName(allocation_diagnostics.accounting_state));
+        meta.extra_platform_metadata["Allocation diagnostics live index capacity"] =
+            std::to_string(allocation_diagnostics.live_index_capacity);
+        meta.extra_platform_metadata["Allocation diagnostics live record capacity"] =
+            std::to_string(allocation_diagnostics.live_record_capacity);
+        meta.extra_platform_metadata["Allocation diagnostics drain truncated"] =
+            std::to_string(allocation_diagnostics.drain_truncated);
+        meta.extra_platform_metadata["Allocation diagnostics drain truncated allocation events"] =
+            std::to_string(allocation_diagnostics.drain_truncated_allocation_events);
+        meta.extra_platform_metadata["Allocation diagnostics drain truncated thread observation events"] =
+            std::to_string(allocation_diagnostics.drain_truncated_thread_observation_events);
+        meta.extra_platform_metadata["Allocation diagnostics drain truncated tick events"] =
+            std::to_string(allocation_diagnostics.drain_truncated_tick_events);
+        meta.extra_platform_metadata["Allocation diagnostics retained allocations skipped"] =
+            std::to_string(allocation_diagnostics.retained_allocations_skipped);
+        meta.extra_platform_metadata["Allocation diagnostics record pool acquisition failures"] =
+            std::to_string(allocation_diagnostics.record_pool_acquisition_failures);
+        meta.extra_platform_metadata["Allocation diagnostics insertion contention failures"] =
+            std::to_string(allocation_diagnostics.insertion_contention_failures);
+        meta.extra_platform_metadata["Allocation diagnostics exhausted insertion probe failures"] =
+            std::to_string(allocation_diagnostics.exhausted_insertion_probe_failures);
+        meta.extra_platform_metadata["Allocation diagnostics detach contention attempts"] =
+            std::to_string(allocation_diagnostics.detach_contention_attempts);
+        meta.extra_platform_metadata["Allocation diagnostics processed allocation events"] =
+            std::to_string(allocation_diagnostics.processed_allocation_events);
+        meta.extra_platform_metadata["Allocation diagnostics processed thread observation events"] =
+            std::to_string(allocation_diagnostics.processed_thread_observation_events);
+        meta.extra_platform_metadata["Allocation diagnostics processed tick events"] =
+            std::to_string(allocation_diagnostics.processed_tick_events);
+        meta.extra_platform_metadata["Allocation diagnostics discarded allocation events"] =
+            std::to_string(allocation_diagnostics.discarded_allocation_events);
+        meta.extra_platform_metadata["Allocation diagnostics discarded thread observation events"] =
+            std::to_string(allocation_diagnostics.discarded_thread_observation_events);
+        meta.extra_platform_metadata["Allocation diagnostics discarded tick events"] =
+            std::to_string(allocation_diagnostics.discarded_tick_events);
+        meta.extra_platform_metadata["Allocation diagnostics consumer lifetime ns"] =
+            std::to_string(allocation_diagnostics.consumer_lifetime_elapsed_ns);
+        meta.extra_platform_metadata["Allocation diagnostics active drain ns"] =
+            std::to_string(allocation_diagnostics.active_drain_elapsed_ns);
+        meta.extra_platform_metadata["Allocation diagnostics caller final drain ns"] =
+            std::to_string(allocation_diagnostics.caller_final_drain_elapsed_ns);
+        meta.extra_platform_metadata["Allocation diagnostics caller final drain allocation events"] =
+            std::to_string(allocation_diagnostics.caller_final_drain_allocation_events);
+        meta.extra_platform_metadata["Allocation diagnostics caller final drain thread observation events"] =
+            std::to_string(allocation_diagnostics.caller_final_drain_thread_observation_events);
+        meta.extra_platform_metadata["Allocation diagnostics caller final drain tick events"] =
+            std::to_string(allocation_diagnostics.caller_final_drain_tick_events);
+        meta.extra_platform_metadata["Allocation diagnostics aggregator CPU supported"] =
+            allocation_diagnostics.aggregator_cpu_supported ? "true" : "false";
+        meta.extra_platform_metadata["Allocation diagnostics aggregator CPU valid"] =
+            allocation_diagnostics.aggregator_cpu_valid ? "true" : "false";
+        meta.extra_platform_metadata["Allocation diagnostics aggregator CPU read failure"] =
+            allocation_diagnostics.aggregator_cpu_read_failure ? "true" : "false";
+        meta.extra_platform_metadata["Allocation diagnostics aggregator CPU ns"] =
+            std::to_string(allocation_diagnostics.aggregator_cpu_time_ns);
+        meta.extra_platform_metadata["Allocation diagnostics module cache supported"] =
+            allocation_diagnostics.module_cache_supported ? "true" : "false";
+        meta.extra_platform_metadata["Allocation diagnostics module cache hits"] =
+            std::to_string(allocation_diagnostics.module_cache_hits);
+        meta.extra_platform_metadata["Allocation diagnostics module cache misses"] =
+            std::to_string(allocation_diagnostics.module_cache_misses);
+        meta.extra_platform_metadata["Allocation diagnostics module cache insertion refusals"] =
+            std::to_string(allocation_diagnostics.module_cache_insertion_refusals);
+        meta.extra_platform_metadata["Allocation diagnostics module cache size"] =
+            std::to_string(allocation_diagnostics.module_cache_size);
+        meta.extra_platform_metadata["Allocation diagnostics module cache capacity"] =
+            std::to_string(allocation_diagnostics.module_cache_capacity);
     }
     else {
         meta.extra_platform_metadata["Execution samples dropped"] = std::to_string(sampler_.droppedSamples());

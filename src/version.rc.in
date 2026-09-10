@@ -1,0 +1,31 @@
+#include <winres.h>
+
+#define SPARK_FILE_VERSION @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION SPARK_FILE_VERSION
+ PRODUCTVERSION SPARK_FILE_VERSION
+ FILEFLAGSMASK 0x3fL
+ FILEFLAGS 0x0L
+ FILEOS VOS__WINDOWS32
+ FILETYPE VFT_DLL
+ FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName", "EndstoneMC\0"
+            VALUE "FileDescription", "Endstone Spark profiler plugin\0"
+            VALUE "FileVersion", "@PROJECT_VERSION@.0\0"
+            VALUE "InternalName", "endstone_spark.dll\0"
+            VALUE "OriginalFilename", "endstone_spark.dll\0"
+            VALUE "ProductName", "Endstone Spark\0"
+            VALUE "ProductVersion", "@PROJECT_VERSION@.0\0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 1200
+    END
+END

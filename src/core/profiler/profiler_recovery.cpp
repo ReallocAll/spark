@@ -6,8 +6,8 @@ namespace spark {
 
 void Profiler::stopRecoveryWriter()
 {
-    // An un-reaped aggregator may still journal: keep the writer and both sinks intact.
-    if (allocation_sampler_.aggregatorMayBeAlive()) {
+    // A pending backend may still journal: keep the writer and both sinks intact.
+    if (allocation_sampler_.backendCleanupPending()) {
         return;
     }
     RecoveryWriter *writer = nullptr;
@@ -38,7 +38,7 @@ void Profiler::stopRecoveryWriter()
 
 bool Profiler::reapRecoveryWriter()
 {
-    if (allocation_sampler_.aggregatorMayBeAlive()) {
+    if (allocation_sampler_.backendCleanupPending()) {
         return false;
     }
     std::scoped_lock lock(recovery_mutex_);
@@ -58,16 +58,41 @@ bool Profiler::hasPendingRecoveryWriter() const
     return recovery_writer_ != nullptr;
 }
 
-void Profiler::discardRecoveryJournal()
+RecoveryDiscardResult Profiler::discardRecoveryJournal()
 {
+    if (allocation_sampler_.backendCleanupPending()) {
+        retain_recovery_journal_on_shutdown_.store(true, std::memory_order_release);
+        return {.status = RecoveryDiscardStatus::BackendCleanupPending,
+                .message = "allocation backend cleanup is still pending"};
+    }
     stopRecoveryWriter();
     if (hasPendingRecoveryWriter()) {
-        return;
+        retain_recovery_journal_on_shutdown_.store(true, std::memory_order_release);
+        return {.status = RecoveryDiscardStatus::WriterPending, .message = "recovery writer shutdown timed out"};
     }
-    if (!recovery_dir_.empty()) {
-        std::error_code ec;
+    if (recovery_dir_.empty()) {
+        retain_recovery_journal_on_shutdown_.store(false, std::memory_order_release);
+        return {};
+    }
+
+    std::error_code ec;
+#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+    if (recovery_remove_function_) {
+        recovery_remove_function_(recovery_dir_, ec);
+    }
+    else {
         std::filesystem::remove_all(recovery_dir_, ec);
     }
+#else
+    std::filesystem::remove_all(recovery_dir_, ec);
+#endif
+    if (ec) {
+        retain_recovery_journal_on_shutdown_.store(true, std::memory_order_release);
+        return {.status = RecoveryDiscardStatus::FilesystemError,
+                .message = "recovery journal cleanup failed: " + ec.message()};
+    }
+    retain_recovery_journal_on_shutdown_.store(false, std::memory_order_release);
+    return {};
 }
 
 void Profiler::journalStallBegin(std::uint64_t detected_ns, std::uint64_t last_tick_ns)

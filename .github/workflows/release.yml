@@ -231,6 +231,20 @@ jobs:
       - name: Build
         run: cmake --build --preset conan-relwithdebinfo
 
+      - name: Verify Windows artifacts
+        shell: pwsh
+        run: |
+          $versionLine = Get-Content build/RelWithDebInfo/CMakeCache.txt | Where-Object { $_ -match '^CMAKE_PROJECT_VERSION:STATIC=' }
+          if ($versionLine.Count -ne 1) { throw "CMake project version is missing or ambiguous" }
+          $version = $versionLine.Split('=', 2)[1]
+          & pwsh -NoProfile -File tools/verify_windows_artifacts.ps1 `
+            -Dll build/RelWithDebInfo/endstone_spark.dll `
+            -Pdb build/RelWithDebInfo/endstone_spark.pdb `
+            -Version $version `
+            -ManifestPath build/RelWithDebInfo/SHA256SUMS `
+            -WriteManifest
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Run tests
         run: ctest --test-dir build/RelWithDebInfo --output-on-failure
 
@@ -241,6 +255,7 @@ jobs:
           path: |
             build/RelWithDebInfo/endstone_spark.dll
             build/RelWithDebInfo/endstone_spark.pdb
+            build/RelWithDebInfo/SHA256SUMS
           if-no-files-found: error
 
   linux:
@@ -310,6 +325,11 @@ jobs:
       contents: write
 
     steps:
+      - name: Checkout release verifier
+        uses: actions/checkout@v7
+        with:
+          ref: v${{ needs.release.outputs.version }}
+
       - name: Download release notes
         uses: actions/download-artifact@v8
         with:
@@ -328,6 +348,16 @@ jobs:
           name: release-linux
           path: release-linux
 
+      - name: Verify Windows hashes before publishing
+        shell: pwsh
+        run: |
+          & pwsh -NoProfile -File tools/verify_windows_artifacts.ps1 `
+            -Dll release-windows/endstone_spark.dll `
+            -Pdb release-windows/endstone_spark.pdb `
+            -ManifestPath release-windows/SHA256SUMS `
+            -VerifyHashesOnly
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -336,6 +366,10 @@ jobs:
           test -f release-notes/release_body.md
           test -f release-windows/endstone_spark.dll
           test -f release-windows/endstone_spark.pdb
+          test -f release-windows/SHA256SUMS
+          cp release-windows/SHA256SUMS release-windows/SHA256SUMS-windows
+          cmp -- release-windows/SHA256SUMS release-windows/SHA256SUMS-windows
+          test -f release-windows/SHA256SUMS-windows
           test -f release-linux/endstone_spark.so
           gh release create "v${{ needs.release.outputs.version }}" \
             --repo "${{ github.repository }}" \
@@ -343,4 +377,5 @@ jobs:
             --notes-file release-notes/release_body.md \
             release-windows/endstone_spark.dll \
             release-windows/endstone_spark.pdb \
+            release-windows/SHA256SUMS-windows \
             release-linux/endstone_spark.so

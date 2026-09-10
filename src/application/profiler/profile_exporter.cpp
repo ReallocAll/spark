@@ -27,9 +27,16 @@ ProfileExporter::ProfileExporter(std::filesystem::path storage_dir, std::string 
 {
 }
 
-ProfileExporter::Result ProfileExporter::exportProfile(Profiler &profiler, const ExportContext &ctx, bool save_to_file)
+ProfileExporter::Result ProfileExporter::exportProfile(Profiler &profiler, const ExportContext &ctx, bool save_to_file,
+                                                       const CancellationToken &cancellation)
 {
     Result result;
+    const auto cancelled = [&]() {
+        result.outcome = ExportOutcome::Failed;
+        result.retain_recovery_journal = true;
+        result.message = "Export cancelled during shutdown; recovery journal retained.";
+        return result;
+    };
     try {
         std::string body = profiler.exportData(ctx);
         // Serialization has copied the completed allocation tree. Persistent
@@ -37,30 +44,77 @@ ProfileExporter::Result ProfileExporter::exportProfile(Profiler &profiler, const
         // while gzip and network/file I/O continue in this export worker.
         std::string resume_error;
         profiler.resumePersistentAllocationCounting(resume_error);
+        if (cancellation.stopRequested()) {
+            return cancelled();
+        }
         std::string compressed = gzipCompress(body);
+        if (cancellation.stopRequested()) {
+            return cancelled();
+        }
         if (save_to_file) {
-            ProfileFileResult saved = saveProfileToDirectory(storage_dir_, body, nowMs());
+            if (cancellation.stopRequested()) {
+                return cancelled();
+            }
+            ProfileFileResult saved =
+#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+                save_function_ ? save_function_(storage_dir_, body, nowMs())
+                               : saveProfileToDirectory(storage_dir_, body, nowMs());
+#else
+                saveProfileToDirectory(storage_dir_, body, nowMs());
+#endif
             if (saved.ok) {
                 result.outcome = ExportOutcome::Saved;
                 result.message = "Saved to " + saved.path.string() + " - open it at " + viewer_url_;
+                result.retain_recovery_journal = cancellation.stopRequested();
+                if (result.retain_recovery_journal) {
+                    result.message += " Shutdown requested; recovery journal retained.";
+                }
             }
             else {
                 result.message = "Failed to save the profile: " + saved.error;
             }
         }
         else {
-            UploadResult upload_result = uploadToBytebin(compressed, bytebin_url_, kSamplerContentType,
-                                                         std::string("endstone-spark/") + kVersion);
+            if (cancellation.stopRequested()) {
+                return cancelled();
+            }
+            UploadResult upload_result =
+#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+                upload_function_ ? upload_function_(compressed, bytebin_url_, kSamplerContentType,
+                                                    std::string("endstone-spark/") + kVersion, cancellation)
+                                 : uploadToBytebin(compressed, bytebin_url_, kSamplerContentType,
+                                                   std::string("endstone-spark/") + kVersion, cancellation);
+#else
+                uploadToBytebin(compressed, bytebin_url_, kSamplerContentType,
+                                std::string("endstone-spark/") + kVersion, cancellation);
+#endif
             if (upload_result.ok) {
                 result.outcome = ExportOutcome::Uploaded;
                 result.message = viewer_url_ + upload_result.key;
+                result.retain_recovery_journal = cancellation.stopRequested();
+                if (result.retain_recovery_journal) {
+                    result.message += " Shutdown requested; recovery journal retained.";
+                }
             }
             else {
-                ProfileFileResult saved = saveProfileToDirectory(storage_dir_, body, nowMs());
+                if (cancellation.stopRequested()) {
+                    return cancelled();
+                }
+                ProfileFileResult saved =
+#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+                    save_function_ ? save_function_(storage_dir_, body, nowMs())
+                                   : saveProfileToDirectory(storage_dir_, body, nowMs());
+#else
+                    saveProfileToDirectory(storage_dir_, body, nowMs());
+#endif
                 if (saved.ok) {
                     result.outcome = ExportOutcome::Saved;
                     result.message = "Upload failed (" + upload_result.error + "), so the profile was saved to " +
                                      saved.path.string() + " - open it at " + viewer_url_;
+                    result.retain_recovery_journal = cancellation.stopRequested();
+                    if (result.retain_recovery_journal) {
+                        result.message += " Shutdown requested; recovery journal retained.";
+                    }
                 }
                 else {
                     result.message = "Upload failed (" + upload_result.error + ") and automatic local save failed (" +
@@ -72,11 +126,17 @@ ProfileExporter::Result ProfileExporter::exportProfile(Profiler &profiler, const
     catch (const std::exception &e) {
         std::string ignored;
         profiler.resumePersistentAllocationCounting(ignored);
+        if (cancellation.stopRequested()) {
+            return cancelled();
+        }
         result.message = std::string("Export failed: ") + e.what();
     }
     catch (...) {
         std::string ignored;
         profiler.resumePersistentAllocationCounting(ignored);
+        if (cancellation.stopRequested()) {
+            return cancelled();
+        }
         result.message = "Export failed with an unknown error.";
     }
     return result;

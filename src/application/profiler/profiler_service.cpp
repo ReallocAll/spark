@@ -4,6 +4,7 @@
 #include <chrono>
 #include <exception>
 #include <limits>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -36,6 +37,12 @@ ProfilerService::ProfilerService(StatisticsService &statistics, std::string bds_
       background_thread_dumper_(std::move(background_thread_dumper)), bytebin_url_(std::move(bytebin_url)),
       viewer_url_(std::move(viewer_url)), bytesocks_host_(std::move(bytesocks_host)), trusted_viewers_(trusted_viewers)
 {
+#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+    export_function_ = [this](Profiler &profiler, const ExportContext &context, bool save_to_file,
+                              const CancellationToken &cancellation) {
+        return exporter_.exportProfile(profiler, context, save_to_file, cancellation);
+    };
+#endif
     viewer_open_ = std::make_unique<ProfilerOpenOrchestrator>(
         profiler_, statistics_, bds_executable_sha256_, bytebin_url_, viewer_url_, bytesocks_host_, trusted_viewers_,
         dispatcher_, metadata_provider_, notifier_);
@@ -50,23 +57,64 @@ ProfilerService::ProfilerService(StatisticsService &statistics, std::string bds_
 
 ProfilerService::~ProfilerService()
 {
-    shutdown();
+    std::string error;
+    if (!shutdown(error)) {
+        std::terminate();
+    }
 }
 
 void ProfilerService::shutdown()
 {
+    std::string ignored;
+    shutdown(ignored);
+}
+
+bool ProfilerService::shutdown(std::string &error)
+{
+    error.clear();
     resetProfilerTimeout();
     profiler_.requestStop();
-    lifetime_.reset();
+    {
+        std::scoped_lock lock(export_mutex_);
+        export_stop_requested_ = true;
+        export_cancellation_.requestStop();
+    }
+    if (exporting_.load(std::memory_order_acquire)) {
+        preserve_recovery_journal_on_shutdown_ = true;
+        profiler_.retainRecoveryJournalOnShutdown();
+    }
+    export_cv_.notify_all();
     if (viewer_open_) {
         viewer_open_->shutdown();
+    }
+
+#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+    const auto export_shutdown_timeout = export_shutdown_timeout_;
+#else
+    constexpr auto export_shutdown_timeout = std::chrono::milliseconds(5000);
+#endif
+    if (!waitForExportWorker(export_shutdown_timeout)) {
+        error = "profile export worker did not stop within 5000 milliseconds";
+        return false;
     }
     if (export_thread_.joinable()) {
         export_thread_.join();
     }
-    export_completion_pending_.store(false);
+
+    // Shutdown has no safe sender for a late result. Consume it only after the
+    // worker has stopped, retaining the journal for cancellation/failure.
+    consumeFinishedExport(false);
+    {
+        std::scoped_lock lock(export_mutex_);
+        export_job_.reset();
+        export_result_.reset();
+        export_completion_pending_.store(false, std::memory_order_release);
+        export_worker_exited_ = true;
+    }
     exporting_.store(false);
     restart_background_after_export_ = false;
+    lifetime_.reset();
+    return true;
 }
 
 ExportContext ProfilerService::captureLiveContext(std::int64_t now_ms)
@@ -175,22 +223,22 @@ void ProfilerService::finishProfiler(const std::string &sender_name, bool sender
     }
     session_type_ = SessionType::None;
 
+    ExportContext context;
     try {
-        pending_ctx_ = ExportContext{};
-        pending_ctx_.bds_executable_sha256 = bds_executable_sha256_;
-        metadata_provider_.gatherServerMetadata(pending_ctx_, nowMs());
-        pending_ctx_.native_plugin_sources = session_native_plugin_sources_;
-        pending_ctx_.comment = comment;
-        pending_ctx_.statistics = statistics_.snapshot();
-        pending_ctx_.metrics = statistics_.metricsSnapshot();
-        pending_ctx_.window_stats = statistics_.profileWindows(profiler_.startTimeMs(), profiler_.endTimeMs());
-        pending_ctx_.system_stats = spark::gatherSystemStats(".");
-        metadata_provider_.gatherWorldMetadata(pending_ctx_);
+        context.bds_executable_sha256 = bds_executable_sha256_;
+        metadata_provider_.gatherServerMetadata(context, nowMs());
+        context.native_plugin_sources = session_native_plugin_sources_;
+        context.comment = comment;
+        context.statistics = statistics_.snapshot();
+        context.metrics = statistics_.metricsSnapshot();
+        context.window_stats = statistics_.profileWindows(profiler_.startTimeMs(), profiler_.endTimeMs());
+        context.system_stats = spark::gatherSystemStats(".");
+        metadata_provider_.gatherWorldMetadata(context);
         if (ping_samples_provider_) {
-            pending_ctx_.ping_samples = ping_samples_provider_();
+            context.ping_samples = ping_samples_provider_();
         }
         if (network_snapshot_provider_) {
-            pending_ctx_.net_snapshots = network_snapshot_provider_();
+            context.net_snapshots = network_snapshot_provider_();
         }
     }
     catch (const std::exception &error) {
@@ -212,19 +260,34 @@ void ProfilerService::finishProfiler(const std::string &sender_name, bool sender
         return;
     }
 
-    pending_save_ = save;
-    pending_sender_ = sender_name;
-    pending_sender_is_player_ = sender_is_player;
-    pending_sender_unique_id_ = sender_is_player ? std::move(sender_unique_id) : std::string{};
-
-    // Join any completed export thread before starting a new one.
-    if (export_thread_.joinable()) {
-        export_thread_.join();
-    }
-
-    exporting_.store(true);
     try {
-        export_thread_ = std::thread([this] { runExport(); });
+        ensureExportWorker();
+
+        ExportJob job;
+        job.context = std::move(context);
+        job.save_to_file = save;
+        job.sender = sender_name;
+        job.sender_is_player = sender_is_player;
+        job.sender_unique_id = sender_is_player ? std::move(sender_unique_id) : std::string{};
+        job.lifetime_token = lifetime_;
+        {
+            std::scoped_lock lock(export_mutex_);
+            if (export_stop_requested_ || export_job_.has_value() || export_result_.has_value()) {
+                throw std::runtime_error("the profile export worker is not ready for a new job");
+            }
+            export_cancellation_.reset();
+            job.cancellation = export_cancellation_.token();
+            export_job_ = std::move(job);
+            exporting_.store(true, std::memory_order_release);
+        }
+        export_cv_.notify_one();
+    }
+    catch (const std::exception &error) {
+        exporting_.store(false);
+        std::string resume_error;
+        profiler_.resumePersistentAllocationCounting(resume_error);
+        restore_background();
+        notify_best_effort(sender_name, std::string("Failed to start the profile export worker: ") + error.what());
     }
     catch (...) {
         exporting_.store(false);
@@ -235,56 +298,199 @@ void ProfilerService::finishProfiler(const std::string &sender_name, bool sender
     }
 }
 
-void ProfilerService::runExport() noexcept
+void ProfilerService::ensureExportWorker()
+{
+    std::scoped_lock lock(export_mutex_);
+    if (export_thread_.joinable()) {
+        if (export_worker_exited_) {
+            throw std::runtime_error("the profile export worker has exited");
+        }
+        return;
+    }
+    if (export_stop_requested_) {
+        throw std::runtime_error("the profile export worker is stopping");
+    }
+    export_worker_exited_ = false;
+    try {
+        export_thread_ = std::thread([this] { exportWorkerLoop(); });
+    }
+    catch (...) {
+        export_worker_exited_ = true;
+        throw;
+    }
+}
+
+void ProfilerService::exportWorkerLoop() noexcept
 {
     CiDiagnostics *diagnostics = globalCiDiagnostics();
     const std::uint64_t worker_tid = ciDiagnosticCurrentThreadId();
+    std::optional<ExportJob> active_job;
     try {
-        CiDiagnostics::Scope diagnostic_scope(diagnostics, CiDiagnosticContext::Export, CiDiagnosticPhase::ExportEnter,
-                                              CiDiagnosticPhase::ExportComplete, CiDiagnosticPhase::ExportFailed,
-                                              worker_tid);
-        ProfileExporter::Result result = exporter_.exportProfile(profiler_, pending_ctx_, pending_save_);
-        pending_outcome_ = result.outcome;
-        pending_result_ = std::move(result.message);
-    }
-    catch (const std::exception &error) {
-        pending_outcome_ = ExportOutcome::Failed;
-        pending_result_ = std::string("Export failed: ") + error.what();
-    }
-    catch (...) {
-        pending_outcome_ = ExportOutcome::Failed;
-        pending_result_ = "Export failed with an unknown error.";
-    }
-    const std::weak_ptr<int> lifetime = lifetime_;
-    try {
-        dispatcher_.runOnMainThread([this, lifetime]() {
-            if (lifetime.expired()) {
-                return;
+        for (;;) {
+            {
+                std::unique_lock lock(export_mutex_);
+                export_cv_.wait(lock, [this] { return export_stop_requested_ || export_job_.has_value(); });
+                if (export_stop_requested_ && !export_job_.has_value()) {
+                    break;
+                }
+                active_job = std::move(*export_job_);
+                export_job_.reset();
             }
-            announceResult();
-        });
-        if (diagnostics != nullptr) {
-            diagnostics->publish(CiDiagnosticContext::Export, CiDiagnosticPhase::ExportCompletionQueued, worker_tid);
+
+#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+            if (export_job_preparation_hook_) {
+                export_job_preparation_hook_();
+            }
+#endif
+            ExportResult published;
+            published.sender = std::move(active_job->sender);
+            published.sender_is_player = active_job->sender_is_player;
+            published.sender_unique_id = std::move(active_job->sender_unique_id);
+            try {
+                CiDiagnostics::Scope diagnostic_scope(diagnostics, CiDiagnosticContext::Export,
+                                                      CiDiagnosticPhase::ExportEnter, CiDiagnosticPhase::ExportComplete,
+                                                      CiDiagnosticPhase::ExportFailed, worker_tid);
+#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+                ProfileExporter::Result result = export_function_(profiler_, active_job->context,
+                                                                  active_job->save_to_file, active_job->cancellation);
+#else
+                ProfileExporter::Result result = exporter_.exportProfile(
+                    profiler_, active_job->context, active_job->save_to_file, active_job->cancellation);
+#endif
+                published.outcome = result.outcome;
+                published.message = std::move(result.message);
+                published.retain_recovery_journal = result.retain_recovery_journal;
+            }
+            catch (const std::exception &error) {
+                std::string ignored;
+                profiler_.resumePersistentAllocationCounting(ignored);
+                published.message = std::string("Export failed: ") + error.what();
+                published.retain_recovery_journal = active_job->cancellation.stopRequested();
+            }
+            catch (...) {
+                std::string ignored;
+                profiler_.resumePersistentAllocationCounting(ignored);
+                published.message = "Export failed with an unknown error.";
+                published.retain_recovery_journal = active_job->cancellation.stopRequested();
+            }
+
+            {
+                std::scoped_lock lock(export_mutex_);
+                export_result_ = std::move(published);
+                export_completion_pending_.store(true, std::memory_order_release);
+            }
+            active_job.reset();
+            export_cv_.notify_all();
+#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+            if (export_post_publication_hook_) {
+                export_post_publication_hook_();
+            }
+#endif
         }
     }
     catch (...) {
-        export_completion_pending_.store(true, std::memory_order_release);
-        if (diagnostics != nullptr) {
-            diagnostics->publish(CiDiagnosticContext::Export, CiDiagnosticPhase::ExportCompletionFallback, worker_tid);
+        // The worker is only allowed to end through the shutdown state. A
+        // current job still receives a terminal result before that state is published.
+        std::optional<ExportJob> abandoned;
+        {
+            std::scoped_lock lock(export_mutex_);
+            if (active_job.has_value()) {
+                abandoned = std::move(active_job);
+                active_job.reset();
+            }
+            else if (export_job_.has_value()) {
+                abandoned = std::move(export_job_);
+                export_job_.reset();
+            }
+            if (!export_result_.has_value() && abandoned.has_value()) {
+                ExportResult published;
+                published.sender = abandoned->sender;
+                published.sender_is_player = abandoned->sender_is_player;
+                published.sender_unique_id = std::move(abandoned->sender_unique_id);
+                published.message = "Export failed with an unknown error.";
+                published.retain_recovery_journal = abandoned->cancellation.stopRequested();
+                export_result_ = std::move(published);
+                export_completion_pending_.store(true, std::memory_order_release);
+            }
+        }
+        export_cv_.notify_all();
+    }
+
+    // No local job or I/O remains after the exited flag is published.
+    {
+        std::scoped_lock lock(export_mutex_);
+        export_worker_exited_ = true;
+    }
+    export_exit_cv_.notify_all();
+}
+
+bool ProfilerService::waitForExportWorker(std::chrono::milliseconds timeout)
+{
+    std::unique_lock lock(export_mutex_);
+    if (!export_thread_.joinable() || export_worker_exited_) {
+        return true;
+    }
+    return export_exit_cv_.wait_for(lock, timeout, [this] { return export_worker_exited_; });
+}
+
+bool ProfilerService::consumeFinishedExport(bool notify) noexcept
+{
+    std::optional<ExportResult> result;
+    {
+        std::scoped_lock lock(export_mutex_);
+        if (!export_result_.has_value()) {
+            return false;
+        }
+        result = std::move(export_result_);
+        export_result_.reset();
+        export_completion_pending_.store(false, std::memory_order_release);
+    }
+    exporting_.store(false, std::memory_order_release);
+    if (notify) {
+        announceResult(std::move(*result));
+    }
+    else {
+        if (preserve_recovery_journal_on_shutdown_ ||
+            (result->outcome != ExportOutcome::Uploaded && result->outcome != ExportOutcome::Saved) ||
+            result->retain_recovery_journal) {
+            profiler_.retainRecoveryJournalOnShutdown();
+        }
+        else {
+            try {
+                const RecoveryDiscardResult discard_result = profiler_.discardRecoveryJournal();
+                if (!discard_result.completed()) {
+                    profiler_.retainRecoveryJournalOnShutdown();
+                }
+            }
+            catch (...) {  // NOLINT(bugprone-empty-catch): shutdown has no notifier.
+                profiler_.retainRecoveryJournalOnShutdown();
+            }
         }
     }
+    return true;
 }
 
 void ProfilerService::announceResult() noexcept
 {
+    ExportResult result;
+    result.outcome = pending_outcome_;
+    result.sender = std::move(pending_sender_);
+    result.sender_is_player = pending_sender_is_player_;
+    result.sender_unique_id = std::move(pending_sender_unique_id_);
+    result.message = std::move(pending_result_);
+    announceResult(std::move(result));
+}
+
+void ProfilerService::announceResult(ExportResult result) noexcept
+{
     CiDiagnostics::Scope diagnostic_scope(globalCiDiagnostics(), CiDiagnosticContext::Completion,
                                           CiDiagnosticPhase::CompletionEnter, CiDiagnosticPhase::CompletionExit,
                                           CiDiagnosticPhase::CompletionExceptionalExit, ciDiagnosticCurrentThreadId());
-    const ExportOutcome outcome = pending_outcome_;
-    const std::string sender = std::move(pending_sender_);
-    const bool sender_is_player = pending_sender_is_player_;
-    const std::string sender_unique_id = std::move(pending_sender_unique_id_);
-    const std::string result = std::move(pending_result_);
+    const ExportOutcome outcome = result.outcome;
+    const std::string sender = std::move(result.sender);
+    const bool sender_is_player = result.sender_is_player;
+    const std::string sender_unique_id = std::move(result.sender_unique_id);
+    std::string result_message = std::move(result.message);
     const char *headline = "Profiler stopped.";
     if (outcome == ExportOutcome::Uploaded) {
         headline = "Profiler stopped & upload complete!";
@@ -293,18 +499,32 @@ void ProfilerService::announceResult() noexcept
         headline = "Profiler stopped & saved locally!";
     }
 
-    // A successful export means the profile is safely delivered; discard the
-    // crash-recovery journal so the next startup does not treat it as a crash.
-    // On failure the journal is retained so a subsequent crash can still recover.
+    if ((outcome != ExportOutcome::Uploaded && outcome != ExportOutcome::Saved) || result.retain_recovery_journal) {
+        profiler_.retainRecoveryJournalOnShutdown();
+    }
+
+    // A successful export means the profile is safely delivered; journal cleanup
+    // is a separate best-effort operation and never changes that outcome.
     if (outcome == ExportOutcome::Uploaded || outcome == ExportOutcome::Saved) {
-        try {
-            profiler_.discardRecoveryJournal();
+        if (result.retain_recovery_journal) {
+            result_message += " Recovery journal retained: shutdown was requested.";
         }
-        catch (...) {  // NOLINT(bugprone-empty-catch): a delivered profile remains usable.
+        else {
+            try {
+                const RecoveryDiscardResult discard_result = profiler_.discardRecoveryJournal();
+                if (!discard_result.completed()) {
+                    profiler_.retainRecoveryJournalOnShutdown();
+                    result_message += " Recovery journal retained: " + discard_result.message;
+                }
+            }
+            catch (...) {  // NOLINT(bugprone-empty-catch): a delivered profile remains usable.
+                profiler_.retainRecoveryJournalOnShutdown();
+                result_message += " Recovery journal retained: cleanup failed.";
+            }
         }
     }
 
-    exporting_.store(false);
+    exporting_.store(false, std::memory_order_release);
     if (restart_background_after_export_) {
         restart_background_after_export_ = false;
         background_suppressed_ = false;
@@ -324,7 +544,7 @@ void ProfilerService::announceResult() noexcept
         }
     };
     notify_best_effort(sender, headline);
-    notify_best_effort(sender, result);
+    notify_best_effort(sender, result_message);
 
     try {
         if (activity_log_provider_) {
@@ -332,10 +552,12 @@ void ProfilerService::announceResult() noexcept
             if (log) {
                 const std::int64_t now_ms = nowMs();
                 if (outcome == ExportOutcome::Uploaded) {
-                    log->add(Activity::url(sender, sender_is_player, now_ms, "Profiler", result, sender_unique_id));
+                    log->add(
+                        Activity::url(sender, sender_is_player, now_ms, "Profiler", result_message, sender_unique_id));
                 }
                 else if (outcome == ExportOutcome::Saved) {
-                    log->add(Activity::file(sender, sender_is_player, now_ms, "Profiler", result, sender_unique_id));
+                    log->add(
+                        Activity::file(sender, sender_is_player, now_ms, "Profiler", result_message, sender_unique_id));
                 }
             }
         }
@@ -346,9 +568,7 @@ void ProfilerService::announceResult() noexcept
 
 void ProfilerService::onTick(double mspt)
 {
-    if (export_completion_pending_.exchange(false, std::memory_order_acq_rel)) {
-        announceResult();
-    }
+    consumeFinishedExport(true);
     if (timeout_completion_pending_.exchange(false, std::memory_order_acq_rel)) {
         if (CiDiagnostics *diagnostics = globalCiDiagnostics(); diagnostics != nullptr) {
             diagnostics->publish(CiDiagnosticContext::Timeout, CiDiagnosticPhase::TimeoutCompletion,

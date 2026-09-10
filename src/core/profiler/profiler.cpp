@@ -105,6 +105,10 @@ void Profiler::accumulatePersistentAllocationBytes() noexcept
 bool Profiler::startPersistentAllocationCounting(std::string &error)
 {
     error.clear();
+    if (allocation_sampler_.backendCleanupPending()) {
+        error = "the allocation backend is still finishing cleanup";
+        return false;
+    }
     if (persistent_allocation_counting_active_.load(std::memory_order_acquire)) {
         return true;
     }
@@ -118,6 +122,7 @@ bool Profiler::startPersistentAllocationCounting(std::string &error)
     config.session_seed = persistent_allocation_session_seed_;
     config.all_threads = true;
     config.count_only = true;
+    persistent_allocation_stop_accumulated_.store(false, std::memory_order_release);
     allocation_sampler_.setRecoverySink(nullptr);
     if (!allocation_sampler_.start(config, error)) {
         return false;
@@ -129,17 +134,22 @@ bool Profiler::startPersistentAllocationCounting(std::string &error)
 bool Profiler::stopPersistentAllocationCounting(std::string &error)
 {
     error.clear();
-    if (!persistent_allocation_counting_active_.load(std::memory_order_acquire)) {
+    const bool active = persistent_allocation_counting_active_.load(std::memory_order_acquire);
+    if (!active && !allocation_sampler_.backendCleanupPending()) {
         return true;
     }
     if (!allocation_sampler_.stop(error)) {
-        if (!allocation_sampler_.running()) {
-            accumulatePersistentAllocationBytes();
+        if (!allocation_sampler_.running() && !allocation_sampler_.backendCleanupPending()) {
+            if (!persistent_allocation_stop_accumulated_.exchange(true, std::memory_order_acq_rel)) {
+                accumulatePersistentAllocationBytes();
+            }
             persistent_allocation_counting_active_.store(false, std::memory_order_release);
         }
         return false;
     }
-    accumulatePersistentAllocationBytes();
+    if (!persistent_allocation_stop_accumulated_.exchange(true, std::memory_order_acq_rel)) {
+        accumulatePersistentAllocationBytes();
+    }
     persistent_allocation_counting_active_.store(false, std::memory_order_release);
     return true;
 }
@@ -209,13 +219,22 @@ bool Profiler::start(const ProfilerOptions &options, std::uint64_t main_tid, std
         error = "profiler is already running";
         return false;
     }
-    if (allocation_export_pending_.load(std::memory_order_acquire)) {
-        error = "previous allocation profile is still awaiting export or discard";
+    if (retain_recovery_journal_on_shutdown_.load(std::memory_order_acquire)) {
+        error = "the previous recovery journal is retained until export cleanup completes";
         return false;
     }
     if (!reapRecoveryWriter()) {
-        error = allocation_sampler_.aggregatorMayBeAlive() ? "the allocation aggregator is still finishing"
-                                                           : "previous recovery writer is still stopping";
+        if (allocation_sampler_.backendCleanupPending()) {
+            error = "the allocation backend is still finishing cleanup";
+        }
+        else {
+            error = allocation_sampler_.aggregatorMayBeAlive() ? "the allocation aggregator is still finishing"
+                                                               : "previous recovery writer is still stopping";
+        }
+        return false;
+    }
+    if (allocation_export_pending_.load(std::memory_order_acquire)) {
+        error = "previous allocation profile is still awaiting export or discard";
         return false;
     }
     sampling_stop_requested_.store(false, std::memory_order_release);
@@ -267,10 +286,15 @@ bool Profiler::start(const ProfilerOptions &options, std::uint64_t main_tid, std
         config.live_only = options.alloc_live_only;
         config.fail_aggregator_for_testing = options.fail_allocation_aggregator_for_testing;
         config.aggregator_delay_ms_for_testing = options.allocation_aggregator_delay_ms_for_testing;
+        if (allocation_sampler_.backendCleanupPending()) {
+            error = "the allocation backend is still finishing cleanup";
+            return false;
+        }
         if (persistent_allocation_counting_active_.load(std::memory_order_acquire) &&
             !stopPersistentAllocationCounting(error)) {
             return false;
         }
+        persistent_allocation_stop_accumulated_.store(false, std::memory_order_release);
         if (!recovery_dir_.empty()) {
             RecoveryWriter::Config wc;
             wc.directory = recovery_dir_;
@@ -427,7 +451,9 @@ bool Profiler::stopSampling(std::string &error)
     if (mode_ == ProfileMode::Allocation) {
         if (!allocation_sampler_.stop(error)) {
             if (!allocation_sampler_.running()) {
-                if (persistent_allocation_counting_enabled_.load(std::memory_order_acquire)) {
+                if (persistent_allocation_counting_enabled_.load(std::memory_order_acquire) &&
+                    !allocation_sampler_.backendCleanupPending() &&
+                    !persistent_allocation_stop_accumulated_.exchange(true, std::memory_order_acq_rel)) {
                     accumulatePersistentAllocationBytes();
                 }
                 allocation_export_pending_.store(true, std::memory_order_release);
@@ -436,7 +462,8 @@ bool Profiler::stopSampling(std::string &error)
             }
             return false;
         }
-        if (persistent_allocation_counting_enabled_.load(std::memory_order_acquire)) {
+        if (persistent_allocation_counting_enabled_.load(std::memory_order_acquire) &&
+            !persistent_allocation_stop_accumulated_.exchange(true, std::memory_order_acq_rel)) {
             accumulatePersistentAllocationBytes();
         }
         stopRecoveryWriter();
@@ -482,10 +509,14 @@ bool Profiler::resumePersistentAllocationCounting(std::string &error)
     // If a failed allocation stop left native cleanup incomplete, finish that
     // cleanup before releasing the export/discard barrier or starting count-only.
     if (mode_ == ProfileMode::Allocation && !running_.load(std::memory_order_acquire) &&
-        !allocation_sampler_.running()) {
+        (!allocation_sampler_.running() || allocation_sampler_.backendCleanupPending())) {
         std::string cleanup_error;
         if (!allocation_sampler_.stop(cleanup_error)) {
             error = std::move(cleanup_error);
+            return false;
+        }
+        if (allocation_sampler_.backendCleanupPending()) {
+            error = "the allocation backend is still finishing cleanup";
             return false;
         }
         stopRecoveryWriter();
@@ -614,9 +645,10 @@ bool Profiler::cancel(std::string &error)
             error = resume_error.empty() ? "the allocation backend cleanup is incomplete" : std::move(resume_error);
             return false;
         }
-        discardRecoveryJournal();
-        if (hasPendingRecoveryWriter()) {
-            error = "recovery writer shutdown timed out";
+        const RecoveryDiscardResult discard_result = discardRecoveryJournal();
+        if (!discard_result.completed()) {
+            error =
+                discard_result.message.empty() ? "recovery journal cleanup did not complete" : discard_result.message;
             return false;
         }
         error.clear();
@@ -633,9 +665,10 @@ bool Profiler::cancel(std::string &error)
             return false;
         }
         error.clear();
-        discardRecoveryJournal();
-        if (hasPendingRecoveryWriter()) {
-            error = "recovery writer shutdown timed out";
+        const RecoveryDiscardResult discard_result = discardRecoveryJournal();
+        if (!discard_result.completed()) {
+            error =
+                discard_result.message.empty() ? "recovery journal cleanup did not complete" : discard_result.message;
             return false;
         }
         return true;
@@ -661,41 +694,46 @@ bool Profiler::shutdown(std::string &error)
     sampling_stop_requested_.store(true, std::memory_order_release);
     std::scoped_lock lifecycle_lock(lifecycle_mutex_);
     error.clear();
-    persistent_allocation_counting_enabled_.store(false, std::memory_order_release);
-    persistent_allocation_counting_active_.store(false, std::memory_order_release);
-    allocation_export_pending_.store(false, std::memory_order_release);
-    if (running_.load() && mode_ == ProfileMode::Allocation) {
-        if (!allocation_sampler_.shutdown(error)) {
-            return false;
-        }
-        stopRecoveryWriter();
-        running_.store(false);
-        discardRecoveryJournal();
-        if (hasPendingRecoveryWriter()) {
-            error = "recovery writer shutdown timed out";
-            return false;
-        }
-        return true;
+    // requestStop() may have cleared running_ while service threads still exist.
+    // Stop both native backends explicitly before releasing their sinks.
+    if (!sampler_.stop()) {
+        error = sampler_.lastError();
+        return false;
     }
-    if (running_.load()) {
-        if (!sampler_.stop()) {
-            error = sampler_.lastError();
-            return false;
-        }
-        stopRecoveryWriter();
-        running_.store(false);
-    }
-    // The allocation sampler must consolidate before its recovery sink goes away.
+    const bool allocation_backend_active = allocation_sampler_.running() || allocation_sampler_.backendCleanupPending();
+    const bool persistent_counting_active = persistent_allocation_counting_active_.load(std::memory_order_acquire);
     if (!allocation_sampler_.shutdown(error)) {
         return false;
     }
-    // Clean shutdown: discard the journal so the next startup does not treat
-    // it as a crash.  This is safe even if no journal exists.
-    discardRecoveryJournal();
+
+    if (persistent_allocation_counting_enabled_.load(std::memory_order_acquire) &&
+        (persistent_counting_active || allocation_backend_active) &&
+        !persistent_allocation_stop_accumulated_.exchange(true, std::memory_order_acq_rel)) {
+        accumulatePersistentAllocationBytes();
+    }
+    persistent_allocation_counting_active_.store(false, std::memory_order_release);
+    persistent_allocation_counting_enabled_.store(false, std::memory_order_release);
+    persistent_allocation_session_seed_ = 0;
+    running_.store(false, std::memory_order_release);
+
+    // Native backends must be quiescent before the recovery writer is released.
+    stopRecoveryWriter();
     if (hasPendingRecoveryWriter()) {
         error = "recovery writer shutdown timed out";
         return false;
     }
+    if (retain_recovery_journal_on_shutdown_.load(std::memory_order_acquire)) {
+        return true;
+    }
+    const RecoveryDiscardResult discard_result = discardRecoveryJournal();
+    if (!discard_result.completed()) {
+        error = discard_result.message;
+        if (error.empty()) {
+            error = "recovery journal cleanup did not complete";
+        }
+        return false;
+    }
+    allocation_export_pending_.store(false, std::memory_order_release);
     return true;
 }
 

@@ -3,6 +3,11 @@
 
 #include "native/alloc/allocation_sampler.h"
 
+#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+#include "native/alloc/allocation_diagnostics_test_access.h"
+#include "native/alloc/allocation_lifecycle_test_access.h"
+#endif
+
 namespace spark {
 
 // NOLINTBEGIN(readability-convert-member-functions-to-static)
@@ -49,6 +54,18 @@ bool AllocationSampler::snapshot(AllocationSnapshot &, std::string &error)
 {
     error = "native allocation profiling is not supported on this platform";
     return false;
+}
+
+AllocationDiagnostics AllocationSampler::diagnostics() const
+{
+    AllocationDiagnostics result;
+    result.accounting_state = AllocationAccountingState::NotApplicable;
+    return result;
+}
+
+AllocationDiagnosticsSnapshot AllocationSampler::allocationDiagnostics() const
+{
+    return diagnostics();
 }
 
 bool AllocationSampler::setCurrentThreadTrackingSuppressed(bool) noexcept
@@ -174,6 +191,14 @@ std::uint64_t AllocationSampler::peakLiveSamples() const
     return 0;
 }
 std::uint64_t AllocationSampler::liveIndexCapacity()
+{
+    return 0;
+}
+std::uint64_t AllocationSampler::liveRecordCapacity()
+{
+    return 0;
+}
+std::uint64_t AllocationSampler::moduleCacheCapacity()
 {
     return 0;
 }
@@ -308,6 +333,191 @@ bool AllocationSampler::aggregatorMayBeAlive() const
 {
     return false;
 }
+
+bool AllocationSampler::backendCleanupPending() const
+{
+    return false;
+}
+
+#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+namespace test {
+
+bool AllocationDiagnosticsTestAccess::configureFixture(AllocationSampler &, bool, bool,
+                                                       AllocationFixtureWorkerGate *) noexcept
+{
+    return false;
+}
+
+bool AllocationDiagnosticsTestAccess::releaseFixture(AllocationSampler &) noexcept
+{
+    return false;
+}
+
+bool AllocationDiagnosticsTestAccess::fixtureStorageReady(const AllocationSampler &) noexcept
+{
+    return false;
+}
+
+bool AllocationDiagnosticsTestAccess::fixtureWorkerPresent(const AllocationSampler &) noexcept
+{
+    return false;
+}
+
+bool AllocationDiagnosticsTestAccess::fixtureHooksPresent(const AllocationSampler &) noexcept
+{
+    return false;
+}
+
+bool AllocationDiagnosticsTestAccess::fixtureAggregatorRunning(const AllocationSampler &) noexcept
+{
+    return false;
+}
+
+bool AllocationDiagnosticsTestAccess::seedFixtureQueues(AllocationSampler &, AllocationFixtureSeedCounts &) noexcept
+{
+    return false;
+}
+
+bool AllocationDiagnosticsTestAccess::seedFixtureQueues(AllocationSampler &, AllocationFixtureSeedCounts &,
+                                                        const AllocationFixtureSeedCounts &) noexcept
+{
+    return false;
+}
+
+bool AllocationDiagnosticsTestAccess::recordFixtureAllocation(AllocationSampler &, void *, std::uint64_t) noexcept
+{
+    return false;
+}
+
+bool AllocationLifecycleTestAccess::holdTrackingCall(AllocationSampler &, TrackingGate &gate) noexcept
+{
+    gate.exited.store(true, std::memory_order_release);
+    return false;
+}
+
+void AllocationLifecycleTestAccess::armThreadCreationFailure(AllocationSampler &, StartFailureGate &) noexcept {}
+
+void AllocationLifecycleTestAccess::disarmThreadCreationFailure(AllocationSampler &) noexcept {}
+
+void AllocationDiagnosticsTestAccess::forceAggregatorCpuReadFailure(AllocationSampler &, bool) noexcept {}
+
+void AllocationDiagnosticsTestAccess::forceAggregatorCpuZero(AllocationSampler &, bool) noexcept {}
+
+void AllocationDiagnosticsTestAccess::armEventProcessingGate(AllocationSampler &,
+                                                             AllocationEventProcessingGate &gate) noexcept
+{
+    gate.entered.store(false, std::memory_order_relaxed);
+    gate.release.store(false, std::memory_order_relaxed);
+    gate.timed_out.store(false, std::memory_order_relaxed);
+}
+
+void AllocationDiagnosticsTestAccess::disarmEventProcessingGate(AllocationSampler &) noexcept {}
+
+void AllocationDiagnosticsTestAccess::forceProcessEventFailure(AllocationSampler &, bool) noexcept {}
+
+bool AllocationDiagnosticsTestAccess::configureFixtureCpuWork(AllocationSampler &,
+                                                              AllocationFixtureCpuWorkControl &) noexcept
+{
+    return false;
+}
+
+void AllocationDiagnosticsTestAccess::forceDrainDeadline(AllocationSampler &, bool) noexcept {}
+
+void AllocationDiagnosticsTestAccess::forceRetainedWalkBudget(AllocationSampler &, bool) noexcept {}
+
+std::uint64_t AllocationDiagnosticsTestAccess::retainedWalkVisits(const AllocationSampler &) noexcept
+{
+    return 0;
+}
+
+bool AllocationDiagnosticsTestAccess::drainFixtureAggregatorContext(AllocationSampler &) noexcept
+{
+    return false;
+}
+
+bool AllocationDiagnosticsTestAccess::seedFixtureLiveAllocations(AllocationSampler &, void *const *,
+                                                                 std::size_t) noexcept
+{
+    return false;
+}
+
+bool AllocationDiagnosticsTestAccess::prepareFixtureLiveRecord(AllocationSampler &, void *, std::uint64_t,
+                                                               AllocationFixtureLiveRecord &) noexcept
+{
+    return false;
+}
+
+bool AllocationDiagnosticsTestAccess::holdInsertionShardLock(AllocationSampler &, void *,
+                                                             AllocationFixtureLockGate &) noexcept
+{
+    return false;
+}
+
+bool AllocationDiagnosticsTestAccess::holdDetachShardLock(AllocationSampler &, void *,
+                                                          AllocationFixtureLockGate &) noexcept
+{
+    return false;
+}
+
+bool AllocationDiagnosticsTestAccess::insertFixtureLiveRecord(AllocationSampler &, AllocationFixtureLiveRecord &,
+                                                              bool) noexcept
+{
+    return false;
+}
+
+bool AllocationDiagnosticsTestAccess::detachFixtureLiveRecord(AllocationSampler &,
+                                                              AllocationFixtureLiveRecord &) noexcept
+{
+    return false;
+}
+
+void AllocationDiagnosticsTestAccess::retireFixtureLiveRecord(AllocationSampler &,
+                                                              AllocationFixtureLiveRecord &) noexcept
+{
+}
+
+void AllocationDiagnosticsTestAccess::releaseFixtureLiveRecord(AllocationSampler &,
+                                                               AllocationFixtureLiveRecord &) noexcept
+{
+}
+
+bool AllocationDiagnosticsTestAccess::fileTimeToNanoseconds(std::uint32_t, std::uint32_t, std::uint64_t &value) noexcept
+{
+    value = 0;
+    return false;
+}
+
+void AllocationDiagnosticsTestAccess::seedModuleCache(AllocationSampler &, std::size_t) noexcept {}
+
+bool AllocationDiagnosticsTestAccess::resolveFrameOnce(AllocationSampler &) noexcept
+{
+    return false;
+}
+
+bool AllocationDiagnosticsTestAccess::resolveFrameTwice(AllocationSampler &) noexcept
+{
+    return false;
+}
+
+bool AllocationDiagnosticsTestAccess::resolveMissingFrame(AllocationSampler &) noexcept
+{
+    return false;
+}
+
+bool AllocationDiagnosticsTestAccess::exerciseRecordPoolEmpty(AllocationSampler &, void *) noexcept
+{
+    return false;
+}
+
+bool AllocationDiagnosticsTestAccess::exerciseInsertionProbeExhaustion(AllocationSampler &, void *,
+                                                                       std::size_t) noexcept
+{
+    return false;
+}
+
+}  // namespace test
+#endif
+
 std::uint64_t AllocationSampler::retainedAverageAgeMs() const
 {
     return 0;

@@ -2,11 +2,15 @@
 #define SPARK_APPLICATION_PROFILER_PROFILER_SERVICE_H
 
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -23,6 +27,7 @@
 #include "core/stats/network_monitor.h"
 #include "core/stats/statistics_service.h"
 #include "core/ws/viewer_socket.h"
+#include "net/cancellation.h"
 
 namespace spark {
 
@@ -100,6 +105,7 @@ public:
 
     // Lifecycle.
     void shutdown();
+    bool shutdown(std::string &error);
     bool shutdownBackend(std::string &error) { return profiler_.shutdown(error); }
     bool running() const { return profiler_.running(); }
     bool exporting() const { return exporting_.load(); }
@@ -137,8 +143,29 @@ private:
     void sendAllocationHookCoverage(CommandSender &sender);
     void finishProfiler(const std::string &sender_name, bool sender_is_player, std::string sender_unique_id, bool save,
                         const std::string &comment);
-    void runExport() noexcept;
+    struct ExportJob {
+        ExportContext context;
+        bool save_to_file = false;
+        std::string sender;
+        bool sender_is_player = false;
+        std::string sender_unique_id;
+        CancellationToken cancellation;
+        std::shared_ptr<int> lifetime_token;
+    };
+    struct ExportResult {
+        ExportOutcome outcome = ExportOutcome::Failed;
+        std::string message;
+        std::string sender = "CONSOLE";
+        bool sender_is_player = false;
+        std::string sender_unique_id;
+        bool retain_recovery_journal = false;
+    };
+    void ensureExportWorker();
+    void exportWorkerLoop() noexcept;
+    bool waitForExportWorker(std::chrono::milliseconds timeout);
+    bool consumeFinishedExport(bool notify) noexcept;
     void announceResult() noexcept;
+    void announceResult(ExportResult result) noexcept;
     bool startBackgroundSession() noexcept;
     void closeViewerSocket();
     void resetProfilerTimeout() noexcept;
@@ -175,6 +202,15 @@ private:
 
     std::atomic<bool> exporting_{false};
     std::atomic<bool> export_completion_pending_{false};
+    mutable std::mutex export_mutex_;
+    std::condition_variable export_cv_;
+    std::condition_variable export_exit_cv_;
+    std::optional<ExportJob> export_job_;
+    std::optional<ExportResult> export_result_;
+    CancellationSource export_cancellation_;
+    bool export_stop_requested_ = false;
+    bool export_worker_exited_ = true;
+    bool preserve_recovery_journal_on_shutdown_ = false;
     ProfilerTimeout profiler_timeout_;
     std::atomic<bool> timeout_completion_pending_{false};
     SessionType session_type_ = SessionType::None;
@@ -191,9 +227,7 @@ private:
     std::vector<NativePluginSource> session_native_plugin_sources_;
     std::thread export_thread_;
 
-    // Export params, set on the main thread before runExport() runs on export_thread_.
-    ExportContext pending_ctx_;
-    bool pending_save_ = false;
+    // Legacy test seam; production jobs/results are owned by export_mutex_.
     std::string pending_sender_ = "CONSOLE";
     bool pending_sender_is_player_ = false;
     std::string pending_sender_unique_id_;
@@ -214,6 +248,15 @@ private:
     std::string viewer_url_;
     std::string bytesocks_host_;
     TrustedViewersState &trusted_viewers_;
+
+#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+    using ExportFunction =
+        std::function<ProfileExporter::Result(Profiler &, const ExportContext &, bool, CancellationToken)>;
+    ExportFunction export_function_;
+    std::function<void()> export_post_publication_hook_;
+    std::function<void()> export_job_preparation_hook_;
+    std::chrono::milliseconds export_shutdown_timeout_{5000};
+#endif
 };
 
 }  // namespace spark

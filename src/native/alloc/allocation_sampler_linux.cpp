@@ -6,6 +6,7 @@
 
 #include <dlfcn.h>
 #include <pthread.h>
+#include <sched.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -19,6 +20,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <exception>
 #include <limits>
 #include <map>
 #include <memory>
@@ -37,6 +39,11 @@
 #include <sys/syscall.h>
 
 #include "native/alloc/allocation_profile_aggregation.h"
+#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+#include "native/alloc/allocation_diagnostics_test_access.h"
+#include "native/alloc/allocation_lifecycle_test_access.h"
+#endif
+#include "native/alloc/allocation_quiescence.h"
 #include "native/alloc/bounded_event_queue.h"
 #include "native/alloc/byte_sampler.h"
 #include "native/alloc/elf_import_hooks.h"
@@ -61,6 +68,38 @@ constexpr std::size_t KMaxProfileNodes = 131072;
 constexpr std::size_t KMaxPendingSamples = 32768;
 constexpr std::size_t KMaxTickDecisions = 100000;
 constexpr std::size_t KTickEventCapacity = 4096;
+
+#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+struct AllocationThreadCreationFailureForTesting {};
+
+void yieldLifecycleTest() noexcept
+{
+    (void)::sched_yield();
+}
+
+void diagnosticsTestFrameAnchor() noexcept {}
+
+bool waitFixtureWorkerGate(test::AllocationFixtureWorkerGate &gate) noexcept
+{
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(gate.timeout_ms);
+    while (!gate.release.load(std::memory_order_acquire)) {
+        if (std::chrono::steady_clock::now() >= deadline) {
+            gate.timed_out.store(true, std::memory_order_release);
+            break;
+        }
+        yieldLifecycleTest();
+    }
+    try {
+        std::lock_guard lock(gate.seed_mutex);
+    }
+    catch (...) {
+        gate.timed_out.store(true, std::memory_order_release);
+        return false;
+    }
+    return !gate.timed_out.load(std::memory_order_acquire);
+}
+#endif
+
 // cpptrace::safe_generate_raw_trace adds one frame to the requested skip internally.
 // Skip only recordAllocation -> handleMalloc -> hookMalloc here so the real allocating caller is retained.
 constexpr std::size_t KFramesToSkip = 3;
@@ -78,6 +117,12 @@ std::uint64_t monotonicMs() noexcept
         return 0;
     }
     return static_cast<std::uint64_t>(value.tv_sec) * 1000 + static_cast<std::uint64_t>(value.tv_nsec) / 1000000;
+}
+
+std::uint64_t monotonicNs() noexcept
+{
+    const auto now = std::chrono::steady_clock::now().time_since_epoch();
+    return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(now).count());
 }
 
 std::uint64_t saturatingMultiply(std::uint64_t a, std::uint64_t b) noexcept
@@ -404,12 +449,15 @@ struct AllocationSampler::Impl {
     AllocationSamplerConfig config{};
     std::atomic<bool> tracking{false};
     std::atomic<bool> running{false};
+    std::atomic<AllocationAccountingState> accounting_state{AllocationAccountingState::NotStarted};
     std::atomic<bool> tick_admission_open{true};
     std::atomic<bool> finalize_pending{false};
     std::atomic<bool> pending_finalized{false};
     std::atomic<std::uint64_t> terminal_tick{0};
     std::atomic<bool> aggregator_running{false};
     std::atomic<bool> aggregator_failed{false};
+    std::atomic<bool> backend_cleanup_pending{false};
+    std::atomic<bool> backend_shutdown_pending{false};
     std::array<char, 256> aggregator_failure{};
     std::array<std::atomic<std::uint64_t>, KHookCallShards> tracking_calls{};
     std::atomic<std::uint64_t> current_tick{0};
@@ -448,6 +496,27 @@ struct AllocationSampler::Impl {
     std::atomic<std::uint64_t> lifecycle_writers{0};
     std::atomic<std::uint64_t> retained_age_ms_total{0};
     std::atomic<std::uint64_t> retained_age_ms_max{0};
+    std::atomic<std::uint64_t> drain_truncated{0};
+    std::atomic<std::uint64_t> drain_truncated_allocation_events{0};
+    std::atomic<std::uint64_t> drain_truncated_thread_observation_events{0};
+    std::atomic<std::uint64_t> drain_truncated_tick_events{0};
+    std::atomic<std::uint64_t> retained_allocations_skipped{0};
+    std::atomic<std::uint64_t> record_pool_acquisition_failures{0};
+    std::atomic<std::uint64_t> insertion_contention_failures{0};
+    std::atomic<std::uint64_t> exhausted_insertion_probe_failures{0};
+    std::atomic<std::uint64_t> detach_contention_attempts{0};
+    std::atomic<std::uint64_t> processed_allocation_events{0};
+    std::atomic<std::uint64_t> processed_thread_observation_events{0};
+    std::atomic<std::uint64_t> processed_tick_events{0};
+    std::atomic<std::uint64_t> discarded_allocation_events{0};
+    std::atomic<std::uint64_t> discarded_thread_observation_events{0};
+    std::atomic<std::uint64_t> discarded_tick_events{0};
+    std::atomic<std::uint64_t> consumer_lifetime_elapsed_ns{0};
+    std::atomic<std::uint64_t> active_drain_elapsed_ns{0};
+    std::atomic<std::uint64_t> caller_final_drain_elapsed_ns{0};
+    std::atomic<std::uint64_t> caller_final_drain_allocation_events{0};
+    std::atomic<std::uint64_t> caller_final_drain_thread_observation_events{0};
+    std::atomic<std::uint64_t> caller_final_drain_tick_events{0};
     std::uint64_t last_module_rescan_ms = 0;
 
     std::array<pthread_rwlock_t, KLiveIndexShards> live_index_locks{};
@@ -478,6 +547,18 @@ struct AllocationSampler::Impl {
 
     EventQueue events;
     std::thread aggregator_thread;
+#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+    test::StartFailureGate *start_failure_gate_for_testing = nullptr;
+    bool force_process_event_failure_for_testing = false;
+    bool fixture_no_hooks_for_testing = false;
+    bool fixture_no_worker_for_testing = false;
+    bool fixture_controls_configured_for_testing = false;
+    test::AllocationFixtureWorkerGate *fixture_worker_gate_for_testing = nullptr;
+    test::AllocationFixtureCpuWorkControl *fixture_cpu_work_for_testing = nullptr;
+    ThreadSamplingState fixture_thread_state_for_testing{};
+    std::uint64_t fixture_thread_owner_for_testing = 0;
+    bool fixture_thread_state_active_for_testing = false;
+#endif
     BoundedEventQueue<TickEvent, KTickEventCapacity> ticks;
     AllocationProfileAggregation aggregation;
 
@@ -558,6 +639,15 @@ struct AllocationSampler::Impl {
 
     ThreadSamplingState *currentThreadState() noexcept
     {
+#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+        if (fixture_no_hooks_for_testing && fixture_no_worker_for_testing && fixture_thread_state_active_for_testing) {
+            const auto caller_tid = static_cast<std::uint64_t>(::syscall(SYS_gettid));
+            if (caller_tid != fixture_thread_owner_for_testing) {
+                return nullptr;
+            }
+            return &fixture_thread_state_for_testing;
+        }
+#endif
         if (!thread_state_key_created) {
             return nullptr;
         }
@@ -762,6 +852,7 @@ struct AllocationSampler::Impl {
         }
         const std::size_t shard = liveIndexShard(hash);
         if (!tryLockLiveIndexShard(shard)) {
+            detach_contention_attempts.fetch_add(1, std::memory_order_relaxed);
             lifecycle_dropped.fetch_add(1, std::memory_order_relaxed);
             contention_dropped.fetch_add(1, std::memory_order_relaxed);
             return nullptr;
@@ -960,6 +1051,7 @@ struct AllocationSampler::Impl {
     LiveAllocation *acquireLiveRecord() noexcept
     {
         if (!tryLockLivePool()) {
+            record_pool_acquisition_failures.fetch_add(1, std::memory_order_relaxed);
             contention_dropped.fetch_add(1, std::memory_order_relaxed);
             return nullptr;
         }
@@ -972,6 +1064,9 @@ struct AllocationSampler::Impl {
             record->next = nullptr;
         }
         ::pthread_mutex_unlock(&live_pool_mutex);
+        if (record == nullptr) {
+            record_pool_acquisition_failures.fetch_add(1, std::memory_order_relaxed);
+        }
         return record;
     }
 
@@ -994,6 +1089,7 @@ struct AllocationSampler::Impl {
         const std::size_t presence_slot = livePresenceSlot(hash);
         const std::size_t shard = liveIndexShard(hash);
         if (!tryLockLiveIndexShard(shard)) {
+            insertion_contention_failures.fetch_add(1, std::memory_order_relaxed);
             contention_dropped.fetch_add(1, std::memory_order_relaxed);
             return false;
         }
@@ -1041,6 +1137,9 @@ struct AllocationSampler::Impl {
             publishEntry(live_index[tombstone], pointer, allocation_id, allocation);
             inserted = true;
             added_presence = true;
+        }
+        if (!inserted) {
+            exhausted_insertion_probe_failures.fetch_add(1, std::memory_order_relaxed);
         }
         if (added_presence) {
             live_presence[presence_slot].fetch_add(1, std::memory_order_release);
@@ -1247,6 +1346,11 @@ struct AllocationSampler::Impl {
 
     bool prepareHooks(std::string &error)
     {
+#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+        if (fixture_no_hooks_for_testing) {
+            return true;
+        }
+#endif
         if (!thread_state_key_created) {
             if (::pthread_key_create(&thread_state_key, &releaseThreadState) != 0) {
                 error = "pthread_key_create for allocation thread state failed";
@@ -1308,6 +1412,11 @@ struct AllocationSampler::Impl {
 
     bool installHooks(std::string &error)
     {
+#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+        if (fixture_no_hooks_for_testing) {
+            return true;
+        }
+#endif
         if (hooks.installed()) {
             return true;
         }
@@ -1331,19 +1440,22 @@ struct AllocationSampler::Impl {
     static bool waitFor(const std::array<std::atomic<std::uint64_t>, N> &counters, const char *description,
                         std::string &error) noexcept
     {
-        for (int attempt = 0; attempt < 5000; ++attempt) {
-            bool quiescent = true;
-            for (const auto &counter : counters) {
-                if (counter.load(std::memory_order_acquire) != 0) {
-                    quiescent = false;
-                    break;
+        const bool quiesced = detail::waitForQuiescence<std::chrono::steady_clock>(
+            std::chrono::seconds(5),
+            [&counters] {
+                for (const auto &counter : counters) {
+                    if (counter.load(std::memory_order_acquire) != 0) {
+                        return true;
+                    }
                 }
-            }
-            if (quiescent) {
-                return true;
-            }
-            timespec delay{.tv_sec = 0, .tv_nsec = 1000000};
-            ::nanosleep(&delay, nullptr);
+                return false;
+            },
+            [](std::chrono::steady_clock::duration) {
+                const timespec delay{.tv_sec = 0, .tv_nsec = 1000000};
+                (void)::nanosleep(&delay, nullptr);
+            });
+        if (quiesced) {
+            return true;
         }
         try {
             error = std::string("timed out waiting for ") + description + " to quiesce";
@@ -1352,6 +1464,12 @@ struct AllocationSampler::Impl {
             error.clear();
         }
         return false;
+    }
+
+    bool backendCleanupPending() const noexcept
+    {
+        return backend_cleanup_pending.load(std::memory_order_acquire) ||
+               backend_shutdown_pending.load(std::memory_order_acquire) || aggregator_thread.joinable();
     }
 
     FrameKey frameKey(cpptrace::frame_ptr address)
@@ -1415,8 +1533,145 @@ struct AllocationSampler::Impl {
         return !sample.frames.empty();
     }
 
-    void processEvent(const AllocationEvent &event)
+    enum class DrainContext {
+        Aggregator,
+        CallerSnapshot,
+        CallerFinal,
+    };
+
+    void markAccountingFailure() noexcept
     {
+        accounting_state.store(AllocationAccountingState::Failed, std::memory_order_release);
+    }
+
+    void markStopIncomplete() noexcept
+    {
+        AllocationAccountingState expected = AllocationAccountingState::Active;
+        accounting_state.compare_exchange_strong(expected, AllocationAccountingState::Incomplete,
+                                                 std::memory_order_acq_rel, std::memory_order_acquire);
+    }
+
+    void publishComplete() noexcept
+    {
+        AllocationAccountingState state = accounting_state.load(std::memory_order_acquire);
+        while (state != AllocationAccountingState::Failed && state != AllocationAccountingState::NotApplicable &&
+               state != AllocationAccountingState::NotStarted && state != AllocationAccountingState::Complete &&
+               !accounting_state.compare_exchange_weak(state, AllocationAccountingState::Complete,
+                                                       std::memory_order_release, std::memory_order_acquire)) {
+        }
+    }
+
+    class StartAttemptScope {
+    public:
+        explicit StartAttemptScope(Impl &impl) noexcept : impl_(impl) {}
+
+        ~StartAttemptScope()
+        {
+            if (armed_) {
+                impl_.markAccountingFailure();
+            }
+        }
+
+        void dismiss() noexcept { armed_ = false; }
+
+        StartAttemptScope(const StartAttemptScope &) = delete;
+        StartAttemptScope &operator=(const StartAttemptScope &) = delete;
+
+    private:
+        Impl &impl_;
+        bool armed_ = true;
+    };
+
+    class AccountingFailureScope {
+    public:
+        explicit AccountingFailureScope(Impl &impl) noexcept : impl_(impl), uncaught_(std::uncaught_exceptions()) {}
+
+        ~AccountingFailureScope() noexcept
+        {
+            if (std::uncaught_exceptions() > uncaught_) {
+                impl_.markAccountingFailure();
+            }
+        }
+
+        AccountingFailureScope(const AccountingFailureScope &) = delete;
+        AccountingFailureScope &operator=(const AccountingFailureScope &) = delete;
+
+    private:
+        Impl &impl_;
+        int uncaught_ = 0;
+    };
+
+    class DrainElapsedScope {
+    public:
+        DrainElapsedScope(Impl &impl, DrainContext context) noexcept
+            : impl_(impl), context_(context), started_ns_(impl.config.count_only ? 0 : monotonicNs()),
+              uncaught_(std::uncaught_exceptions())
+        {
+        }
+
+        ~DrainElapsedScope() noexcept
+        {
+            if (!impl_.config.count_only) {
+                const std::uint64_t elapsed_ns = monotonicNs() - started_ns_;
+                if (context_ == DrainContext::CallerFinal) {
+                    impl_.caller_final_drain_elapsed_ns.fetch_add(elapsed_ns, std::memory_order_relaxed);
+                }
+                else if (context_ == DrainContext::Aggregator) {
+                    impl_.active_drain_elapsed_ns.fetch_add(elapsed_ns, std::memory_order_relaxed);
+                }
+            }
+            if (std::uncaught_exceptions() > uncaught_) {
+                impl_.markAccountingFailure();
+            }
+        }
+
+        DrainElapsedScope(const DrainElapsedScope &) = delete;
+        DrainElapsedScope &operator=(const DrainElapsedScope &) = delete;
+
+    private:
+        Impl &impl_;
+        DrainContext context_;
+        std::uint64_t started_ns_;
+        int uncaught_ = 0;
+    };
+
+    class ConsumerLifetimeScope {
+    public:
+        explicit ConsumerLifetimeScope(Impl &impl) noexcept : impl_(impl), started_ns_(monotonicNs()) {}
+
+        ~ConsumerLifetimeScope() noexcept
+        {
+            impl_.consumer_lifetime_elapsed_ns.store(monotonicNs() - started_ns_, std::memory_order_release);
+        }
+
+        ConsumerLifetimeScope(const ConsumerLifetimeScope &) = delete;
+        ConsumerLifetimeScope &operator=(const ConsumerLifetimeScope &) = delete;
+
+    private:
+        Impl &impl_;
+        std::uint64_t started_ns_;
+    };
+
+    void processEvent(const AllocationEvent &event, DrainContext context)
+    {
+        const bool caller_final_drain = context == DrainContext::CallerFinal;
+        if (event.thread_observation) {
+            processed_thread_observation_events.fetch_add(1, std::memory_order_relaxed);
+            if (caller_final_drain) {
+                caller_final_drain_thread_observation_events.fetch_add(1, std::memory_order_relaxed);
+            }
+        }
+        else {
+            processed_allocation_events.fetch_add(1, std::memory_order_relaxed);
+            if (caller_final_drain) {
+                caller_final_drain_allocation_events.fetch_add(1, std::memory_order_relaxed);
+            }
+        }
+#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+        if (force_process_event_failure_for_testing) {
+            throw std::runtime_error("injected allocation event processing failure");
+        }
+#endif
         if (event.thread_observation) {
             aggregation.observeThread(event.thread_id, event.os_thread_id);
             return;
@@ -1431,6 +1686,7 @@ struct AllocationSampler::Impl {
 
     void finalizeLiveProfile()
     {
+        AccountingFailureScope failure_scope(*this);
         const std::uint64_t stopped_ms = monotonicMs();
         const std::uint64_t terminal = terminal_tick.load(std::memory_order_acquire);
         std::uint64_t total_age = 0;
@@ -1461,10 +1717,15 @@ struct AllocationSampler::Impl {
         retained_age_ms_max.store(maximum_age, std::memory_order_relaxed);
     }
 
-    void drainQueues()
+    void drainQueues(DrainContext context)
     {
+        DrainElapsedScope elapsed(*this, context);
         TickEvent tick;
         while (ticks.dequeue(tick)) {
+            processed_tick_events.fetch_add(1, std::memory_order_relaxed);
+            if (context == DrainContext::CallerFinal) {
+                caller_final_drain_tick_events.fetch_add(1, std::memory_order_relaxed);
+            }
             aggregation.processTick(tick.tick_id, tick.mspt_ms);
         }
         if (events.storage == nullptr) {
@@ -1472,7 +1733,18 @@ struct AllocationSampler::Impl {
         }
         AllocationEvent event;
         while (events.dequeue(event)) {
-            processEvent(event);
+            processEvent(event, context);
+        }
+    }
+
+    void discardResidualTicks() noexcept
+    {
+        TickEvent tick;
+        for (std::size_t attempts = 0; attempts < KTickEventCapacity && ticks.dequeue(tick); ++attempts) {
+            discarded_tick_events.fetch_add(1, std::memory_order_relaxed);
+            drain_truncated_tick_events.fetch_add(1, std::memory_order_relaxed);
+            caller_final_drain_tick_events.fetch_add(1, std::memory_order_relaxed);
+            drain_truncated.fetch_add(1, std::memory_order_relaxed);
         }
     }
 
@@ -1488,7 +1760,8 @@ struct AllocationSampler::Impl {
     void finishAggregationIfNeeded()
     {
         std::scoped_lock lock(aggregate_mutex);
-        drainQueues();
+        AccountingFailureScope failure_scope(*this);
+        drainQueues(DrainContext::CallerFinal);
         if (finalize_pending.load(std::memory_order_acquire) && !pending_finalized.load(std::memory_order_acquire)) {
             aggregation.finishPending(terminal_tick.load(std::memory_order_acquire));
             pending_finalized.store(true, std::memory_order_release);
@@ -1497,6 +1770,15 @@ struct AllocationSampler::Impl {
 
     void aggregatorLoop()
     {
+        ConsumerLifetimeScope lifetime(*this);
+#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+        if (fixture_worker_gate_for_testing != nullptr) {
+            fixture_worker_gate_for_testing->entered.store(true, std::memory_order_release);
+            if (!waitFixtureWorkerGate(*fixture_worker_gate_for_testing)) {
+                throw std::runtime_error("allocation fixture worker synchronization failed");
+            }
+        }
+#endif
         TrackingSuppressionGuard suppress(*this);
         if (config.fail_aggregator_for_testing) {
             throw std::runtime_error("injected allocation aggregator failure");
@@ -1513,13 +1795,13 @@ struct AllocationSampler::Impl {
         while (aggregator_running.load(std::memory_order_acquire)) {
             {
                 std::scoped_lock lock(aggregate_mutex);
-                drainQueues();
+                drainQueues(DrainContext::Aggregator);
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
         {
             std::scoped_lock lock(aggregate_mutex);
-            drainQueues();
+            drainQueues(DrainContext::Aggregator);
             if (finalize_pending.load(std::memory_order_acquire)) {
                 aggregation.finishPending(terminal_tick.load(std::memory_order_acquire));
                 pending_finalized.store(true, std::memory_order_release);
@@ -1530,6 +1812,7 @@ struct AllocationSampler::Impl {
     bool captureSnapshot(AllocationSnapshot &snapshot, std::string &error)
     {
         TrackingSuppressionGuard suppress(*this);
+        AccountingFailureScope failure_scope(*this);
         std::scoped_lock lifecycle_lock(lifecycle_mutex);
         error.clear();
         if (!running.load(std::memory_order_acquire)) {
@@ -1545,7 +1828,7 @@ struct AllocationSampler::Impl {
             error = "timed out waiting for the allocation aggregator snapshot";
             return false;
         }
-        drainQueues();
+        drainQueues(DrainContext::CallerSnapshot);
         snapshot = AllocationSnapshot{};
         snapshot.number_of_ticks = current_tick.load(std::memory_order_relaxed);
 
@@ -1622,6 +1905,8 @@ struct AllocationSampler::Impl {
 
     void markAggregatorFailure(const char *message) noexcept
     {
+        markAccountingFailure();
+        backend_cleanup_pending.store(true, std::memory_order_release);
         tick_admission_open.store(false, std::memory_order_release);
         tracking.store(false, std::memory_order_release);
         aggregator_running.store(false, std::memory_order_release);
@@ -1632,6 +1917,7 @@ struct AllocationSampler::Impl {
 
     void resetSession()
     {
+        accounting_state.store(AllocationAccountingState::NotStarted, std::memory_order_release);
         TickEvent tick;
         while (ticks.dequeue(tick)) {
         }
@@ -1667,6 +1953,27 @@ struct AllocationSampler::Impl {
         lifecycle_version.store(0, std::memory_order_relaxed);
         lifecycle_readers.store(0, std::memory_order_relaxed);
         lifecycle_writers.store(0, std::memory_order_relaxed);
+        drain_truncated.store(0, std::memory_order_relaxed);
+        drain_truncated_allocation_events.store(0, std::memory_order_relaxed);
+        drain_truncated_thread_observation_events.store(0, std::memory_order_relaxed);
+        drain_truncated_tick_events.store(0, std::memory_order_relaxed);
+        retained_allocations_skipped.store(0, std::memory_order_relaxed);
+        record_pool_acquisition_failures.store(0, std::memory_order_relaxed);
+        insertion_contention_failures.store(0, std::memory_order_relaxed);
+        exhausted_insertion_probe_failures.store(0, std::memory_order_relaxed);
+        detach_contention_attempts.store(0, std::memory_order_relaxed);
+        processed_allocation_events.store(0, std::memory_order_relaxed);
+        processed_thread_observation_events.store(0, std::memory_order_relaxed);
+        processed_tick_events.store(0, std::memory_order_relaxed);
+        discarded_allocation_events.store(0, std::memory_order_relaxed);
+        discarded_thread_observation_events.store(0, std::memory_order_relaxed);
+        discarded_tick_events.store(0, std::memory_order_relaxed);
+        consumer_lifetime_elapsed_ns.store(0, std::memory_order_relaxed);
+        active_drain_elapsed_ns.store(0, std::memory_order_relaxed);
+        caller_final_drain_elapsed_ns.store(0, std::memory_order_relaxed);
+        caller_final_drain_allocation_events.store(0, std::memory_order_relaxed);
+        caller_final_drain_thread_observation_events.store(0, std::memory_order_relaxed);
+        caller_final_drain_tick_events.store(0, std::memory_order_relaxed);
         for (auto &presence : live_presence) {
             presence.store(0, std::memory_order_relaxed);
         }
@@ -1689,7 +1996,7 @@ struct AllocationSampler::Impl {
             error = "allocation profiler is already running";
             return false;
         }
-        if (aggregator_thread.joinable()) {
+        if (backendCleanupPending()) {
             error = "the previous allocation session has not finished cleanup";
             return false;
         }
@@ -1697,6 +2004,7 @@ struct AllocationSampler::Impl {
             error = "invalid Linux allocation sampler configuration";
             return false;
         }
+        StartAttemptScope start_attempt(*this);
         resetSession();
         config = new_config;
         aggregation.reset(config, recovery_sink.load(std::memory_order_acquire));
@@ -1722,16 +2030,35 @@ struct AllocationSampler::Impl {
             return false;
         }
         if (new_config.count_only) {
+            accounting_state.store(AllocationAccountingState::NotApplicable, std::memory_order_release);
             running.store(true, std::memory_order_release);
             tracking.store(true, std::memory_order_release);
+            start_attempt.dismiss();
             return true;
         }
 
         aggregator_running.store(true, std::memory_order_release);
         running.store(true, std::memory_order_release);
+        accounting_state.store(AllocationAccountingState::Active, std::memory_order_release);
         tracking.store(true, std::memory_order_release);
+#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+        if (fixture_no_worker_for_testing) {
+            aggregator_running.store(false, std::memory_order_release);
+            start_attempt.dismiss();
+            return true;
+        }
+#endif
         try {
             TrackingSuppressionGuard suppress(*this);
+#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+            if (start_failure_gate_for_testing != nullptr) {
+                start_failure_gate_for_testing->before_thread_creation.store(true, std::memory_order_release);
+                while (!start_failure_gate_for_testing->fail_now.load(std::memory_order_acquire)) {
+                    yieldLifecycleTest();
+                }
+                throw AllocationThreadCreationFailureForTesting{};
+            }
+#endif
             aggregator_thread = std::thread([this] {
                 try {
                     aggregatorLoop();
@@ -1745,6 +2072,8 @@ struct AllocationSampler::Impl {
             });
         }
         catch (...) {
+            backend_cleanup_pending.store(true, std::memory_order_release);
+            requestFinalization();
             tracking.store(false, std::memory_order_release);
             running.store(false, std::memory_order_release);
             aggregator_running.store(false, std::memory_order_release);
@@ -1755,9 +2084,11 @@ struct AllocationSampler::Impl {
             }
             events.release();
             releaseLifecycleStorage();
+            backend_cleanup_pending.store(false, std::memory_order_release);
             error = "could not create the allocation aggregator thread";
             return false;
         }
+        start_attempt.dismiss();
         return true;
     }
 
@@ -1765,9 +2096,11 @@ struct AllocationSampler::Impl {
     {
         std::scoped_lock lock(lifecycle_mutex);
         error.clear();
-        if (!running.load(std::memory_order_acquire) && !aggregator_thread.joinable()) {
+        if (!running.load(std::memory_order_acquire) && !backendCleanupPending()) {
             return true;
         }
+        markStopIncomplete();
+        backend_cleanup_pending.store(true, std::memory_order_release);
         requestFinalization();
         tracking.store(false, std::memory_order_release);
         running.store(false, std::memory_order_release);
@@ -1782,15 +2115,27 @@ struct AllocationSampler::Impl {
         if (config.live_only && !aggregator_failed.load(std::memory_order_acquire)) {
             finalizeLiveProfile();
         }
+        discardResidualTicks();
         events.release();
         releaseLifecycleStorage();
+        if (backend_shutdown_pending.load(std::memory_order_acquire)) {
+            backend_cleanup_pending.store(false, std::memory_order_release);
+            error = "allocation backend shutdown cleanup is pending";
+            return false;
+        }
         if (aggregator_failed.load(std::memory_order_acquire)) {
             error = "allocation aggregator failed: " + std::string(aggregator_failure.data());
+            backend_cleanup_pending.store(false, std::memory_order_release);
             return false;
         }
         if (config.live_only && lifecycle_dropped.load(std::memory_order_relaxed) != 0) {
             error = "allocation lifecycle tracking capacity was exhausted; retained profile discarded";
+            backend_cleanup_pending.store(false, std::memory_order_release);
             return false;
+        }
+        backend_cleanup_pending.store(false, std::memory_order_release);
+        if (!config.count_only) {
+            publishComplete();
         }
         return true;
     }
@@ -1799,7 +2144,14 @@ struct AllocationSampler::Impl {
     {
         std::scoped_lock lock(lifecycle_mutex);
         error.clear();
-        if (running.load(std::memory_order_acquire) || aggregator_thread.joinable()) {
+        const bool cleanup_needed =
+            running.load(std::memory_order_acquire) || backendCleanupPending() || hooks.installed();
+        backend_shutdown_pending.store(true, std::memory_order_release);
+        if (cleanup_needed) {
+            backend_cleanup_pending.store(true, std::memory_order_release);
+        }
+        if (cleanup_needed) {
+            markStopIncomplete();
             requestFinalization();
         }
         tracking.store(false, std::memory_order_release);
@@ -1812,6 +2164,7 @@ struct AllocationSampler::Impl {
             aggregator_thread.join();
         }
         finishAggregationIfNeeded();
+        discardResidualTicks();
         events.release();
         releaseLifecycleStorage();
 
@@ -1825,6 +2178,8 @@ struct AllocationSampler::Impl {
         mActiveInstance.compare_exchange_strong(expected, nullptr, std::memory_order_release,
                                                 std::memory_order_relaxed);
         releaseThreadStateRegistry();
+        backend_cleanup_pending.store(false, std::memory_order_release);
+        backend_shutdown_pending.store(false, std::memory_order_release);
         return true;
     }
 
@@ -1872,6 +2227,585 @@ struct AllocationSampler::Impl {
 };
 
 std::atomic<AllocationSampler::Impl *> AllocationSampler::Impl::mActiveInstance{nullptr};
+
+#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+namespace test {
+
+bool AllocationDiagnosticsTestAccess::configureFixture(AllocationSampler &sampler, bool no_hooks, bool no_worker,
+                                                       AllocationFixtureWorkerGate *worker_gate) noexcept
+{
+    if ((no_worker && worker_gate != nullptr) || (!no_worker && worker_gate == nullptr)) {
+        return false;
+    }
+    if (sampler.impl_->running.load(std::memory_order_acquire) || sampler.impl_->backendCleanupPending() ||
+        sampler.impl_->hooks.installed() || sampler.impl_->events.storage != nullptr ||
+        sampler.impl_->live_storage != nullptr || sampler.impl_->live_index != nullptr ||
+        sampler.impl_->fixture_controls_configured_for_testing ||
+        sampler.impl_->fixture_cpu_work_for_testing != nullptr) {
+        return false;
+    }
+    sampler.impl_->fixture_no_hooks_for_testing = no_hooks;
+    sampler.impl_->fixture_no_worker_for_testing = no_worker;
+    sampler.impl_->fixture_controls_configured_for_testing = true;
+    sampler.impl_->fixture_worker_gate_for_testing = worker_gate;
+    sampler.impl_->fixture_thread_state_active_for_testing = no_hooks && no_worker;
+    const auto fixture_owner_tid = static_cast<std::uint64_t>(::syscall(SYS_gettid));
+    sampler.impl_->fixture_thread_owner_for_testing =
+        sampler.impl_->fixture_thread_state_active_for_testing ? fixture_owner_tid : 0;
+    if (worker_gate != nullptr) {
+        worker_gate->entered.store(false, std::memory_order_relaxed);
+        worker_gate->release.store(false, std::memory_order_relaxed);
+        worker_gate->timed_out.store(false, std::memory_order_relaxed);
+    }
+    sampler.impl_->fixture_thread_state_for_testing.registry_state.store(0, std::memory_order_relaxed);
+    sampler.impl_->fixture_thread_state_for_testing.owner_tid.store(
+        sampler.impl_->fixture_thread_state_active_for_testing ? fixture_owner_tid : 0, std::memory_order_relaxed);
+    sampler.impl_->fixture_thread_state_for_testing.bytes = {};
+    sampler.impl_->fixture_thread_state_for_testing.identity_generation = 0;
+    sampler.impl_->fixture_thread_state_for_testing.session_thread_id = 0;
+    sampler.impl_->fixture_thread_state_for_testing.os_thread_id = 0;
+    sampler.impl_->fixture_thread_state_for_testing.inside_hook = false;
+    sampler.impl_->fixture_thread_state_for_testing.tracking_suppressed = false;
+    sampler.impl_->fixture_thread_state_for_testing.identity_announced = false;
+    return true;
+}
+
+bool AllocationDiagnosticsTestAccess::releaseFixture(AllocationSampler &sampler) noexcept
+{
+    if (!sampler.impl_->fixture_controls_configured_for_testing ||
+        sampler.impl_->running.load(std::memory_order_acquire) || sampler.impl_->backendCleanupPending() ||
+        sampler.impl_->hooks.installed() || sampler.impl_->events.storage != nullptr ||
+        sampler.impl_->live_storage != nullptr || sampler.impl_->live_index != nullptr ||
+        sampler.impl_->aggregator_thread.joinable()) {
+        return false;
+    }
+    sampler.impl_->fixture_worker_gate_for_testing = nullptr;
+    sampler.impl_->fixture_cpu_work_for_testing = nullptr;
+    sampler.impl_->start_failure_gate_for_testing = nullptr;
+    sampler.impl_->force_process_event_failure_for_testing = false;
+    sampler.impl_->fixture_no_hooks_for_testing = false;
+    sampler.impl_->fixture_no_worker_for_testing = false;
+    sampler.impl_->fixture_controls_configured_for_testing = false;
+    sampler.impl_->fixture_thread_owner_for_testing = 0;
+    sampler.impl_->fixture_thread_state_active_for_testing = false;
+    return true;
+}
+
+bool AllocationDiagnosticsTestAccess::fixtureStorageReady(const AllocationSampler &sampler) noexcept
+{
+    return sampler.impl_->events.storage != nullptr && sampler.impl_->live_storage != nullptr &&
+           sampler.impl_->live_index != nullptr;
+}
+
+bool AllocationDiagnosticsTestAccess::fixtureWorkerPresent(const AllocationSampler &sampler) noexcept
+{
+    return sampler.impl_->aggregator_thread.joinable();
+}
+
+bool AllocationDiagnosticsTestAccess::fixtureHooksPresent(const AllocationSampler &sampler) noexcept
+{
+    return sampler.impl_->hooks.installed();
+}
+
+bool AllocationDiagnosticsTestAccess::fixtureAggregatorRunning(const AllocationSampler &sampler) noexcept
+{
+    return sampler.impl_->aggregator_running.load(std::memory_order_acquire);
+}
+
+bool AllocationDiagnosticsTestAccess::seedFixtureQueues(AllocationSampler &sampler,
+                                                        AllocationFixtureSeedCounts &result) noexcept
+{
+    return seedFixtureQueues(
+        sampler, result,
+        AllocationFixtureSeedCounts{.allocation_events = 3, .thread_observation_events = 2, .tick_events = 5});
+}
+
+bool AllocationDiagnosticsTestAccess::seedFixtureQueues(AllocationSampler &sampler, AllocationFixtureSeedCounts &result,
+                                                        const AllocationFixtureSeedCounts &requested) noexcept
+{
+    result = {};
+    const bool accepted_request =
+        (requested.allocation_events == 3 && requested.thread_observation_events == 2 &&
+         (requested.tick_events == 5 || requested.tick_events == 0)) ||
+        (requested.allocation_events == 1 && requested.thread_observation_events == 0 && requested.tick_events == 0);
+    if (!accepted_request) {
+        return false;
+    }
+
+    try {
+        std::unique_lock lifecycle_lock(sampler.impl_->lifecycle_mutex);
+        AllocationFixtureWorkerGate *gate = sampler.impl_->fixture_worker_gate_for_testing;
+        std::unique_lock<std::mutex> seed_lock;
+        if (gate != nullptr) {
+            seed_lock = std::unique_lock<std::mutex>(gate->seed_mutex);
+        }
+        const auto admitted = [&] {
+            if (!sampler.impl_->fixture_controls_configured_for_testing ||
+                !sampler.impl_->running.load(std::memory_order_acquire) ||
+                sampler.impl_->accounting_state.load(std::memory_order_acquire) != AllocationAccountingState::Active ||
+                !sampler.impl_->fixture_no_hooks_for_testing || !fixtureStorageReady(sampler) ||
+                !sampler.impl_->tick_admission_open.load(std::memory_order_acquire)) {
+                return false;
+            }
+            if (sampler.impl_->fixture_no_worker_for_testing) {
+                return gate == nullptr;
+            }
+            return gate != nullptr && gate->entered.load(std::memory_order_acquire) &&
+                   !gate->release.load(std::memory_order_acquire) && !gate->timed_out.load(std::memory_order_acquire);
+        };
+        if (!admitted()) {
+            return false;
+        }
+
+        const std::size_t event_count =
+            static_cast<std::size_t>(requested.allocation_events + requested.thread_observation_events);
+        std::array<AllocationSampler::Impl::AllocationEvent, 5> events{};
+        for (std::size_t i = 0; i < event_count; ++i) {
+            events[i].weight_bytes = 1;
+            events[i].tick_id = 0;
+            events[i].thread_id = 100 + i;
+            events[i].os_thread_id = 200 + i;
+            events[i].window = 0;
+            events[i].thread_observation = i >= requested.allocation_events;
+            if (!events[i].thread_observation) {
+                events[i].depth = 1;
+                events[i].frames[0] = reinterpret_cast<cpptrace::frame_ptr>(&diagnosticsTestFrameAnchor);
+            }
+        }
+
+        for (std::size_t i = 0; i < event_count; ++i) {
+            if (!admitted() || !sampler.impl_->events.enqueue(events[i])) {
+                return false;
+            }
+            if (events[i].thread_observation) {
+                ++result.thread_observation_events;
+            }
+            else {
+                ++result.allocation_events;
+            }
+        }
+        for (std::size_t i = 0; i < requested.tick_events; ++i) {
+            if (!admitted() ||
+                !sampler.impl_->ticks.enqueue(AllocationSampler::Impl::TickEvent{.tick_id = i, .mspt_ms = 1.0})) {
+                return false;
+            }
+            ++result.tick_events;
+        }
+        return true;
+    }
+    catch (...) {
+        return false;
+    }
+}
+
+bool AllocationDiagnosticsTestAccess::recordFixtureAllocation(AllocationSampler &sampler, void *pointer,
+                                                              std::uint64_t requested_bytes) noexcept
+{
+    if (!sampler.impl_->fixture_controls_configured_for_testing ||
+        !sampler.impl_->running.load(std::memory_order_acquire) ||
+        sampler.impl_->accounting_state.load(std::memory_order_acquire) != AllocationAccountingState::Active ||
+        pointer == nullptr || requested_bytes == 0 || !sampler.impl_->fixture_no_hooks_for_testing ||
+        !sampler.impl_->fixture_no_worker_for_testing ||
+        !sampler.impl_->tick_admission_open.load(std::memory_order_acquire) || !fixtureStorageReady(sampler)) {
+        return false;
+    }
+    sampler.impl_->recordAllocation(pointer, requested_bytes);
+    return true;
+}
+
+bool AllocationLifecycleTestAccess::holdTrackingCall(AllocationSampler &sampler, TrackingGate &gate) noexcept
+{
+    bool admitted = false;
+    {
+        AllocationSampler::Impl::TrackingCallGuard tracking_guard(*sampler.impl_);
+        if (tracking_guard) {
+            gate.entered.store(true, std::memory_order_release);
+            while (!gate.release.load(std::memory_order_acquire)) {
+                yieldLifecycleTest();
+            }
+            admitted = true;
+        }
+    }
+    gate.exited.store(true, std::memory_order_release);
+    return admitted;
+}
+
+void AllocationLifecycleTestAccess::armThreadCreationFailure(AllocationSampler &sampler,
+                                                             StartFailureGate &gate) noexcept
+{
+    sampler.impl_->start_failure_gate_for_testing = &gate;
+}
+
+void AllocationLifecycleTestAccess::disarmThreadCreationFailure(AllocationSampler &sampler) noexcept
+{
+    sampler.impl_->start_failure_gate_for_testing = nullptr;
+}
+
+void AllocationDiagnosticsTestAccess::forceAggregatorCpuReadFailure(AllocationSampler &, bool) noexcept {}
+
+void AllocationDiagnosticsTestAccess::forceAggregatorCpuZero(AllocationSampler &, bool) noexcept {}
+
+void AllocationDiagnosticsTestAccess::armEventProcessingGate(AllocationSampler &,
+                                                             AllocationEventProcessingGate &gate) noexcept
+{
+    gate.entered.store(false, std::memory_order_relaxed);
+    gate.release.store(false, std::memory_order_relaxed);
+    gate.timed_out.store(false, std::memory_order_relaxed);
+}
+
+void AllocationDiagnosticsTestAccess::disarmEventProcessingGate(AllocationSampler &) noexcept {}
+
+void AllocationDiagnosticsTestAccess::forceProcessEventFailure(AllocationSampler &sampler, bool force) noexcept
+{
+    sampler.impl_->force_process_event_failure_for_testing = force;
+}
+
+bool AllocationDiagnosticsTestAccess::configureFixtureCpuWork(AllocationSampler &,
+                                                              AllocationFixtureCpuWorkControl &) noexcept
+{
+    return false;
+}
+
+void AllocationDiagnosticsTestAccess::forceDrainDeadline(AllocationSampler &sampler, bool force) noexcept
+{
+    (void)sampler;
+    (void)force;
+}
+
+void AllocationDiagnosticsTestAccess::forceRetainedWalkBudget(AllocationSampler &sampler, bool force) noexcept
+{
+    (void)sampler;
+    (void)force;
+}
+
+std::uint64_t AllocationDiagnosticsTestAccess::retainedWalkVisits(const AllocationSampler &) noexcept
+{
+    return 0;
+}
+
+bool AllocationDiagnosticsTestAccess::drainFixtureAggregatorContext(AllocationSampler &sampler) noexcept
+{
+    if (!sampler.impl_->fixture_controls_configured_for_testing ||
+        !sampler.impl_->running.load(std::memory_order_acquire) ||
+        sampler.impl_->accounting_state.load(std::memory_order_acquire) != AllocationAccountingState::Active ||
+        !sampler.impl_->fixture_no_hooks_for_testing || !sampler.impl_->fixture_no_worker_for_testing ||
+        sampler.impl_->aggregator_thread.joinable() || sampler.impl_->events.storage == nullptr ||
+        sampler.impl_->live_storage == nullptr || sampler.impl_->live_index == nullptr) {
+        return false;
+    }
+    std::unique_lock lock(sampler.impl_->aggregate_mutex, std::defer_lock);
+    if (!lock.try_lock_for(std::chrono::seconds(5))) {
+        return false;
+    }
+    sampler.impl_->drainQueues(AllocationSampler::Impl::DrainContext::Aggregator);
+    return true;
+}
+
+bool AllocationDiagnosticsTestAccess::seedFixtureLiveAllocations(AllocationSampler &sampler, void *const *pointers,
+                                                                 std::size_t count) noexcept
+{
+    if (!sampler.impl_->fixture_controls_configured_for_testing ||
+        !sampler.impl_->running.load(std::memory_order_acquire) ||
+        sampler.impl_->accounting_state.load(std::memory_order_acquire) != AllocationAccountingState::Active ||
+        !sampler.impl_->fixture_no_hooks_for_testing || !sampler.impl_->fixture_no_worker_for_testing ||
+        sampler.impl_->aggregator_thread.joinable() || sampler.impl_->events.storage == nullptr ||
+        sampler.impl_->live_storage == nullptr || sampler.impl_->live_index == nullptr ||
+        (count != 0 && pointers == nullptr)) {
+        return false;
+    }
+    std::vector<AllocationSampler::Impl::LiveAllocation *> inserted;
+    try {
+        inserted.reserve(count);
+        for (std::size_t i = 0; i < count; ++i) {
+            if (pointers[i] == nullptr) {
+                throw std::runtime_error("null fixture live pointer");
+            }
+            auto *record = sampler.impl_->acquireLiveRecord();
+            if (record == nullptr) {
+                throw std::runtime_error("fixture live record pool exhausted");
+            }
+            *record = AllocationSampler::Impl::LiveAllocation{};
+            record->pointer = pointers[i];
+            record->allocation_id = sampler.impl_->next_allocation_id.fetch_add(1, std::memory_order_relaxed);
+            record->weight_bytes = 1;
+            record->requested_bytes = 1;
+            record->allocated_ms = monotonicMs();
+            record->tick_id = 0;
+            record->thread_id = 1;
+            record->os_thread_id = 1;
+            record->window = 0;
+            record->depth = 1;
+            record->frames[0] = reinterpret_cast<cpptrace::frame_ptr>(&diagnosticsTestFrameAnchor);
+            if (!sampler.impl_->insertLiveAllocation(record, true)) {
+                sampler.impl_->recycleLiveRecord(record);
+                throw std::runtime_error("fixture live insertion failed");
+            }
+            inserted.push_back(record);
+        }
+        return true;
+    }
+    catch (...) {
+        for (auto *record : inserted) {
+            AllocationSampler::Impl::LiveAllocation *detached = sampler.impl_->detachAllocation(record->pointer);
+            if (detached != nullptr) {
+                sampler.impl_->retireAllocation(detached, monotonicMs());
+            }
+        }
+        return false;
+    }
+}
+
+bool AllocationDiagnosticsTestAccess::prepareFixtureLiveRecord(AllocationSampler &sampler, void *pointer,
+                                                               std::uint64_t requested_bytes,
+                                                               AllocationFixtureLiveRecord &result) noexcept
+{
+    if (!sampler.impl_->fixture_controls_configured_for_testing ||
+        !sampler.impl_->running.load(std::memory_order_acquire) ||
+        sampler.impl_->accounting_state.load(std::memory_order_acquire) != AllocationAccountingState::Active ||
+        !sampler.impl_->fixture_no_hooks_for_testing || !sampler.impl_->fixture_no_worker_for_testing ||
+        sampler.impl_->aggregator_thread.joinable() || sampler.impl_->events.storage == nullptr ||
+        sampler.impl_->live_storage == nullptr || sampler.impl_->live_index == nullptr || pointer == nullptr ||
+        requested_bytes == 0 || result.opaque != nullptr) {
+        return false;
+    }
+    auto *record = sampler.impl_->acquireLiveRecord();
+    if (record == nullptr) {
+        return false;
+    }
+    *record = AllocationSampler::Impl::LiveAllocation{};
+    record->pointer = pointer;
+    record->allocation_id = sampler.impl_->next_allocation_id.fetch_add(1, std::memory_order_relaxed);
+    record->weight_bytes = requested_bytes;
+    record->requested_bytes = requested_bytes;
+    record->allocated_ms = monotonicMs();
+    record->tick_id = 0;
+    record->thread_id = 1;
+    record->os_thread_id = 1;
+    record->window = 0;
+    record->depth = 1;
+    record->frames[0] = reinterpret_cast<cpptrace::frame_ptr>(&diagnosticsTestFrameAnchor);
+    result.pointer = pointer;
+    result.opaque = record;
+    return true;
+}
+
+bool AllocationDiagnosticsTestAccess::holdInsertionShardLock(AllocationSampler &sampler, void *pointer,
+                                                             AllocationFixtureLockGate &gate) noexcept
+{
+    if (!sampler.impl_->fixture_controls_configured_for_testing ||
+        !sampler.impl_->running.load(std::memory_order_acquire) ||
+        sampler.impl_->accounting_state.load(std::memory_order_acquire) != AllocationAccountingState::Active ||
+        !sampler.impl_->fixture_no_hooks_for_testing || !sampler.impl_->fixture_no_worker_for_testing ||
+        sampler.impl_->aggregator_thread.joinable() || sampler.impl_->live_index == nullptr || pointer == nullptr) {
+        return false;
+    }
+    const std::size_t shard = AllocationSampler::Impl::liveIndexShard(AllocationSampler::Impl::liveIndexHash(pointer));
+    if (::pthread_rwlock_wrlock(&sampler.impl_->live_index_locks[shard]) != 0) {
+        return false;
+    }
+    gate.ready.store(true, std::memory_order_release);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!gate.release.load(std::memory_order_acquire)) {
+        if (std::chrono::steady_clock::now() >= deadline) {
+            gate.timed_out.store(true, std::memory_order_release);
+            break;
+        }
+        yieldLifecycleTest();
+    }
+    ::pthread_rwlock_unlock(&sampler.impl_->live_index_locks[shard]);
+    return !gate.timed_out.load(std::memory_order_acquire);
+}
+
+bool AllocationDiagnosticsTestAccess::holdDetachShardLock(AllocationSampler &sampler, void *pointer,
+                                                          AllocationFixtureLockGate &gate) noexcept
+{
+    return holdInsertionShardLock(sampler, pointer, gate);
+}
+
+bool AllocationDiagnosticsTestAccess::insertFixtureLiveRecord(AllocationSampler &sampler,
+                                                              AllocationFixtureLiveRecord &record,
+                                                              bool account_live) noexcept
+{
+    if (!sampler.impl_->fixture_controls_configured_for_testing ||
+        !sampler.impl_->running.load(std::memory_order_acquire) ||
+        sampler.impl_->accounting_state.load(std::memory_order_acquire) != AllocationAccountingState::Active ||
+        !sampler.impl_->fixture_no_hooks_for_testing || !sampler.impl_->fixture_no_worker_for_testing ||
+        sampler.impl_->aggregator_thread.joinable() || sampler.impl_->events.storage == nullptr ||
+        sampler.impl_->live_storage == nullptr || sampler.impl_->live_index == nullptr || record.opaque == nullptr ||
+        record.pointer == nullptr) {
+        return false;
+    }
+    auto *allocation = static_cast<AllocationSampler::Impl::LiveAllocation *>(record.opaque);
+    if (!sampler.impl_->insertLiveAllocation(allocation, account_live)) {
+        return false;
+    }
+    record.opaque = nullptr;
+    return true;
+}
+
+bool AllocationDiagnosticsTestAccess::detachFixtureLiveRecord(AllocationSampler &sampler,
+                                                              AllocationFixtureLiveRecord &record) noexcept
+{
+    if (!sampler.impl_->fixture_controls_configured_for_testing ||
+        !sampler.impl_->running.load(std::memory_order_acquire) ||
+        sampler.impl_->accounting_state.load(std::memory_order_acquire) != AllocationAccountingState::Active ||
+        !sampler.impl_->fixture_no_hooks_for_testing || !sampler.impl_->fixture_no_worker_for_testing ||
+        sampler.impl_->aggregator_thread.joinable() || sampler.impl_->events.storage == nullptr ||
+        sampler.impl_->live_storage == nullptr || sampler.impl_->live_index == nullptr || record.pointer == nullptr ||
+        record.opaque != nullptr) {
+        return false;
+    }
+    AllocationSampler::Impl::LiveAllocation *allocation = sampler.impl_->detachAllocation(record.pointer);
+    if (allocation == nullptr) {
+        return false;
+    }
+    record.opaque = allocation;
+    return true;
+}
+
+void AllocationDiagnosticsTestAccess::retireFixtureLiveRecord(AllocationSampler &sampler,
+                                                              AllocationFixtureLiveRecord &record) noexcept
+{
+    if (record.opaque == nullptr) {
+        return;
+    }
+    auto *allocation = static_cast<AllocationSampler::Impl::LiveAllocation *>(record.opaque);
+    sampler.impl_->retireAllocation(allocation, monotonicMs());
+    record.opaque = nullptr;
+}
+
+void AllocationDiagnosticsTestAccess::releaseFixtureLiveRecord(AllocationSampler &sampler,
+                                                               AllocationFixtureLiveRecord &record) noexcept
+{
+    if (record.opaque == nullptr) {
+        return;
+    }
+    sampler.impl_->recycleLiveRecord(static_cast<AllocationSampler::Impl::LiveAllocation *>(record.opaque));
+    record.opaque = nullptr;
+}
+
+bool AllocationDiagnosticsTestAccess::fileTimeToNanoseconds(std::uint32_t, std::uint32_t, std::uint64_t &value) noexcept
+{
+    value = 0;
+    return false;
+}
+
+void AllocationDiagnosticsTestAccess::seedModuleCache(AllocationSampler &, std::size_t) noexcept {}
+
+bool AllocationDiagnosticsTestAccess::resolveFrameOnce(AllocationSampler &) noexcept
+{
+    return false;
+}
+
+bool AllocationDiagnosticsTestAccess::resolveFrameTwice(AllocationSampler &) noexcept
+{
+    return false;
+}
+
+bool AllocationDiagnosticsTestAccess::resolveMissingFrame(AllocationSampler &) noexcept
+{
+    return false;
+}
+
+bool AllocationDiagnosticsTestAccess::exerciseRecordPoolEmpty(AllocationSampler &sampler, void *pointer) noexcept
+{
+    if (!sampler.impl_->fixture_controls_configured_for_testing ||
+        !sampler.impl_->running.load(std::memory_order_acquire) ||
+        sampler.impl_->accounting_state.load(std::memory_order_acquire) != AllocationAccountingState::Active ||
+        !sampler.impl_->fixture_no_hooks_for_testing || !sampler.impl_->fixture_no_worker_for_testing ||
+        sampler.impl_->aggregator_thread.joinable() || sampler.impl_->events.storage == nullptr ||
+        sampler.impl_->live_storage == nullptr || sampler.impl_->live_index == nullptr || pointer == nullptr) {
+        return false;
+    }
+    if (::pthread_mutex_lock(&sampler.impl_->live_pool_mutex) != 0) {
+        return false;
+    }
+    AllocationSampler::Impl::LiveAllocation *held_free = sampler.impl_->free_live;
+    AllocationSampler::Impl::LiveAllocation *held_deferred =
+        sampler.impl_->deferred_live.exchange(nullptr, std::memory_order_acq_rel);
+    sampler.impl_->free_live = nullptr;
+    ::pthread_mutex_unlock(&sampler.impl_->live_pool_mutex);
+
+    sampler.impl_->recordAllocation(pointer, 1);
+
+    if (::pthread_mutex_lock(&sampler.impl_->live_pool_mutex) != 0) {
+        sampler.impl_->free_live = held_free;
+        sampler.impl_->deferred_live.store(held_deferred, std::memory_order_release);
+        return false;
+    }
+    sampler.impl_->free_live = held_free;
+    sampler.impl_->deferred_live.store(held_deferred, std::memory_order_release);
+    ::pthread_mutex_unlock(&sampler.impl_->live_pool_mutex);
+    return true;
+}
+
+bool AllocationDiagnosticsTestAccess::exerciseInsertionProbeExhaustion(AllocationSampler &sampler, void *backing,
+                                                                       std::size_t backing_bytes) noexcept
+{
+    constexpr std::size_t fixture_count = KLiveIndexShardCapacity + 1;
+    constexpr std::size_t pointer_quantum = sizeof(std::uint64_t) * 2;
+    constexpr std::size_t pointer_stride = KLiveIndexShards * pointer_quantum;
+    static_assert(pointer_quantum == 16);
+
+    if (!sampler.impl_->fixture_controls_configured_for_testing ||
+        !sampler.impl_->running.load(std::memory_order_acquire) ||
+        sampler.impl_->accounting_state.load(std::memory_order_acquire) != AllocationAccountingState::Active ||
+        !sampler.impl_->fixture_no_hooks_for_testing || !sampler.impl_->fixture_no_worker_for_testing ||
+        sampler.impl_->aggregator_thread.joinable() || sampler.impl_->events.storage == nullptr ||
+        sampler.impl_->live_storage == nullptr || sampler.impl_->live_index == nullptr || backing == nullptr ||
+        backing_bytes < fixture_count * pointer_stride) {
+        return false;
+    }
+
+    try {
+        std::array<AllocationSampler::Impl::LiveAllocation *, fixture_count> records{};
+        std::size_t successful = 0;
+        bool final_failed = false;
+        for (std::size_t i = 0; i < fixture_count; ++i) {
+            AllocationSampler::Impl::LiveAllocation *record = sampler.impl_->acquireLiveRecord();
+            if (record == nullptr) {
+                break;
+            }
+            record->pointer = static_cast<void *>(static_cast<unsigned char *>(backing) + i * pointer_stride);
+            record->allocation_id = sampler.impl_->next_allocation_id.fetch_add(1, std::memory_order_relaxed);
+            record->weight_bytes = 1;
+            record->requested_bytes = 1;
+            record->allocated_ms = monotonicMs();
+            record->tick_id = 0;
+            record->thread_id = 0;
+            record->os_thread_id = 0;
+            record->window = 0;
+            record->depth = 1;
+            record->frames[0] = reinterpret_cast<cpptrace::frame_ptr>(&diagnosticsTestFrameAnchor);
+            records[i] = record;
+            if (!sampler.impl_->insertLiveAllocation(record, true)) {
+                final_failed = i == KLiveIndexShardCapacity;
+                sampler.impl_->recycleLiveRecord(record);
+                records[i] = nullptr;
+                break;
+            }
+            ++successful;
+        }
+
+        bool cleanup_ok = true;
+        for (std::size_t i = 0; i < successful; ++i) {
+            AllocationSampler::Impl::LiveAllocation *detached = sampler.impl_->detachAllocation(records[i]->pointer);
+            if (detached == nullptr) {
+                cleanup_ok = false;
+                continue;
+            }
+            sampler.impl_->retireAllocation(detached, monotonicMs());
+            records[i] = nullptr;
+        }
+        return cleanup_ok && successful == KLiveIndexShardCapacity && final_failed;
+    }
+    catch (...) {
+        return false;
+    }
+}
+
+}  // namespace test
+#endif
 std::array<std::atomic<std::uint64_t>, KHookCallShards> AllocationSampler::Impl::mActiveHookCalls{};
 
 AllocationSampler::AllocationSampler() : impl_(std::make_unique<Impl>()) {}
@@ -1909,6 +2843,11 @@ bool AllocationSampler::stop(std::string &error)
 
 void AllocationSampler::requestStop() noexcept
 {
+    impl_->markStopIncomplete();
+    if (impl_->running.load(std::memory_order_acquire) ||
+        impl_->backend_cleanup_pending.load(std::memory_order_acquire)) {
+        impl_->backend_cleanup_pending.store(true, std::memory_order_release);
+    }
     impl_->tick_admission_open.store(false, std::memory_order_release);
     impl_->tracking.store(false, std::memory_order_release);
     impl_->running.store(false, std::memory_order_release);
@@ -1926,6 +2865,49 @@ void AllocationSampler::onTick(double mspt_ms)
 bool AllocationSampler::snapshot(AllocationSnapshot &snapshot, std::string &error)
 {
     return impl_->captureSnapshot(snapshot, error);
+}
+
+AllocationDiagnostics AllocationSampler::diagnostics() const
+{
+    AllocationDiagnostics result;
+    result.supported = true;
+    result.accounting_state = impl_->accounting_state.load(std::memory_order_acquire);
+    result.live_index_capacity = liveIndexCapacity();
+    result.live_record_capacity = liveRecordCapacity();
+    result.drain_truncated = impl_->drain_truncated.load(std::memory_order_relaxed);
+    result.drain_truncated_allocation_events = impl_->drain_truncated_allocation_events.load(std::memory_order_relaxed);
+    result.drain_truncated_thread_observation_events =
+        impl_->drain_truncated_thread_observation_events.load(std::memory_order_relaxed);
+    result.drain_truncated_tick_events = impl_->drain_truncated_tick_events.load(std::memory_order_relaxed);
+    result.retained_allocations_skipped = impl_->retained_allocations_skipped.load(std::memory_order_relaxed);
+    result.record_pool_acquisition_failures = impl_->record_pool_acquisition_failures.load(std::memory_order_relaxed);
+    result.insertion_contention_failures = impl_->insertion_contention_failures.load(std::memory_order_relaxed);
+    result.exhausted_insertion_probe_failures =
+        impl_->exhausted_insertion_probe_failures.load(std::memory_order_relaxed);
+    result.detach_contention_attempts = impl_->detach_contention_attempts.load(std::memory_order_relaxed);
+    result.processed_allocation_events = impl_->processed_allocation_events.load(std::memory_order_relaxed);
+    result.processed_thread_observation_events =
+        impl_->processed_thread_observation_events.load(std::memory_order_relaxed);
+    result.processed_tick_events = impl_->processed_tick_events.load(std::memory_order_relaxed);
+    result.discarded_allocation_events = impl_->discarded_allocation_events.load(std::memory_order_relaxed);
+    result.discarded_thread_observation_events =
+        impl_->discarded_thread_observation_events.load(std::memory_order_relaxed);
+    result.discarded_tick_events = impl_->discarded_tick_events.load(std::memory_order_relaxed);
+    result.consumer_lifetime_elapsed_ns = impl_->consumer_lifetime_elapsed_ns.load(std::memory_order_relaxed);
+    result.active_drain_elapsed_ns = impl_->active_drain_elapsed_ns.load(std::memory_order_relaxed);
+    result.caller_final_drain_elapsed_ns = impl_->caller_final_drain_elapsed_ns.load(std::memory_order_relaxed);
+    result.caller_final_drain_allocation_events =
+        impl_->caller_final_drain_allocation_events.load(std::memory_order_relaxed);
+    result.caller_final_drain_thread_observation_events =
+        impl_->caller_final_drain_thread_observation_events.load(std::memory_order_relaxed);
+    result.caller_final_drain_tick_events = impl_->caller_final_drain_tick_events.load(std::memory_order_relaxed);
+    result.module_cache_capacity = moduleCacheCapacity();
+    return result;
+}
+
+AllocationDiagnosticsSnapshot AllocationSampler::allocationDiagnostics() const
+{
+    return diagnostics();
 }
 
 bool AllocationSampler::setCurrentThreadTrackingSuppressed(bool suppressed) noexcept
@@ -2050,7 +3032,15 @@ std::uint64_t AllocationSampler::peakLiveSamples() const
 }
 std::uint64_t AllocationSampler::liveIndexCapacity()
 {
+    return KLiveIndexCapacity;
+}
+std::uint64_t AllocationSampler::liveRecordCapacity()
+{
     return KEventCapacity;
+}
+std::uint64_t AllocationSampler::moduleCacheCapacity()
+{
+    return 0;
 }
 std::uint64_t AllocationSampler::sampledThreadCount() const
 {
@@ -2194,7 +3184,7 @@ std::uint64_t AllocationSampler::contentionDropped() const
 // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
 std::uint64_t AllocationSampler::drainTruncated() const
 {
-    return 0;
+    return impl_->drain_truncated.load(std::memory_order_relaxed);
 }
 
 // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
@@ -2206,6 +3196,11 @@ bool AllocationSampler::stopWaitTimedOut() const
 bool AllocationSampler::aggregatorMayBeAlive() const
 {
     return impl_->aggregator_thread.joinable();
+}
+
+bool AllocationSampler::backendCleanupPending() const
+{
+    return impl_->backendCleanupPending();
 }
 std::uint64_t AllocationSampler::retainedAverageAgeMs() const
 {

@@ -174,6 +174,9 @@ bool verifyPathologicalStopExportsTruncatedProfile()
     if (sampler.stopWaitTimedOut() || truncated == 0 || !sampler.dataIncomplete()) {
         return report("drain did not truncate as expected", error, stop_ms, truncated);
     }
+    if (sampler.backendCleanupPending()) {
+        return report("completed bounded stop retained cleanup", error, stop_ms, truncated);
+    }
     if (sampler.sampleCount() == 0 || sampler.sampledBytes() == 0 || sampler.tree().empty()) {
         return report("truncated profile has no usable samples", error, stop_ms, truncated);
     }
@@ -481,6 +484,9 @@ bool verifyStopWaitTimeoutReapsTheAggregator()
     if (!sampler.aggregatorMayBeAlive()) {
         return report("a timed-out stop abandoned its aggregator", error, stop_ms, 0);
     }
+    if (!sampler.backendCleanupPending()) {
+        return report("a timed-out stop did not retain cleanup", error, stop_ms, 0);
+    }
     spark::AllocationSnapshot snapshot;
     if (sampler.snapshot(snapshot, failure) || sampler.running()) {
         return report("a stopped session still offered export data", error, stop_ms, 0);
@@ -501,8 +507,8 @@ bool verifyStopWaitTimeoutReapsTheAggregator()
     if (!reaped) {
         return report("the abandoned aggregator was never reaped", error, stop_ms, 0);
     }
-    if (sampler.aggregatorMayBeAlive()) {
-        return report("a reaped aggregator stayed joinable", error, stop_ms, 0);
+    if (sampler.aggregatorMayBeAlive() || sampler.backendCleanupPending()) {
+        return report("a reaped aggregator retained cleanup", error, stop_ms, 0);
     }
     if (!sampler.shutdown(error) || sampler.running() || sampler.hooksInstalled()) {
         return report("shutdown after a reaped stop failed", error, stop_ms, 0);

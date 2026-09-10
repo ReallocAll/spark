@@ -115,6 +115,11 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Test Windows artifact verifier
+        run: |
+          Get-Command pwsh, clang-cl, llvm-rc, lld-link, llvm-readobj, llvm-pdbutil -ErrorAction Stop | Out-Null
+          python tests/test_windows_artifact_verifier.py
+
       - name: Install Conan
         run: python -m pip install "conan>=2,<3"
 
@@ -133,6 +138,20 @@ jobs:
       - name: Build
         run: cmake --build --preset conan-relwithdebinfo
 
+      - name: Verify Windows artifacts
+        shell: pwsh
+        run: |
+          $versionLine = Get-Content build/RelWithDebInfo/CMakeCache.txt | Where-Object { $_ -match '^CMAKE_PROJECT_VERSION:STATIC=' }
+          if ($versionLine.Count -ne 1) { throw "CMake project version is missing or ambiguous" }
+          $version = $versionLine.Split('=', 2)[1]
+          & pwsh -NoProfile -File tools/verify_windows_artifacts.ps1 `
+            -Dll build/RelWithDebInfo/endstone_spark.dll `
+            -Pdb build/RelWithDebInfo/endstone_spark.pdb `
+            -Version $version `
+            -ManifestPath build/RelWithDebInfo/SHA256SUMS `
+            -WriteManifest
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Run tests
         run: ctest --test-dir build/RelWithDebInfo --output-on-failure
 
@@ -150,6 +169,7 @@ jobs:
           path: |
             build/RelWithDebInfo/endstone_spark.dll
             build/RelWithDebInfo/endstone_spark.pdb
+            build/RelWithDebInfo/SHA256SUMS
           if-no-files-found: error
           retention-days: 14
 

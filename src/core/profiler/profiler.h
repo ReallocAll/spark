@@ -9,6 +9,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <system_error>
 #include <vector>
 
 #include "core/profiler/profile_mode.h"
@@ -24,11 +25,28 @@
 namespace spark {
 
 struct ProfilerTestAccess;
+#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+struct ProfilerLifecycleTestAccess;
+#endif
 
 struct NativePluginSource {
     std::uintptr_t module_base = 0;
     std::string module_path;
     std::string source_id;
+};
+
+enum class RecoveryDiscardStatus {
+    Completed,
+    BackendCleanupPending,
+    WriterPending,
+    FilesystemError,
+};
+
+struct RecoveryDiscardResult {
+    RecoveryDiscardStatus status = RecoveryDiscardStatus::Completed;
+    std::string message;
+
+    [[nodiscard]] bool completed() const noexcept { return status == RecoveryDiscardStatus::Completed; }
 };
 
 inline constexpr int kMaxSamplingIntervalMs = 1000;
@@ -149,7 +167,7 @@ public:
     // export, a user cancel, or a clean shutdown so the next startup does not
     // mistake the journal for a crash to recover.  Safe to call when no
     // journal exists.
-    void discardRecoveryJournal();
+    RecoveryDiscardResult discardRecoveryJournal();
 
     void journalStallBegin(std::uint64_t detected_ns, std::uint64_t last_tick_ns);
     void journalStallEnd(std::uint64_t detected_ns, std::uint64_t recovered_ns);
@@ -157,9 +175,20 @@ public:
     // Unconditionally closes the active backend and clears native hook handlers.
     // Must run before the plugin module is unloaded.
     bool shutdown(std::string &error);
+    // Keeps an unfinished export journal available through backend shutdown.
+    void retainRecoveryJournalOnShutdown() noexcept
+    {
+        if (!recovery_dir_.empty()) {
+            retain_recovery_journal_on_shutdown_.store(true, std::memory_order_release);
+        }
+    }
 
 private:
     friend struct ProfilerTestAccess;
+#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+    friend struct ProfilerLifecycleTestAccess;
+    using RecoveryRemoveFunction = std::function<void(const std::filesystem::path &, std::error_code &)>;
+#endif
 
     static void addNativePluginSources(ProfileMetadata &meta, const ExportContext &ctx,
                                        const std::vector<FrameKey> &keys,
@@ -183,12 +212,14 @@ private:
     AllocationSampler allocation_sampler_;
     std::atomic<bool> persistent_allocation_counting_enabled_{false};
     std::atomic<bool> persistent_allocation_counting_active_{false};
+    std::atomic<bool> persistent_allocation_stop_accumulated_{false};
     std::atomic<std::uint64_t> persistent_allocation_bytes_base_{0};
     std::uint64_t persistent_allocation_session_seed_ = 0;
     ProfilerOptions options_;
     ProfileMode mode_ = ProfileMode::Execution;
     std::atomic<bool> running_{false};
     std::atomic<bool> allocation_export_pending_{false};
+    std::atomic<bool> retain_recovery_journal_on_shutdown_{false};
     std::int64_t start_time_ms_ = 0;
     std::int64_t end_time_ms_ = 0;
     std::int64_t auto_end_time_ms_ = -1;
@@ -198,6 +229,9 @@ private:
     std::atomic<std::int32_t> included_ticks_{0};
     std::function<void()> live_export_paused_hook_;
     std::function<void()> stop_requested_hook_;
+#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+    RecoveryRemoveFunction recovery_remove_function_;
+#endif
 };
 
 }  // namespace spark

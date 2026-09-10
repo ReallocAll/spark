@@ -2,11 +2,21 @@
 #define SPARK_APPLICATION_PROFILER_PROFILE_EXPORTER_H
 
 #include <filesystem>
+#include <functional>
 #include <string>
+#include <string_view>
 
 #include "core/profiler/profiler.h"
+#include "net/bytebin.h"
+#include "net/cancellation.h"
+#include "net/profile_file.h"
 
 namespace spark {
+
+#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+struct ProfileExporterTestAccess;
+struct ProfilerServiceTestAccess;
+#endif
 
 enum class ExportOutcome {
     Failed,
@@ -22,17 +32,34 @@ public:
     struct Result {
         ExportOutcome outcome = ExportOutcome::Failed;
         std::string message;
+        // Shutdown cancellation keeps the recovery journal authoritative.
+        bool retain_recovery_journal = false;
     };
 
     explicit ProfileExporter(std::filesystem::path storage_dir, std::string bytebin_url, std::string viewer_url);
 
     // Saves raw protobuf locally; bytebin uploads use gzip with local fallback.
-    Result exportProfile(Profiler &profiler, const ExportContext &ctx, bool save_to_file);
+    Result exportProfile(Profiler &profiler, const ExportContext &ctx, bool save_to_file,
+                         const CancellationToken &cancellation = {});
 
 private:
+#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+    friend struct ProfileExporterTestAccess;
+    friend struct ProfilerServiceTestAccess;
+
+    using UploadFunction = std::function<UploadResult(const std::string &, const std::string &, const std::string &,
+                                                      const std::string &, CancellationToken)>;
+    using SaveFunction =
+        std::function<ProfileFileResult(const std::filesystem::path &, std::string_view, std::int64_t)>;
+#endif
+
     std::filesystem::path storage_dir_;
     std::string bytebin_url_;
     std::string viewer_url_;
+#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+    UploadFunction upload_function_;
+    SaveFunction save_function_;
+#endif
 };
 
 }  // namespace spark

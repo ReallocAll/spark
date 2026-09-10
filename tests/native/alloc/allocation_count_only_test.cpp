@@ -20,6 +20,10 @@ int main()
         std::fprintf(stderr, "count-only start failed: %s\n", error.c_str());
         return 1;
     }
+    if (sampler.backendCleanupPending()) {
+        std::fprintf(stderr, "count-only session unexpectedly reports pending cleanup\n");
+        return 1;
+    }
 
     const std::uint64_t before = sampler.observedBytes();
     constexpr std::size_t k_bytes = 32768;
@@ -43,6 +47,10 @@ int main()
     }
     if (!sampler.stop(error)) {
         std::fprintf(stderr, "count-only stop failed: %s\n", error.c_str());
+        return 1;
+    }
+    if (sampler.backendCleanupPending()) {
+        std::fprintf(stderr, "count-only stop left cleanup pending\n");
         return 1;
     }
     if (!sampler.shutdown(error)) {

@@ -68,6 +68,92 @@ set_target_properties(spark_allocation_bounded_event_queue_test PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME spark_allocation_bounded_event_queue_test COMMAND spark_allocation_bounded_event_queue_test)
 
+add_executable(spark_allocation_quiescence_test native/alloc/allocation_quiescence_test.cpp)
+target_include_directories(spark_allocation_quiescence_test PRIVATE "${CMAKE_SOURCE_DIR}/src")
+set_target_properties(spark_allocation_quiescence_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME spark_allocation_quiescence_test COMMAND spark_allocation_quiescence_test)
+
+if (WIN32 OR (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64"))
+    function(spark_lifecycle_sources target output)
+        get_target_property(target_sources ${target} SOURCES)
+        set(absolute_sources)
+        foreach (source IN LISTS target_sources)
+            if (IS_ABSOLUTE "${source}")
+                list(APPEND absolute_sources "${source}")
+            else ()
+                list(APPEND absolute_sources "${CMAKE_SOURCE_DIR}/${source}")
+            endif ()
+        endforeach ()
+        set(${output} "${absolute_sources}" PARENT_SCOPE)
+    endfunction()
+
+    spark_lifecycle_sources(spark_native SPARK_NATIVE_LIFECYCLE_SOURCES)
+    add_library(spark_native_lifecycle_test STATIC ${SPARK_NATIVE_LIFECYCLE_SOURCES})
+    target_compile_definitions(spark_native_lifecycle_test PUBLIC SPARK_ALLOCATION_LIFECYCLE_TESTING=1)
+    target_include_directories(spark_native_lifecycle_test PUBLIC "${CMAKE_SOURCE_DIR}/src"
+            PRIVATE "${CMAKE_SOURCE_DIR}/tests")
+    target_link_libraries(spark_native_lifecycle_test PUBLIC spark_profiling_time spark_diagnostics
+            cpptrace::cpptrace concurrentqueue::concurrentqueue Threads::Threads)
+    set_target_properties(spark_native_lifecycle_test PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    if (WIN32)
+        target_compile_definitions(spark_native_lifecycle_test PRIVATE NOMINMAX)
+        target_link_libraries(spark_native_lifecycle_test PUBLIC dbghelp psapi advapi32 distorm)
+    else ()
+        target_compile_definitions(spark_native_lifecycle_test PRIVATE _GNU_SOURCE)
+        target_compile_options(spark_native_lifecycle_test PRIVATE -fvisibility=hidden -fvisibility-inlines-hidden)
+        target_link_libraries(spark_native_lifecycle_test PUBLIC distorm ${CMAKE_DL_LIBS})
+    endif ()
+
+    spark_lifecycle_sources(spark_core SPARK_CORE_LIFECYCLE_SOURCES)
+    add_library(spark_core_lifecycle_test STATIC ${SPARK_CORE_LIFECYCLE_SOURCES})
+    target_compile_definitions(spark_core_lifecycle_test PUBLIC SPARK_ALLOCATION_LIFECYCLE_TESTING=1)
+    target_include_directories(spark_core_lifecycle_test PUBLIC "${CMAKE_SOURCE_DIR}/src"
+            PRIVATE "${CMAKE_SOURCE_DIR}/tests")
+    set_target_properties(spark_core_lifecycle_test PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    if (WIN32)
+        target_compile_definitions(spark_core_lifecycle_test PUBLIC NOMINMAX _WIN32_WINNT=0x0600
+                NTDDI_VERSION=0x06000000)
+        target_link_libraries(spark_core_lifecycle_test PUBLIC spark_diagnostics spark_native_lifecycle_test
+                ZLIB::ZLIB CURL::libcurl tomlplusplus::tomlplusplus nlohmann_json::nlohmann_json bcrypt iphlpapi)
+    else ()
+        target_compile_options(spark_core_lifecycle_test PRIVATE -fvisibility=hidden -fvisibility-inlines-hidden)
+        target_link_libraries(spark_core_lifecycle_test PUBLIC spark_diagnostics spark_native_lifecycle_test
+                ZLIB::ZLIB CURL::libcurl tomlplusplus::tomlplusplus nlohmann_json::nlohmann_json OpenSSL::Crypto)
+    endif ()
+
+    add_executable(spark_allocation_lifecycle_test native/alloc/allocation_lifecycle_test.cpp)
+    target_compile_definitions(spark_allocation_lifecycle_test PRIVATE SPARK_ALLOCATION_LIFECYCLE_TESTING=1)
+    target_include_directories(spark_allocation_lifecycle_test PRIVATE "${CMAKE_SOURCE_DIR}/src"
+            "${CMAKE_SOURCE_DIR}/tests")
+    target_link_libraries(spark_allocation_lifecycle_test PRIVATE spark_native_lifecycle_test)
+    set_target_properties(spark_allocation_lifecycle_test PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+    add_test(NAME spark_allocation_lifecycle_test COMMAND spark_allocation_lifecycle_test)
+    set_tests_properties(spark_allocation_lifecycle_test PROPERTIES TIMEOUT 60)
+
+    add_executable(spark_allocation_diagnostics_test native/alloc/allocation_diagnostics_test.cpp)
+    target_compile_definitions(spark_allocation_diagnostics_test PRIVATE SPARK_ALLOCATION_LIFECYCLE_TESTING=1)
+    target_include_directories(spark_allocation_diagnostics_test PRIVATE "${CMAKE_SOURCE_DIR}/src"
+            "${CMAKE_SOURCE_DIR}/tests")
+    target_link_libraries(spark_allocation_diagnostics_test PRIVATE spark_native_lifecycle_test)
+    set_target_properties(spark_allocation_diagnostics_test PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+    add_test(NAME spark_allocation_diagnostics_test COMMAND spark_allocation_diagnostics_test)
+    set_tests_properties(spark_allocation_diagnostics_test PROPERTIES TIMEOUT 60)
+
+    spark_lifecycle_sources(spark_application SPARK_APPLICATION_LIFECYCLE_SOURCES)
+    add_library(spark_application_lifecycle_test STATIC ${SPARK_APPLICATION_LIFECYCLE_SOURCES})
+    target_compile_definitions(spark_application_lifecycle_test PUBLIC SPARK_ALLOCATION_LIFECYCLE_TESTING=1)
+    target_include_directories(spark_application_lifecycle_test PUBLIC "${CMAKE_SOURCE_DIR}/src"
+            PRIVATE "${CMAKE_SOURCE_DIR}/tests")
+    target_link_libraries(spark_application_lifecycle_test PUBLIC spark_core_lifecycle_test)
+    set_target_properties(spark_application_lifecycle_test PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    if (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(spark_application_lifecycle_test PRIVATE -fvisibility=hidden -fvisibility-inlines-hidden)
+    endif ()
+endif ()
+
 add_executable(spark_stable_shard_snapshot_test native/alloc/stable_shard_snapshot_test.cpp)
 target_include_directories(spark_stable_shard_snapshot_test PRIVATE "${CMAKE_SOURCE_DIR}/src")
 set_target_properties(spark_stable_shard_snapshot_test PROPERTIES
@@ -212,6 +298,23 @@ set_target_properties(spark_profiler_service_failure_test PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME spark_profiler_service_failure_test COMMAND spark_profiler_service_failure_test)
 
+if (WIN32 OR (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64"))
+    add_executable(spark_profiler_export_lifecycle_test application/profiler/profiler_export_lifecycle_test.cpp)
+    target_compile_definitions(spark_profiler_export_lifecycle_test PRIVATE SPARK_ALLOCATION_LIFECYCLE_TESTING=1)
+    target_include_directories(spark_profiler_export_lifecycle_test PRIVATE "${CMAKE_SOURCE_DIR}/src"
+            "${CMAKE_SOURCE_DIR}/tests")
+    target_link_libraries(spark_profiler_export_lifecycle_test PRIVATE spark_application_lifecycle_test)
+    set_target_properties(spark_profiler_export_lifecycle_test PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+    add_test(NAME spark_profiler_export_lifecycle_test COMMAND spark_profiler_export_lifecycle_test)
+    set_tests_properties(spark_profiler_export_lifecycle_test PROPERTIES TIMEOUT 30)
+    add_test(NAME spark_profiler_export_lifecycle_subprocess_test
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_SOURCE_DIR}/tests/application/profiler/profiler_export_lifecycle_subprocess.py
+                    $<TARGET_FILE:spark_profiler_export_lifecycle_test>)
+    set_tests_properties(spark_profiler_export_lifecycle_subprocess_test PROPERTIES TIMEOUT 15)
+endif ()
+
 add_executable(spark_health_dashboard_test
         application/health/health_dashboard_test.cpp
         application/health/health_dashboard_test_support.cpp)
@@ -287,6 +390,18 @@ target_link_libraries(spark_profiler_export_test PRIVATE spark_core)
 set_target_properties(spark_profiler_export_test PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME spark_profiler_export_test COMMAND spark_profiler_export_test)
+
+if (WIN32 OR (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64"))
+    add_executable(spark_profiler_recovery_lifecycle_test core/profiler/profiler_recovery_lifecycle_test.cpp)
+    target_compile_definitions(spark_profiler_recovery_lifecycle_test PRIVATE SPARK_ALLOCATION_LIFECYCLE_TESTING=1)
+    target_include_directories(spark_profiler_recovery_lifecycle_test PRIVATE "${CMAKE_SOURCE_DIR}/src"
+            "${CMAKE_SOURCE_DIR}/tests")
+    target_link_libraries(spark_profiler_recovery_lifecycle_test PRIVATE spark_core_lifecycle_test)
+    set_target_properties(spark_profiler_recovery_lifecycle_test PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+    add_test(NAME spark_profiler_recovery_lifecycle_test COMMAND spark_profiler_recovery_lifecycle_test)
+    set_tests_properties(spark_profiler_recovery_lifecycle_test PROPERTIES TIMEOUT 60)
+endif ()
 
 add_executable(spark_included_ticks_test core/profiler/included_ticks_test.cpp)
 target_link_libraries(spark_included_ticks_test PRIVATE spark_core)

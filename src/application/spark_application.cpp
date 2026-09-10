@@ -155,7 +155,12 @@ bool SparkApplication::shutdown(std::string &error)
         error = "health dashboard/upload shutdown timed out";
         return false;
     }
-    profiler_.shutdown();
+    if (!profiler_.shutdown(error)) {
+        if (error.empty()) {
+            error = "profiler shutdown failed";
+        }
+        return false;
+    }
     watchdog_.stop();
     return true;
 }

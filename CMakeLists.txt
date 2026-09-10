@@ -85,6 +85,8 @@ target_link_libraries(spark_papi_headers INTERFACE endstone::endstone)
 
 if (WIN32)
     add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
+    enable_language(RC)
+    configure_file(src/version.rc.in "${CMAKE_CURRENT_BINARY_DIR}/generated/version.rc" @ONLY)
 endif ()
 
 # --- shared profiling time primitives (no native or core dependencies) ---
@@ -270,6 +272,9 @@ endstone_add_plugin(spark
         src/plugin.cpp)
 target_include_directories(spark PRIVATE src)
 target_link_libraries(spark PRIVATE spark_application spark_papi_integration)
+if (WIN32)
+    target_sources(spark PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated/version.rc")
+endif ()
 # Localize every symbol from the static archives (zlib, cpptrace, libunwind, libc++)
 # so they can't interpose with Endstone core's own copies in the BDS process. Only
 # init_endstone_plugin (default visibility via the macro) stays exported.

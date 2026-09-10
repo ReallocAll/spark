@@ -197,6 +197,12 @@ bool metadataBoolean(std::string_view profile, std::string_view key, bool expect
     return findExtraMetadataValue(profile, key, value) && value == (expected ? "true" : "false");
 }
 
+bool metadataString(std::string_view profile, std::string_view key, std::string_view expected)
+{
+    std::string value;
+    return findExtraMetadataValue(profile, key, value) && value == expected;
+}
+
 bool verifyTerminalMetadataExport()
 {
     spark::Profiler execution;
@@ -213,12 +219,25 @@ bool verifyTerminalMetadataExport()
     spark::Profiler allocation;
     spark::ProfilerTestAccess::setMode(allocation, spark::ProfileMode::Allocation);
     const std::string allocation_profile = allocation.exportData({});
+#if defined(_WIN32) || defined(__linux__)
+    constexpr std::string_view expected_accounting_state = "\"NotStarted\"";
+    constexpr bool expected_diagnostics_supported = true;
+#else
+    constexpr std::string_view expected_accounting_state = "\"NotApplicable\"";
+    constexpr bool expected_diagnostics_supported = false;
+#endif
     if (allocation_profile.empty() ||
         !metadataUnsigned(allocation_profile, "Allocation terminal in-flight tick samples discarded", 0) ||
         !metadataUnsigned(allocation_profile, "Allocation pending final drops", 0) ||
         !metadataUnsigned(allocation_profile, "Allocation samples dropped", 0) ||
         !metadataUnsigned(allocation_profile, "Allocation pending samples dropped", 0) ||
-        !metadataBoolean(allocation_profile, "Allocation data incomplete", false)) {
+        !metadataBoolean(allocation_profile, "Allocation data incomplete", false) ||
+        !metadataBoolean(allocation_profile, "Allocation diagnostics supported", expected_diagnostics_supported) ||
+        !metadataString(allocation_profile, "Allocation diagnostics accounting state", expected_accounting_state) ||
+        !metadataUnsigned(allocation_profile, "Allocation diagnostics live index capacity",
+                          spark::AllocationSampler::liveIndexCapacity()) ||
+        !metadataUnsigned(allocation_profile, "Allocation diagnostics live record capacity",
+                          spark::AllocationSampler::liveRecordCapacity())) {
         std::fprintf(stderr, "terminal metadata: allocation values were not serialized correctly\n");
         return false;
     }
@@ -275,7 +294,8 @@ bool verifyTerminalMetadataExportWithSamples()
         metadataUnsigned(allocation_profile, "Allocation pending final drops", terminal) &&
         metadataUnsigned(allocation_profile, "Allocation samples dropped", 0) &&
         metadataUnsigned(allocation_profile, "Allocation pending samples dropped", 0) &&
-        metadataBoolean(allocation_profile, "Allocation data incomplete", false);
+        metadataBoolean(allocation_profile, "Allocation data incomplete", false) &&
+        metadataString(allocation_profile, "Allocation diagnostics accounting state", "\"Complete\"");
     for (void *pointer : retained) {
         std::free(pointer);
     }
@@ -534,7 +554,8 @@ bool verifyPersistentAllocationExportOrdering()
         !metadataUnsigned(profile, "Allocation pending samples dropped",
                           spark::ProfilerTestAccess::allocationPendingSamples(profiler)) ||
         !metadataBoolean(profile, "Allocation data incomplete",
-                         spark::ProfilerTestAccess::allocationDataIncomplete(profiler))) {
+                         spark::ProfilerTestAccess::allocationDataIncomplete(profiler)) ||
+        !metadataString(profile, "Allocation diagnostics accounting state", "\"Complete\"")) {
         std::fprintf(stderr,
                      "persistent export: serialized SamplerData did not preserve a non-empty allocation tree\n");
         return false;

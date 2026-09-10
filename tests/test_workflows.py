@@ -20,6 +20,8 @@ class WorkflowTest(unittest.TestCase):
         self.assertIn("name: Build & test Windows", workflow)
         self.assertNotIn("needs: linux", workflow)
         self.assertNotIn("needs: windows", workflow)
+        self.assertEqual(workflow.count("tools/verify_windows_artifacts.ps1"), 1)
+        self.assertIn("build/RelWithDebInfo/SHA256SUMS", workflow)
 
     def test_release_is_published_after_both_artifacts(self):
         workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
@@ -30,6 +32,23 @@ class WorkflowTest(unittest.TestCase):
         self.assertLess(workflow.index("  windows:"), workflow.index("  publish:"))
         self.assertLess(workflow.index("  linux:"), workflow.index("  publish:"))
         self.assertIn("ctest --test-dir build/RelWithDebInfo --output-on-failure", workflow)
+        self.assertEqual(workflow.count("tools/verify_windows_artifacts.ps1"), 2)
+        self.assertIn("cp release-windows/SHA256SUMS release-windows/SHA256SUMS-windows", workflow)
+        self.assertIn("cmp -- release-windows/SHA256SUMS release-windows/SHA256SUMS-windows", workflow)
+        self.assertIn("release-windows/SHA256SUMS-windows", workflow)
+        self.assertNotIn("SHA256SUMS#SHA256SUMS-windows", workflow)
+
+    def test_windows_version_resource_is_configure_time_generated(self):
+        cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+        resource = (ROOT / "src" / "version.rc.in").read_text(encoding="utf-8")
+        self.assertIn("configure_file(src/version.rc.in", cmake)
+        self.assertIn('target_sources(spark PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated/version.rc")', cmake)
+        self.assertIn("@PROJECT_VERSION_MAJOR@", resource)
+        self.assertIn("@PROJECT_VERSION_MINOR@", resource)
+        self.assertIn("@PROJECT_VERSION_PATCH@", resource)
+        self.assertIn('VALUE "FileVersion", "@PROJECT_VERSION@.0\\0"', resource)
+        self.assertIn('VALUE "ProductVersion", "@PROJECT_VERSION@.0\\0"', resource)
+        self.assertNotIn("0.5.3", resource)
 
 if __name__ == "__main__":
     unittest.main()

@@ -45,6 +45,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Linux and Windows.
 - Attribute sampled Python plugin call chains on CPython 3.12+ using a bounded PEP
   669 shadow stack while keeping sampling native; CPython 3.11 remains native-only.
+- Expose detailed allocation capacity, loss, and accounting-validity diagnostics,
+  together with Windows consumer-CPU measurements, in profile metadata.
+- Embed project version information in Windows DLLs and verify DLL/PDB identity and
+  hashes in build and release artifacts.
 
 - Add Windows x64 native allocation profiling through Spark-owned process-lifetime
   Permanent-IAT gateways and IAT redirection, with fail-closed callback draining
@@ -98,6 +102,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   aggregator can no longer freeze the server main thread. Aggregation that does not fit inside
   the stop budget is truncated and reported as incomplete profile data; if the aggregator
   still cannot finish, the profile fails with an explicit error instead of hanging BDS.
+- Bound allocation-hook quiescence waits by elapsed time and preserve pending cleanup
+  across retries.
+- Retain recovery journals when export shutdown cleanup remains incomplete, and report cleanup
+  warnings only when cleanup did not actually finish.
 
 ## [0.5.3][0.5.3] - 2026-08-14
 

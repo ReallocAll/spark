@@ -147,7 +147,10 @@ bool verifyBackgroundCommandValidation(std::uint64_t worker_tid)
     service.cmdStart(sender, spark::Arguments({"start", "--interval", "1", "--save-to-file"}, true));
     service.cmdStop(sender, spark::Arguments({"stop"}, true));
     if (!waitForCondition(
-            [&service]() { return !service.exporting() && service.running() && service.isBackgroundRunning(); },
+            [&service]() {
+                service.onTick(0.0);
+                return !service.exporting() && service.running() && service.isBackgroundRunning();
+            },
             std::chrono::seconds(10))) {
         std::fprintf(stderr, "background validation: explicit stop did not restore background profiling\n");
         return false;
@@ -158,7 +161,12 @@ bool verifyBackgroundCommandValidation(std::uint64_t worker_tid)
     service.cmdStart(sender, spark::Arguments({"start", "--interval", "1", "--timeout", "11", "--save-to-file"}, true));
     spark::ProfilerServiceTestAccess::expire(service);
     service.onTick(50.0);
-    if (!waitForCondition([&service]() { return !service.exporting(); }, std::chrono::seconds(10))) {
+    if (!waitForCondition(
+            [&service]() {
+                service.onTick(0.0);
+                return !service.exporting();
+            },
+            std::chrono::seconds(10))) {
         std::fprintf(stderr, "background validation: timed profile did not finish exporting\n");
         return false;
     }

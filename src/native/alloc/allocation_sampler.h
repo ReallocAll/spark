@@ -15,6 +15,13 @@
 
 namespace spark {
 
+#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+namespace test {
+struct AllocationLifecycleTestAccess;
+struct AllocationDiagnosticsTestAccess;
+}  // namespace test
+#endif
+
 inline constexpr std::int32_t kDefaultAllocationIntervalBytes = 524287;  // spark's default: ~512 KiB
 inline constexpr std::int32_t kMaxAllocationIntervalBytes = 0x7fffffff;
 
@@ -87,6 +94,82 @@ struct AllocationSnapshot {
     std::uint64_t retained_maximum_age_ms = 0;
 };
 
+enum class AllocationAccountingState {
+    NotStarted,
+    Active,
+    Incomplete,
+    Complete,
+    Failed,
+    NotApplicable,
+};
+
+inline const char *allocationAccountingStateName(AllocationAccountingState state) noexcept
+{
+    switch (state) {
+    case AllocationAccountingState::NotStarted:
+        return "NotStarted";
+    case AllocationAccountingState::Active:
+        return "Active";
+    case AllocationAccountingState::Incomplete:
+        return "Incomplete";
+    case AllocationAccountingState::Complete:
+        return "Complete";
+    case AllocationAccountingState::Failed:
+        return "Failed";
+    case AllocationAccountingState::NotApplicable:
+        return "NotApplicable";
+    }
+    return "Unknown";
+}
+
+// Session diagnostics are backed by bounded atomics in the native backends.
+// Values may be in flight while a session is active, but are exact after
+// producer quiescence and terminal drain.
+struct AllocationDiagnostics {
+    bool supported = false;
+    AllocationAccountingState accounting_state = AllocationAccountingState::NotStarted;
+    std::uint64_t live_index_capacity = 0;
+    std::uint64_t live_record_capacity = 0;
+
+    std::uint64_t drain_truncated = 0;
+    std::uint64_t drain_truncated_allocation_events = 0;
+    std::uint64_t drain_truncated_thread_observation_events = 0;
+    std::uint64_t drain_truncated_tick_events = 0;
+    std::uint64_t retained_allocations_skipped = 0;
+    std::uint64_t record_pool_acquisition_failures = 0;
+    std::uint64_t insertion_contention_failures = 0;
+    std::uint64_t exhausted_insertion_probe_failures = 0;
+    std::uint64_t detach_contention_attempts = 0;
+
+    std::uint64_t processed_allocation_events = 0;
+    std::uint64_t processed_thread_observation_events = 0;
+    std::uint64_t processed_tick_events = 0;
+    std::uint64_t discarded_allocation_events = 0;
+    std::uint64_t discarded_thread_observation_events = 0;
+    std::uint64_t discarded_tick_events = 0;
+
+    std::uint64_t consumer_lifetime_elapsed_ns = 0;
+    std::uint64_t active_drain_elapsed_ns = 0;
+    std::uint64_t caller_final_drain_elapsed_ns = 0;
+    std::uint64_t caller_final_drain_allocation_events = 0;
+    std::uint64_t caller_final_drain_thread_observation_events = 0;
+    std::uint64_t caller_final_drain_tick_events = 0;
+
+    bool aggregator_cpu_supported = false;
+    bool aggregator_cpu_valid = false;
+    bool aggregator_cpu_read_failure = false;
+    std::uint64_t aggregator_cpu_time_ns = 0;
+
+    bool module_cache_supported = false;
+    std::uint64_t module_cache_hits = 0;
+    std::uint64_t module_cache_misses = 0;
+    std::uint64_t module_cache_insertion_refusals = 0;
+    std::uint64_t module_cache_size = 0;
+    std::uint64_t module_cache_capacity = 0;
+};
+
+using AllocationDiagnosticsSnapshot = AllocationDiagnostics;
+
 // Native allocation sampler. Tree weights are allocation bytes; lifecycle tracking
 // spans all covered threads so realloc/free may occur on a different thread.
 class AllocationSampler {
@@ -114,6 +197,8 @@ public:
     void onTick(double mspt_ms);
 
     bool snapshot(AllocationSnapshot &snapshot, std::string &error);
+    AllocationDiagnostics diagnostics() const;
+    AllocationDiagnosticsSnapshot allocationDiagnostics() const;
     bool setCurrentThreadTrackingSuppressed(bool suppressed) noexcept;
 
     // Sets the recovery sink for crash-safe journaling.  Must be called
@@ -148,6 +233,8 @@ public:
     std::uint64_t liveBytes() const;
     std::uint64_t peakLiveSamples() const;
     static std::uint64_t liveIndexCapacity();
+    static std::uint64_t liveRecordCapacity();
+    static std::uint64_t moduleCacheCapacity();
     std::uint64_t sampledThreadCount() const;
     static std::uint64_t threadRootCapacity();
     std::uint64_t overflowThreadCount() const;
@@ -181,6 +268,7 @@ public:
     std::uint64_t drainTruncated() const;
     bool stopWaitTimedOut() const;
     bool aggregatorMayBeAlive() const;
+    bool backendCleanupPending() const;
     std::uint64_t retainedAverageAgeMs() const;
     std::uint64_t retainedMaximumAgeMs() const;
     bool running() const;
@@ -192,6 +280,10 @@ public:
     std::size_t hookTargetCount() const;
 
 private:
+#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+    friend struct test::AllocationLifecycleTestAccess;
+    friend struct test::AllocationDiagnosticsTestAccess;
+#endif
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };
