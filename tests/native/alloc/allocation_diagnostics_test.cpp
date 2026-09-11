@@ -480,6 +480,7 @@ bool verifyFixtureWindowsBoundedAccounting()
     spark::test::AllocationDiagnosticsTestAccess::forceDrainDeadline(fixture.sampler, true);
     spark::AllocationSnapshot snapshot;
     const bool captured = seeded_ok && fixture.sampler.snapshot(snapshot, error);
+    const std::string snapshot_error = error;
     const spark::AllocationDiagnostics after_snapshot = fixture.sampler.diagnostics();
     const bool snapshot_valid =
         seeded.allocation_events == 3 && seeded.thread_observation_events == 2 && seeded.tick_events == 5 && captured &&
@@ -503,6 +504,7 @@ bool verifyFixtureWindowsBoundedAccounting()
         after_snapshot.caller_final_drain_elapsed_ns == before.caller_final_drain_elapsed_ns;
 
     const bool stopped = fixture.sampler.stop(error);
+    const std::string stop_error = error;
     const spark::AllocationDiagnostics terminal = fixture.sampler.diagnostics();
     spark::test::AllocationDiagnosticsTestAccess::forceDrainDeadline(fixture.sampler, false);
     const bool stop_valid =
@@ -526,6 +528,119 @@ bool verifyFixtureWindowsBoundedAccounting()
         terminal.processed_thread_observation_events == after_snapshot.processed_thread_observation_events &&
         terminal.processed_tick_events == after_snapshot.processed_tick_events;
     const bool cleanup_ok = fixture.cleanup();
+    if (!cleanup_ok || !snapshot_valid || !stop_valid) {
+        std::fprintf(stderr,
+                     "bounded-accounting: seeded_ok=%d captured=%d stopped=%d cleanup_ok=%d snapshot_valid=%d "
+                     "stop_valid=%d snapshot_error='%s' stop_error='%s'\n",
+                     static_cast<int>(seeded_ok), static_cast<int>(captured), static_cast<int>(stopped),
+                     static_cast<int>(cleanup_ok), static_cast<int>(snapshot_valid), static_cast<int>(stop_valid),
+                     snapshot_error.c_str(), stop_error.c_str());
+        const auto predicate = [](const char *name, bool valid) {
+            std::fprintf(stderr, "bounded-accounting predicate: %s=%d\n", name, static_cast<int>(valid));
+        };
+        predicate("snapshot_valid[0]", seeded.allocation_events == 3);
+        predicate("snapshot_valid[1]", seeded.thread_observation_events == 2);
+        predicate("snapshot_valid[2]", seeded.tick_events == 5);
+        predicate("snapshot_valid[3]", captured);
+        predicate("snapshot_valid[4]", exactDelta(after_snapshot.drain_truncated, before.drain_truncated, 6));
+        predicate("snapshot_valid[5]", exactDelta(after_snapshot.drain_truncated_allocation_events,
+                                                  before.drain_truncated_allocation_events, 3));
+        predicate("snapshot_valid[6]", exactDelta(after_snapshot.drain_truncated_thread_observation_events,
+                                                  before.drain_truncated_thread_observation_events, 2));
+        predicate("snapshot_valid[7]",
+                  exactDelta(after_snapshot.drain_truncated_tick_events, before.drain_truncated_tick_events, 1));
+        predicate("snapshot_valid[8]",
+                  exactDelta(after_snapshot.discarded_allocation_events, before.discarded_allocation_events, 3));
+        predicate("snapshot_valid[9]", exactDelta(after_snapshot.discarded_thread_observation_events,
+                                                  before.discarded_thread_observation_events, 2));
+        predicate("snapshot_valid[10]",
+                  exactDelta(after_snapshot.discarded_tick_events, before.discarded_tick_events, 1));
+        predicate("snapshot_valid[11]",
+                  after_snapshot.processed_allocation_events == before.processed_allocation_events);
+        predicate("snapshot_valid[12]",
+                  after_snapshot.processed_thread_observation_events == before.processed_thread_observation_events);
+        predicate("snapshot_valid[13]", after_snapshot.processed_tick_events == before.processed_tick_events);
+        predicate("snapshot_valid[14]",
+                  after_snapshot.caller_final_drain_allocation_events == before.caller_final_drain_allocation_events);
+        predicate("snapshot_valid[15]", after_snapshot.caller_final_drain_thread_observation_events ==
+                                            before.caller_final_drain_thread_observation_events);
+        predicate("snapshot_valid[16]",
+                  after_snapshot.caller_final_drain_tick_events == before.caller_final_drain_tick_events);
+        predicate("snapshot_valid[17]",
+                  after_snapshot.consumer_lifetime_elapsed_ns == before.consumer_lifetime_elapsed_ns);
+        predicate("snapshot_valid[18]", after_snapshot.active_drain_elapsed_ns == before.active_drain_elapsed_ns);
+        predicate("snapshot_valid[19]",
+                  after_snapshot.caller_final_drain_elapsed_ns == before.caller_final_drain_elapsed_ns);
+        predicate("stop_valid[0]", stopped);
+        predicate("stop_valid[1]", terminal.accounting_state == spark::AllocationAccountingState::Complete);
+        predicate("stop_valid[2]", exactDelta(terminal.discarded_tick_events, after_snapshot.discarded_tick_events, 4));
+        predicate("stop_valid[3]",
+                  exactDelta(terminal.drain_truncated_tick_events, after_snapshot.drain_truncated_tick_events, 4));
+        predicate("stop_valid[4]", exactDelta(terminal.drain_truncated, after_snapshot.drain_truncated, 4));
+        predicate("stop_valid[5]", exactDelta(terminal.caller_final_drain_tick_events,
+                                              after_snapshot.caller_final_drain_tick_events, 4));
+        predicate("stop_valid[6]", terminal.discarded_allocation_events == before.discarded_allocation_events + 3);
+        predicate("stop_valid[7]",
+                  terminal.discarded_thread_observation_events == before.discarded_thread_observation_events + 2);
+        predicate("stop_valid[8]", terminal.discarded_tick_events == before.discarded_tick_events + 5);
+        predicate("stop_valid[9]",
+                  terminal.drain_truncated_allocation_events == before.drain_truncated_allocation_events + 3);
+        predicate("stop_valid[10]", terminal.drain_truncated_thread_observation_events ==
+                                        before.drain_truncated_thread_observation_events + 2);
+        predicate("stop_valid[11]", terminal.drain_truncated_tick_events == before.drain_truncated_tick_events + 5);
+        predicate("stop_valid[12]", terminal.drain_truncated == before.drain_truncated + 10);
+        predicate("stop_valid[13]",
+                  terminal.caller_final_drain_allocation_events == before.caller_final_drain_allocation_events);
+        predicate("stop_valid[14]", terminal.caller_final_drain_thread_observation_events ==
+                                        before.caller_final_drain_thread_observation_events);
+        predicate("stop_valid[15]",
+                  terminal.caller_final_drain_tick_events == before.caller_final_drain_tick_events + 4);
+        predicate("stop_valid[16]",
+                  terminal.caller_final_drain_elapsed_ns > after_snapshot.caller_final_drain_elapsed_ns);
+        predicate("stop_valid[17]", terminal.processed_allocation_events == after_snapshot.processed_allocation_events);
+        predicate("stop_valid[18]",
+                  terminal.processed_thread_observation_events == after_snapshot.processed_thread_observation_events);
+        predicate("stop_valid[19]", terminal.processed_tick_events == after_snapshot.processed_tick_events);
+        const auto dump = [](const char *name, const spark::AllocationDiagnostics &value) {
+            std::fprintf(stderr, "bounded-accounting %s.drain_truncated=%llu\n", name,
+                         static_cast<unsigned long long>(value.drain_truncated));
+            std::fprintf(stderr, "bounded-accounting %s.drain_truncated_allocation_events=%llu\n", name,
+                         static_cast<unsigned long long>(value.drain_truncated_allocation_events));
+            std::fprintf(stderr, "bounded-accounting %s.drain_truncated_thread_observation_events=%llu\n", name,
+                         static_cast<unsigned long long>(value.drain_truncated_thread_observation_events));
+            std::fprintf(stderr, "bounded-accounting %s.drain_truncated_tick_events=%llu\n", name,
+                         static_cast<unsigned long long>(value.drain_truncated_tick_events));
+            std::fprintf(stderr, "bounded-accounting %s.discarded_allocation_events=%llu\n", name,
+                         static_cast<unsigned long long>(value.discarded_allocation_events));
+            std::fprintf(stderr, "bounded-accounting %s.discarded_thread_observation_events=%llu\n", name,
+                         static_cast<unsigned long long>(value.discarded_thread_observation_events));
+            std::fprintf(stderr, "bounded-accounting %s.discarded_tick_events=%llu\n", name,
+                         static_cast<unsigned long long>(value.discarded_tick_events));
+            std::fprintf(stderr, "bounded-accounting %s.processed_allocation_events=%llu\n", name,
+                         static_cast<unsigned long long>(value.processed_allocation_events));
+            std::fprintf(stderr, "bounded-accounting %s.processed_thread_observation_events=%llu\n", name,
+                         static_cast<unsigned long long>(value.processed_thread_observation_events));
+            std::fprintf(stderr, "bounded-accounting %s.processed_tick_events=%llu\n", name,
+                         static_cast<unsigned long long>(value.processed_tick_events));
+            std::fprintf(stderr, "bounded-accounting %s.caller_final_drain_allocation_events=%llu\n", name,
+                         static_cast<unsigned long long>(value.caller_final_drain_allocation_events));
+            std::fprintf(stderr, "bounded-accounting %s.caller_final_drain_thread_observation_events=%llu\n", name,
+                         static_cast<unsigned long long>(value.caller_final_drain_thread_observation_events));
+            std::fprintf(stderr, "bounded-accounting %s.caller_final_drain_tick_events=%llu\n", name,
+                         static_cast<unsigned long long>(value.caller_final_drain_tick_events));
+            std::fprintf(stderr, "bounded-accounting %s.consumer_lifetime_elapsed_ns=%llu\n", name,
+                         static_cast<unsigned long long>(value.consumer_lifetime_elapsed_ns));
+            std::fprintf(stderr, "bounded-accounting %s.active_drain_elapsed_ns=%llu\n", name,
+                         static_cast<unsigned long long>(value.active_drain_elapsed_ns));
+            std::fprintf(stderr, "bounded-accounting %s.caller_final_drain_elapsed_ns=%llu\n", name,
+                         static_cast<unsigned long long>(value.caller_final_drain_elapsed_ns));
+            std::fprintf(stderr, "bounded-accounting %s.accounting_state=%llu\n", name,
+                         static_cast<unsigned long long>(value.accounting_state));
+        };
+        dump("before", before);
+        dump("after_snapshot", after_snapshot);
+        dump("terminal", terminal);
+    }
     return cleanup_ok && snapshot_valid && stop_valid ? true : report("fixture bounded-accounting oracle failed");
 #endif
 }
