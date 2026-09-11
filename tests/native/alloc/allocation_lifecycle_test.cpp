@@ -194,6 +194,24 @@ bool verifyShutdownObligationSurvivesStop()
         fixture.sampler.aggregatorMayBeAlive()) {
         return report("failed shutdown did not retain its obligation");
     }
+#ifdef __linux__
+    error.clear();
+    const auto stop_started = Clock::now();
+    const bool stopped = fixture.sampler.stop(error);
+    const auto stop_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - stop_started);
+    const bool cleanup_pending = fixture.sampler.backendCleanupPending();
+    const bool aggregator_alive = fixture.sampler.aggregatorMayBeAlive();
+    const bool running = fixture.sampler.running();
+    if (stopped || !cleanup_pending || aggregator_alive || running || stop_elapsed > std::chrono::seconds(8) ||
+        error.find("shutdown") == std::string::npos) {
+        std::fprintf(stderr,
+                     "allocation lifecycle: held ordinary stop did not preserve shutdown admission "
+                     "(stopped=%d pending=%d aggregator=%d running=%d elapsed_ms=%lld error=%s)\n",
+                     static_cast<int>(stopped), static_cast<int>(cleanup_pending), static_cast<int>(aggregator_alive),
+                     static_cast<int>(running), static_cast<long long>(stop_elapsed.count()), error.c_str());
+        return false;
+    }
+#endif
     fixture.tracking_gate.release.store(true, std::memory_order_release);
     fixture.holder.join();
 

@@ -2619,6 +2619,10 @@ struct AllocationSampler::Impl {
             backend_cleanup_pending.store(false, std::memory_order_release);
             return true;
         }
+        if (!shutdown && backend_shutdown_pending.load(std::memory_order_acquire)) {
+            error = "allocation backend shutdown cleanup is pending";
+            return false;
+        }
         backend_cleanup_pending.store(true, std::memory_order_release);
         bool success = true;
         if (backend_state.load(std::memory_order_acquire) != BackendState::Exited) {
