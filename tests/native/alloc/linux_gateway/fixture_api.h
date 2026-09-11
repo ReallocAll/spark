@@ -15,6 +15,7 @@ struct GatewayFixtureState {
     std::atomic<bool> release_callback{false};
     std::atomic<bool> fail_key_delete{false};
     std::atomic<bool> fail_after_key_create{false};
+    std::atomic<bool> nested{false};
 };
 
 struct GatewayFixtureInfo {

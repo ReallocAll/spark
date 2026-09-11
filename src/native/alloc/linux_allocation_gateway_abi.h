@@ -4,7 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define SPARK_GATEWAY_ABI_VERSION 1U
+#define SPARK_GATEWAY_ABI_VERSION 2U
 #define SPARK_GATEWAY_FAMILY      "endstone.spark.allocation.gateway"
 #define SPARK_GATEWAY_SYMBOL      "spark_allocation_gateway_v1"
 #define SPARK_GATEWAY_FILENAME    "libspark_allocation_gateway_v1.so"
@@ -54,6 +54,8 @@ typedef struct SparkGatewayV1 {
 } SparkGatewayV1;
 
 typedef const SparkGatewayV1 *(*SparkGatewayQueryV1)(void);
+
+const SparkGatewayV1 *spark_allocation_gateway_v1(void);
 
 #ifdef __cplusplus
 }

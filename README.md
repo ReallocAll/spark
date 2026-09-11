@@ -304,17 +304,17 @@ Loaded modules are rescanned at session start
 and every five seconds while profiling; unloaded modules are recognized before
 restoration so stale slots are never written.
 
-Linux allocation gateways live in a minimal process-resident helper, independently
-of Spark plugin unload. The helper adds no permanent pin on Spark itself; external
-loader references may still keep the plugin loaded. Missing, unsupported, or
-mismatched helpers prevent allocation-hook admission instead of permitting unsafe
-unload. These restrictions do not disable execution profiling.
+Linux allocation gateways live in permanent anonymous memory, independently of
+Spark plugin unload. Allocation profiling adds no permanent pin on Spark itself;
+execution profiling and external loader references may still keep the plugin loaded.
+Unsupported host unwinders or incompatible resident gateways prevent allocation-hook
+admission. These restrictions do not disable execution profiling.
 
-The helper has a limit of 256 gateway groups over the server process lifetime,
+The gateway arena has a limit of 256 groups over the server process lifetime,
 not 256 simultaneous profiling sessions. Published groups are never reused after
-retirement. Exhausting this capacity, or encountering an old resident helper whose
-code identity differs from the installed helper, requires a server process restart.
-Reloading the plugin does not refresh the resident helper.
+retirement. Exhausting this capacity, encountering incompatible resident gateway
+code, or upgrading from the old helper-based runtime requires a server process
+restart. Reloading the plugin does not replace permanent gateway code.
 
 On Windows x64, Spark redirects supported UCRT and heap allocation imports through
 Spark-owned Permanent-IAT gateways. Shutdown first closes gateway admission, drains
@@ -454,23 +454,18 @@ with StackWalk64.
 On Windows, copy `build/endstone_spark.dll` into your server's `plugins/`
 directory.
 
-On Linux, install `endstone_spark-linux-x86_64.tar.gz` by extracting both files
-into the server's `plugins/` directory, preserving this layout:
+On Linux, extract `endstone_spark-linux-x86_64.tar.gz` into the server's `plugins/`
+directory:
 
 ```text
 plugins/
   endstone_spark.so
-  .spark-native/
-    libspark_allocation_gateway_v1.so
 ```
 
-The archive contains exactly `endstone_spark.so` and
-`.spark-native/libspark_allocation_gateway_v1.so`. For a local build, copy
-`build/endstone_spark.so` and
-`build/.spark-native/libspark_allocation_gateway_v1.so` into the same layout.
-Do not copy only the plugin or move the helper into the top-level `plugins/`
-directory where it could be discovered as a plugin. Restart the server process
-after updating the helper; a Spark plugin reload keeps the old resident helper.
+The archive contains exactly one file, `endstone_spark.so`. For a local build,
+copy `build/endstone_spark.so` into `plugins/`. No helper library is required.
+Restart the server process when upgrading from a helper-based build or changing
+the permanent gateway's code identity.
 
 > **Toolchain / ABI note.** A C++ Endstone plugin must use the runtime ABI expected
 > by the Endstone build it is loaded into. Match its compiler, compiler ABI, C++

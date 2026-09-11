@@ -4,6 +4,7 @@
 #include <array>
 #include <atomic>
 #include <barrier>
+#include <cerrno>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -446,6 +447,61 @@ void requestStopLoader()
     require(::dlclose(blocker) == 0, "release loader fixture after rescan cleanup");
 }
 
+void allocatorErrno()
+{
+    spark::test::LinuxAllocationTestControl control;
+    Fixture fixture(control);
+    const auto suppress = fixture.symbol<bool (*)(bool)>("sampler_suppress");
+    const auto samples = fixture.symbol<std::uint64_t (*)()>("sampler_samples");
+    const auto exercise = [] {
+        std::array<int, 7> observed{};
+        void *result = nullptr;
+        errno = EDOM;
+        result = std::malloc(8192);
+        observed[0] = errno;
+        require(result != nullptr, "errno malloc fixture");
+        std::free(result);
+        errno = EDOM;
+        result = std::calloc(3, 8192);
+        observed[1] = errno;
+        require(result != nullptr, "errno calloc fixture");
+        std::free(result);
+        errno = EDOM;
+        result = std::realloc(nullptr, 8192);
+        observed[2] = errno;
+        require(result != nullptr, "errno realloc fixture");
+        std::free(result);
+        void (*volatile free_call)(void *) = &std::free;
+        errno = EDOM;
+        free_call(nullptr);
+        observed[3] = errno;
+        errno = EDOM;
+        result = ::reallocarray(nullptr, 3, 8192);
+        observed[4] = errno;
+        require(result != nullptr, "errno reallocarray fixture");
+        std::free(result);
+        errno = EDOM;
+        result = std::aligned_alloc(16, 8192);
+        observed[5] = errno;
+        require(result != nullptr, "errno aligned allocation fixture");
+        std::free(result);
+        errno = EDOM;
+        const auto status = ::posix_memalign(&result, 16, 8192);
+        observed[6] = errno;
+        require(status == 0 && result != nullptr, "errno posix_memalign fixture");
+        std::free(result);
+        return observed;
+    };
+    const auto expected = exercise();
+    require(fixture.start(0) != 0, "start actual allocator errno fixture");
+    require(exercise() == expected, "all allocator callbacks preserve original errno after bookkeeping");
+    suppress(true);
+    require(exercise() == expected, "suppressed allocator callbacks preserve original errno");
+    suppress(false);
+    require(fixture.finish(false) != 0 && samples() != 0, "errno exercise passed through actual sampled hooks");
+    require(exercise() == expected, "closed allocator gateways preserve original errno");
+}
+
 }  // namespace
 
 extern "C" __attribute__((visibility("default"))) void spark_fixture_constructor_gate()
@@ -486,6 +542,9 @@ int main(int argc, char **argv)
     }
     else if (mode == "request_stop_loader") {
         requestStopLoader();
+    }
+    else if (mode == "errno") {
+        allocatorErrno();
     }
     else {
         require(false, "known fixture mode");

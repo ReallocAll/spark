@@ -22,7 +22,7 @@ execute_process(COMMAND "${CMAKE_COMMAND}" --install "${BUILD_DIR}" --config "${
         --component spark_linux_runtime --prefix "${stage}" COMMAND_ERROR_IS_FATAL ANY)
 execute_process(COMMAND "${PYTHON}" "${VERIFIER}" stage "${stage}" COMMAND_ERROR_IS_FATAL ANY)
 execute_process(COMMAND "${CMAKE_COMMAND}" -E tar czf "${OUTPUT_DIR}/endstone_spark-linux-x86_64.tar.gz"
-        --format=gnutar endstone_spark.so .spark-native/libspark_allocation_gateway_v1.so
+        --format=gnutar endstone_spark.so
         WORKING_DIRECTORY "${stage}" COMMAND_ERROR_IS_FATAL ANY)
 execute_process(COMMAND "${PYTHON}" "${VERIFIER}" archive "${OUTPUT_DIR}/endstone_spark-linux-x86_64.tar.gz"
         COMMAND_ERROR_IS_FATAL ANY)

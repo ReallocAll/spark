@@ -56,10 +56,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **BREAKING**: Distribute Linux builds as `endstone_spark-linux-x86_64.tar.gz`
-  containing `endstone_spark.so` and `.spark-native/libspark_allocation_gateway_v1.so`.
-  Extract both into `plugins/`, preserving the helper subdirectory. Restart the
-  server process after helper updates; plugin reload does not replace resident code.
+- Distribute Linux builds as `endstone_spark-linux-x86_64.tar.gz` containing only
+  `endstone_spark.so`. Restart the server when upgrading from the old helper-based
+  runtime or changing permanent gateway code.
 - **BREAKING**: Limit Linux allocation providers to those provably in the main
   executable's startup `DT_NEEDED` dependency closure. Dynamically loaded custom
   providers outside that closure are unsupported.
@@ -71,10 +70,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Keep Linux allocation gateways in an independent process-resident helper without
-  adding a permanent pin on Spark. Reject missing, unsupported, or mismatched
-  helpers. A helper identity mismatch or exhaustion of its 256 lifetime gateway
-  groups requires a server process restart; retired published groups are not reused.
+- Keep Linux allocation gateways in permanent anonymous memory without adding a
+  permanent allocation-profiler pin on Spark. Incompatible resident code or
+  exhaustion of 256 lifetime groups requires a server restart. Retired published
+  groups are not reused, and late TLS callbacks cannot access detached payloads.
 - Export Python filename leaves and CodeIds without server-owner directory paths,
   retaining native identities and available line data. Stop admitting new Python
   symbols for the session after a code-registration failure.

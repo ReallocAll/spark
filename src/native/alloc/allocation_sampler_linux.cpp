@@ -30,6 +30,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -999,20 +1000,43 @@ struct AllocationSampler::Impl {
         }
     }
 
+    struct OriginalErrno {
+        int incoming = errno;
+        int result = incoming;
+
+        ~OriginalErrno() { errno = result; }
+
+        template <typename Function, typename... Args>
+        auto invoke(Function function, Args... args) noexcept -> decltype(function(args...))
+        {
+            errno = incoming;
+            if constexpr (std::is_void_v<decltype(function(args...))>) {
+                function(args...);
+                result = errno;
+            }
+            else {
+                auto value = function(args...);
+                result = errno;
+                return value;
+            }
+        }
+    };
+
     void handleFree(void *pointer) noexcept
     {
+        OriginalErrno call;
         if (!shouldTrackCurrentThread()) {
-            real_free(pointer);
+            call.invoke(real_free, pointer);
             return;
         }
         TrackingCallGuard tracking_guard(*this);
         RecursionGuard recursion(*this);
         if (!tracking_guard || !recursion.owner()) {
-            real_free(pointer);
+            call.invoke(real_free, pointer);
             return;
         }
         LiveAllocation *allocation = detachAllocation(pointer);
-        real_free(pointer);
+        call.invoke(real_free, pointer);
         if (allocation != nullptr) {
             retireAllocation(allocation, monotonicMs());
         }
@@ -1020,15 +1044,16 @@ struct AllocationSampler::Impl {
 
     void *handleMalloc(std::size_t size) noexcept
     {
+        OriginalErrno call;
         if (!shouldTrackCurrentThread()) {
-            return real_malloc(size);
+            return call.invoke(real_malloc, size);
         }
         TrackingCallGuard tracking_guard(*this);
         RecursionGuard recursion(*this);
         if (!tracking_guard || !recursion.owner()) {
-            return real_malloc(size);
+            return call.invoke(real_malloc, size);
         }
-        void *result = real_malloc(size);
+        void *result = call.invoke(real_malloc, size);
         if (result != nullptr) {
             recordAllocation(result, static_cast<std::uint64_t>(size));
         }
@@ -1037,15 +1062,16 @@ struct AllocationSampler::Impl {
 
     void *handleCalloc(std::size_t count, std::size_t size) noexcept
     {
+        OriginalErrno call;
         if (!shouldTrackCurrentThread()) {
-            return real_calloc(count, size);
+            return call.invoke(real_calloc, count, size);
         }
         TrackingCallGuard tracking_guard(*this);
         RecursionGuard recursion(*this);
         if (!tracking_guard || !recursion.owner()) {
-            return real_calloc(count, size);
+            return call.invoke(real_calloc, count, size);
         }
-        void *result = real_calloc(count, size);
+        void *result = call.invoke(real_calloc, count, size);
         std::uint64_t bytes = 0;
         if (result != nullptr && checkedMultiply(count, size, bytes)) {
             recordAllocation(result, bytes);
@@ -1055,19 +1081,20 @@ struct AllocationSampler::Impl {
 
     void *handleRealloc(void *pointer, std::size_t size) noexcept
     {
+        OriginalErrno call;
         if (!shouldTrackCurrentThread()) {
-            return real_realloc(pointer, size);
+            return call.invoke(real_realloc, pointer, size);
         }
         TrackingCallGuard tracking_guard(*this);
         if (!tracking_guard) {
-            return real_realloc(pointer, size);
+            return call.invoke(real_realloc, pointer, size);
         }
         RecursionGuard recursion(*this);
         if (!recursion.owner()) {
-            return real_realloc(pointer, size);
+            return call.invoke(real_realloc, pointer, size);
         }
         LiveAllocation *previous = detachAllocation(pointer);
-        void *result = real_realloc(pointer, size);
+        void *result = call.invoke(real_realloc, pointer, size);
         const bool replaced = result != nullptr || (pointer != nullptr && size == 0);
         if (replaced) {
             if (previous != nullptr) {
@@ -1085,21 +1112,22 @@ struct AllocationSampler::Impl {
 
     void *handleReallocArray(void *pointer, std::size_t count, std::size_t size) noexcept
     {
+        OriginalErrno call;
         if (!shouldTrackCurrentThread()) {
-            return real_reallocarray(pointer, count, size);
+            return call.invoke(real_reallocarray, pointer, count, size);
         }
         TrackingCallGuard tracking_guard(*this);
         if (!tracking_guard) {
-            return real_reallocarray(pointer, count, size);
+            return call.invoke(real_reallocarray, pointer, count, size);
         }
         std::uint64_t bytes = 0;
         const bool valid_size = checkedMultiply(count, size, bytes);
         RecursionGuard recursion(*this);
         if (!recursion.owner()) {
-            return real_reallocarray(pointer, count, size);
+            return call.invoke(real_reallocarray, pointer, count, size);
         }
         LiveAllocation *previous = detachAllocation(pointer);
-        void *result = real_reallocarray(pointer, count, size);
+        void *result = call.invoke(real_reallocarray, pointer, count, size);
         const bool replaced = result != nullptr || (pointer != nullptr && valid_size && bytes == 0);
         if (replaced) {
             if (previous != nullptr) {
@@ -1117,15 +1145,16 @@ struct AllocationSampler::Impl {
 
     void *handleAlignedAlloc(std::size_t alignment, std::size_t size) noexcept
     {
+        OriginalErrno call;
         if (!shouldTrackCurrentThread()) {
-            return real_aligned_alloc(alignment, size);
+            return call.invoke(real_aligned_alloc, alignment, size);
         }
         TrackingCallGuard tracking_guard(*this);
         RecursionGuard recursion(*this);
         if (!tracking_guard || !recursion.owner()) {
-            return real_aligned_alloc(alignment, size);
+            return call.invoke(real_aligned_alloc, alignment, size);
         }
-        void *result = real_aligned_alloc(alignment, size);
+        void *result = call.invoke(real_aligned_alloc, alignment, size);
         if (result != nullptr) {
             recordAllocation(result, static_cast<std::uint64_t>(size));
         }
@@ -1134,15 +1163,16 @@ struct AllocationSampler::Impl {
 
     int handlePosixMemalign(void **result_pointer, std::size_t alignment, std::size_t size) noexcept
     {
+        OriginalErrno call;
         if (!shouldTrackCurrentThread()) {
-            return real_posix_memalign(result_pointer, alignment, size);
+            return call.invoke(real_posix_memalign, result_pointer, alignment, size);
         }
         TrackingCallGuard tracking_guard(*this);
         RecursionGuard recursion(*this);
         if (!tracking_guard || !recursion.owner()) {
-            return real_posix_memalign(result_pointer, alignment, size);
+            return call.invoke(real_posix_memalign, result_pointer, alignment, size);
         }
-        const int result = real_posix_memalign(result_pointer, alignment, size);
+        const int result = call.invoke(real_posix_memalign, result_pointer, alignment, size);
         if (result == 0 && result_pointer != nullptr && *result_pointer != nullptr) {
             recordAllocation(*result_pointer, static_cast<std::uint64_t>(size));
         }

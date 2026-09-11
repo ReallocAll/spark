@@ -6,7 +6,6 @@ add_library(spark_linux_sampler_fixture SHARED sampler_fixture.cpp
         "${CMAKE_SOURCE_DIR}/src/native/alloc/allocation_profile_aggregation.cpp"
         "${CMAKE_SOURCE_DIR}/src/native/alloc/allocation_thread_filter.cpp"
         "${CMAKE_SOURCE_DIR}/src/native/alloc/elf_import_hooks.cpp"
-        "${CMAKE_SOURCE_DIR}/src/native/alloc/linux_allocation_gateway_client.cpp"
         "${CMAKE_SOURCE_DIR}/src/native/sampler/call_tree.cpp"
         "${CMAKE_SOURCE_DIR}/src/native/sampler/thread_selector.cpp"
         "${CMAKE_SOURCE_DIR}/src/native/sampler/thread_info.cpp"
@@ -17,13 +16,9 @@ target_include_directories(spark_linux_sampler_fixture PRIVATE "${CMAKE_SOURCE_D
 target_compile_definitions(spark_linux_sampler_fixture PRIVATE _GNU_SOURCE SPARK_ALLOCATION_LIFECYCLE_TESTING SPARK_GATEWAY_HANDLE_TESTING)
 target_compile_options(spark_linux_sampler_fixture PRIVATE -fvisibility=hidden -fvisibility-inlines-hidden)
 target_link_options(spark_linux_sampler_fixture PRIVATE "-Wl,--exclude-libs,ALL")
-target_link_libraries(spark_linux_sampler_fixture PRIVATE cpptrace::cpptrace concurrentqueue::concurrentqueue ${CMAKE_DL_LIBS} pthread)
+target_link_libraries(spark_linux_sampler_fixture PRIVATE spark_linux_permanent_gateway cpptrace::cpptrace concurrentqueue::concurrentqueue ${CMAKE_DL_LIBS} pthread)
 set_target_properties(spark_linux_sampler_fixture PROPERTIES PREFIX "" OUTPUT_NAME endstone_spark
         LIBRARY_OUTPUT_DIRECTORY "${sampler_fixture_root}")
-add_dependencies(spark_linux_sampler_fixture spark_allocation_gateway_v1)
-add_custom_command(TARGET spark_linux_sampler_fixture POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E make_directory "${sampler_fixture_root}/.spark-native"
-        COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:spark_allocation_gateway_v1>" "${sampler_fixture_root}/.spark-native/")
 add_executable(spark_linux_sampler_dso_test sampler_dso_test.cpp)
 add_library(spark_linux_loader_blocker SHARED loader_blocker.cpp)
 target_include_directories(spark_linux_sampler_dso_test PRIVATE "${CMAKE_SOURCE_DIR}/src" "${CMAKE_SOURCE_DIR}/tests")
@@ -33,7 +28,7 @@ target_compile_definitions(spark_linux_sampler_dso_test PRIVATE _GNU_SOURCE
         SPARK_SAMPLER_FIXTURE="$<TARGET_FILE:spark_linux_sampler_fixture>"
         SPARK_LOADER_BLOCKER="$<TARGET_FILE:spark_linux_loader_blocker>")
 add_dependencies(spark_linux_sampler_dso_test spark_linux_sampler_fixture spark_linux_loader_blocker)
-foreach (mode churn aggregator_exit start_failures loader_block event_block final_block handle_fault hook_block tls_block creation_held)
+foreach (mode churn aggregator_exit start_failures loader_block event_block final_block handle_fault hook_block tls_block creation_held errno)
     add_test(NAME spark_linux_sampler_dso_${mode} COMMAND spark_linux_sampler_dso_test ${mode})
     set_tests_properties(spark_linux_sampler_dso_${mode} PROPERTIES TIMEOUT 90)
 endforeach ()
@@ -49,14 +44,13 @@ add_library(spark_linux_sampler_test_backend STATIC ${sampler_test_sources})
 target_include_directories(spark_linux_sampler_test_backend PUBLIC "${CMAKE_SOURCE_DIR}/src" "${CMAKE_SOURCE_DIR}/tests"
         PRIVATE "${CMAKE_SOURCE_DIR}/src/core/profiler" "${CMAKE_BINARY_DIR}/generated")
 target_compile_definitions(spark_linux_sampler_test_backend PUBLIC _GNU_SOURCE SPARK_ALLOCATION_LIFECYCLE_TESTING)
-target_link_libraries(spark_linux_sampler_test_backend PUBLIC cpptrace::cpptrace concurrentqueue::concurrentqueue ${CMAKE_DL_LIBS} pthread)
+target_link_libraries(spark_linux_sampler_test_backend PUBLIC spark_linux_permanent_gateway cpptrace::cpptrace concurrentqueue::concurrentqueue ${CMAKE_DL_LIBS} pthread)
 foreach (test lifecycle diagnostics count_only)
     add_executable(spark_linux_existing_${test}_test "${CMAKE_SOURCE_DIR}/tests/native/alloc/allocation_${test}_test.cpp"
             legacy_imports.cpp)
     target_link_libraries(spark_linux_existing_${test}_test PRIVATE spark_linux_sampler_test_backend)
     target_link_options(spark_linux_existing_${test}_test PRIVATE "-Wl,-z,relro,-z,now")
     set_target_properties(spark_linux_existing_${test}_test PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
-    add_dependencies(spark_linux_existing_${test}_test spark_allocation_gateway_v1)
     add_test(NAME spark_linux_existing_${test} COMMAND spark_linux_existing_${test}_test)
     set_tests_properties(spark_linux_existing_${test} PROPERTIES TIMEOUT 120)
 endforeach ()

@@ -7,6 +7,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(ENDSTONE_SPARK_BUILD_SELFTEST "Build the offline sampler self-test tool" ON)
 option(ENDSTONE_SPARK_GATEWAY_TEST_ONLY "Build only the standalone Linux allocation gateway tests" OFF)
+option(ENDSTONE_SPARK_GATEWAY_SAMPLER_TESTS "Build isolated Linux allocation sampler tests" ON)
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
@@ -14,7 +15,10 @@ if (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_6
     set(spark_gateway_sources
             src/native/alloc/linux_allocation_gateway.cpp
             src/native/alloc/linux_allocation_gateway_abi.h
-            src/native/alloc/linux_allocation_gateway.map
+            src/native/alloc/linux_permanent_gateway_registry.cpp
+            src/native/alloc/linux_permanent_gateway_registry.h
+            src/native/alloc/linux_permanent_gateway_unwind.cpp
+            src/native/alloc/linux_permanent_gateway_unwind.h
             src/native/alloc/linux_gateway_identity.h
             src/native/alloc/linux_loader_handle.h
             src/native/alloc/linux_elf_admission.h
@@ -34,27 +38,27 @@ if (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_6
     string(SHA256 spark_gateway_hash "${spark_gateway_identity}")
     file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/spark_gateway_compatibility.h"
             CONTENT "#define SPARK_GATEWAY_COMPATIBILITY \"${spark_gateway_hash}\"\n#define SPARK_GATEWAY_EXPECTED_CAPACITY 256\n")
-    add_library(spark_allocation_gateway_v1 SHARED src/native/alloc/linux_allocation_gateway.cpp)
-    target_include_directories(spark_allocation_gateway_v1 PRIVATE src "${CMAKE_CURRENT_BINARY_DIR}/generated")
-    target_compile_definitions(spark_allocation_gateway_v1 PRIVATE _GNU_SOURCE)
-    target_compile_options(spark_allocation_gateway_v1 PRIVATE -O2 -fvisibility=hidden -fvisibility-inlines-hidden
-            -fno-optimize-sibling-calls -fno-omit-frame-pointer -fasynchronous-unwind-tables)
-    target_link_libraries(spark_allocation_gateway_v1 PRIVATE ${CMAKE_DL_LIBS} pthread)
-    target_link_options(spark_allocation_gateway_v1 PRIVATE -nostartfiles "-Wl,--exclude-libs,ALL" "-Wl,-z,relro,-z,now")
-    target_link_options(spark_allocation_gateway_v1 PRIVATE
-            "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/src/native/alloc/linux_allocation_gateway.map")
-    set_property(TARGET spark_allocation_gateway_v1 APPEND PROPERTY LINK_DEPENDS
-            "${CMAKE_CURRENT_SOURCE_DIR}/src/native/alloc/linux_allocation_gateway.map")
-    set_target_properties(spark_allocation_gateway_v1 PROPERTIES
-            OUTPUT_NAME spark_allocation_gateway_v1
-            LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/.spark-native")
-    add_custom_command(TARGET spark_allocation_gateway_v1 POST_BUILD
-            COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/native/alloc/verify_linux_gateway.py"
-                    elf "$<TARGET_FILE:spark_allocation_gateway_v1>" VERBATIM)
+    find_package(cpptrace REQUIRED)
+    find_package(libunwind REQUIRED CONFIG)
+    find_path(SPARK_LIBUNWIND_INCLUDE_DIR libunwind.h
+            HINTS "${libunwind_PACKAGE_FOLDER_RELWITHDEBINFO}/include"
+                  "${libunwind_PACKAGE_FOLDER_RELEASE}/include"
+                  "${libunwind_PACKAGE_FOLDER_DEBUG}/include" REQUIRED NO_DEFAULT_PATH)
+    add_library(spark_linux_permanent_gateway STATIC
+            src/native/alloc/linux_allocation_gateway.cpp
+            src/native/alloc/linux_allocation_gateway_client.cpp
+            src/native/alloc/linux_permanent_gateway_registry.cpp
+            src/native/alloc/linux_permanent_gateway_unwind.cpp)
+    target_include_directories(spark_linux_permanent_gateway PUBLIC src
+            PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated" "${SPARK_LIBUNWIND_INCLUDE_DIR}")
+    target_compile_definitions(spark_linux_permanent_gateway PRIVATE _GNU_SOURCE)
+    target_compile_options(spark_linux_permanent_gateway PRIVATE -fvisibility=hidden -fvisibility-inlines-hidden)
+    target_link_libraries(spark_linux_permanent_gateway PUBLIC libunwind::unwind ${CMAKE_DL_LIBS} pthread)
+    set_target_properties(spark_linux_permanent_gateway PROPERTIES POSITION_INDEPENDENT_CODE ON)
 endif ()
 
 if (ENDSTONE_SPARK_GATEWAY_TEST_ONLY)
-    if (NOT TARGET spark_allocation_gateway_v1)
+    if (NOT TARGET spark_linux_permanent_gateway)
         message(FATAL_ERROR "The standalone allocation gateway tests require Linux x86-64")
     endif ()
     enable_testing()
@@ -190,10 +194,9 @@ elseif (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "x
     target_sources(spark_native PRIVATE
             src/native/sampler/capture_linux.cpp
             src/native/alloc/allocation_sampler_linux.cpp
-            src/native/alloc/linux_allocation_gateway_client.cpp
             src/native/alloc/elf_import_hooks.cpp)
     target_include_directories(spark_native PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
-    add_dependencies(spark_native spark_allocation_gateway_v1)
+    target_link_libraries(spark_native PUBLIC spark_linux_permanent_gateway)
 else ()
     target_sources(spark_native PRIVATE
             src/native/sampler/capture_linux.cpp
@@ -328,12 +331,8 @@ endstone_add_plugin(spark
         src/plugin.cpp)
 target_include_directories(spark PRIVATE src)
 target_link_libraries(spark PRIVATE spark_application spark_papi_integration)
-if (TARGET spark_allocation_gateway_v1)
-    add_dependencies(spark spark_allocation_gateway_v1)
-    set_target_properties(spark_allocation_gateway_v1 PROPERTIES
-            LIBRARY_OUTPUT_DIRECTORY "$<TARGET_FILE_DIR:spark>/.spark-native")
+if (TARGET spark_linux_permanent_gateway)
     install(TARGETS spark LIBRARY DESTINATION . COMPONENT spark_linux_runtime)
-    install(TARGETS spark_allocation_gateway_v1 LIBRARY DESTINATION .spark-native COMPONENT spark_linux_runtime)
     add_custom_target(spark_linux_archive
             COMMAND ${CMAKE_COMMAND}
                     "-DBUILD_DIR=${CMAKE_BINARY_DIR}"
@@ -342,7 +341,7 @@ if (TARGET spark_allocation_gateway_v1)
                     "-DPYTHON=${Python3_EXECUTABLE}"
                     "-DVERIFIER=${CMAKE_CURRENT_SOURCE_DIR}/tests/native/alloc/verify_linux_gateway.py"
                     -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/PackageLinuxRuntime.cmake"
-            DEPENDS spark spark_allocation_gateway_v1 VERBATIM)
+            DEPENDS spark VERBATIM)
 endif ()
 if (WIN32)
     target_sources(spark PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated/version.rc")
@@ -353,6 +352,11 @@ endif ()
 if (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(spark PRIVATE -fvisibility=hidden -fvisibility-inlines-hidden)
     target_link_options(spark PRIVATE "-Wl,--exclude-libs,ALL")
+    if (TARGET spark_linux_permanent_gateway)
+        add_custom_command(TARGET spark POST_BUILD
+                COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/native/alloc/verify_linux_gateway.py"
+                        elf "$<TARGET_FILE:spark>" VERBATIM)
+    endif ()
 endif ()
 
 # --- offline self-test (no BDS needed) ---

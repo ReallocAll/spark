@@ -1,4 +1,22 @@
+#if defined(SPARK_GATEWAY_PARSER_FIXTURE)
+#include <cstdio>
+
+namespace {
+int parserAnchor()
+{
+    return std::puts("parser fixture");
+}
+int (*const ParserPointer)() = &parserAnchor;
+}  // namespace
+
+extern "C" const void *spark_parser_fixture()
+{
+    return &ParserPointer;
+}
+#else
+#define UNW_LOCAL_ONLY
 #include <dlfcn.h>
+#include <libunwind.h>
 #include <unwind.h>
 
 #include <array>
@@ -7,8 +25,11 @@
 #include <cstring>
 #include <string>
 
+#include <cpptrace/cpptrace.hpp>
+
 #include "fixture_api.h"
 #include "native/alloc/linux_allocation_gateway_client.h"
+#include "native/alloc/linux_permanent_gateway_registry.h"
 
 namespace {
 struct Owner {
@@ -23,19 +44,21 @@ Owner *Current = nullptr;
 char LastError[256]{};
 unsigned QueryCalls = 0;
 
+void privateCallerMarker() {}
+
 _Unwind_Reason_Code unwindFrame(_Unwind_Context *context, void *opaque)
 {
     auto &state = *static_cast<GatewayFixtureState *>(opaque);
+    const auto *directory = spark::gateway::permanent::directory();
+    const auto get_ip = reinterpret_cast<decltype(&_Unwind_GetIP)>(directory->host.functions[4]);
+    const auto pc = get_ip(context);
+    if (pc >= directory->code && pc < directory->code + directory->code_size) {
+        state.unwind_mask.fetch_or(1);
+    }
     Dl_info info{};
-    const auto pc = _Unwind_GetIP(context);
-    // NOLINTNEXTLINE(performance-no-int-to-ptr)
-    if (pc != 0 && ::dladdr(reinterpret_cast<void *>(pc), &info) != 0 && info.dli_fname != nullptr) {
-        if (std::strstr(info.dli_fname, "allocation_gateway_v1") != nullptr) {
-            state.unwind_mask.fetch_or(1);
-        }
-        else if (std::strstr(info.dli_fname, "spark_linux_gateway_test") != nullptr) {
-            state.unwind_mask.fetch_or(2);
-        }
+    if (::dladdr(reinterpret_cast<void *>(pc), &info) != 0 && info.dli_fname != nullptr &&
+        std::strstr(info.dli_fname, "spark_linux_gateway_test") != nullptr) {
+        state.unwind_mask.fetch_or(2);
     }
     return _URC_NO_REASON;
 }
@@ -54,8 +77,27 @@ void enter(Owner &owner, std::size_t api)
 void *mallocCallback(void *context, std::size_t size)
 {
     auto &owner = *static_cast<Owner *>(context);
+    const int incoming = errno;
     enter(owner, 0);
-    _Unwind_Backtrace(&unwindFrame, owner.state);
+    if (owner.state->nested.load()) {
+        const auto &entries = owner.gateway.binding().entries;
+        void *nested = reinterpret_cast<void *(*)(std::size_t, std::size_t)>(entries[5])(16, 64);
+        reinterpret_cast<void (*)(void *)>(entries[3])(nested);
+    }
+    const auto *directory = spark::gateway::permanent::directory();
+    reinterpret_cast<decltype(&_Unwind_Backtrace)>(directory->host.functions[3])(&unwindFrame, owner.state);
+    const auto trace = cpptrace::generate_raw_trace();
+    for (auto pc : trace.frames) {
+        if (pc >= directory->code && pc < directory->code + directory->code_size) {
+            owner.state->unwind_mask.fetch_or(4);
+        }
+        Dl_info info{};
+        if (::dladdr(reinterpret_cast<void *>(pc), &info) != 0 && info.dli_fname != nullptr &&
+            std::strstr(info.dli_fname, "spark_linux_gateway_test") != nullptr) {
+            owner.state->unwind_mask.fetch_or(8);
+        }
+    }
+    errno = incoming;
     return reinterpret_cast<void *(*)(std::size_t)>(owner.originals[0])(size);
 }
 void *callocCallback(void *context, std::size_t count, std::size_t size)
@@ -148,6 +190,84 @@ extern "C" __attribute__((visibility("default"))) const char *fixture_error()
     return LastError;
 }
 
+extern "C" __attribute__((visibility("default"))) int fixture_reserve(void *provider)
+{
+    if (Current != nullptr) {
+        return 0;
+    }
+    Current = new Owner;
+    constexpr std::array names{"provider_malloc",        "provider_calloc",       "provider_realloc",
+                               "provider_free",          "provider_reallocarray", "provider_aligned_alloc",
+                               "provider_posix_memalign"};
+    for (std::size_t i = 0; i < names.size(); ++i) {
+        Current->originals[i] = ::dlsym(provider, names[i]);
+    }
+    std::string error;
+    if (!Current->gateway.reserve(Current->originals, error)) {
+        delete Current;
+        Current = nullptr;
+        return 0;
+    }
+    return 1;
+}
+
+extern "C" __attribute__((visibility("default"))) int fixture_cancel()
+{
+    if (Current == nullptr || !Current->gateway.cancel()) {
+        return 0;
+    }
+    delete Current;
+    Current = nullptr;
+    return 1;
+}
+
+extern "C" __attribute__((visibility("default"))) const SparkGatewayV1 *fixture_api()
+{
+    return spark_allocation_gateway_v1();
+}
+
+extern "C" __attribute__((visibility("default"))) const spark::gateway::permanent::Directory *fixture_directory()
+{
+    return spark::gateway::permanent::directory();
+}
+
+extern "C" __attribute__((visibility("default"))) int fixture_private_rows()
+{
+    using spark::gateway::permanent::KCodeStride;
+    const auto *directory = spark::gateway::permanent::directory();
+    for (unsigned api = 0; api < 8; ++api) {
+        std::array<unsigned char, KCodeStride> bytes{};
+        const auto layout = spark::gateway::permanent::emitEntry(bytes.data(), 0, api);
+        for (auto offset :
+             {layout.push_end - 1, layout.push_end, layout.frame_end, layout.pop_end - 1, layout.pop_end}) {
+            alignas(16) std::array<unw_word_t, 8> stack{};
+            const auto saved_rbp = reinterpret_cast<unw_word_t>(stack.data() + 6);
+            const auto return_pc = reinterpret_cast<unw_word_t>(&privateCallerMarker) + 1;
+            stack[0] = saved_rbp;
+            stack[1] = return_pc;
+            const bool pushed = offset >= layout.push_end && offset < layout.pop_end;
+            const bool framed = offset >= layout.frame_end && offset < layout.pop_end;
+            unw_context_t context{};
+            unw_cursor_t cursor{};
+            if (unw_getcontext(&context) != 0) {
+                return 0;
+            }
+            context.uc_mcontext.gregs[REG_RIP] = static_cast<greg_t>(directory->code + api * KCodeStride + offset);
+            context.uc_mcontext.gregs[REG_RSP] = reinterpret_cast<greg_t>(stack.data() + (pushed ? 0 : 1));
+            context.uc_mcontext.gregs[REG_RBP] =
+                framed ? reinterpret_cast<greg_t>(stack.data()) : static_cast<greg_t>(saved_rbp);
+            unw_word_t ip = 0, sp = 0, rbp = 0;
+            if (unw_init_local2(&cursor, &context, UNW_INIT_SIGNAL_FRAME) != 0 || unw_step(&cursor) != 1 ||
+                unw_get_reg(&cursor, UNW_REG_IP, &ip) != 0 || unw_get_reg(&cursor, UNW_REG_SP, &sp) != 0 ||
+                unw_get_reg(&cursor, UNW_X86_64_RBP, &rbp) != 0 || ip != return_pc ||
+                sp != reinterpret_cast<unw_word_t>(stack.data() + 2) || rbp != saved_rbp) {
+                return 0;
+            }
+        }
+    }
+    return 1;
+}
+
 extern "C" __attribute__((visibility("default"))) void spark_gateway_external_import()
 {
     ++QueryCalls;
@@ -204,3 +324,4 @@ extern "C" __attribute__((visibility("default"))) int fixture_shutdown()
     Current = nullptr;
     return 1;
 }
+#endif
