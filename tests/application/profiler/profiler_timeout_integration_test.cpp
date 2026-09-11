@@ -2,8 +2,10 @@
 #include <cassert>
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
 #include <filesystem>
 #include <functional>
+#include <mutex>
 #include <string>
 #include <thread>
 
@@ -52,6 +54,33 @@ struct ProfilerServiceTestAccess {
     static bool samplerRunning(const ProfilerService &service)
     {
         return ProfilerTestAccess::samplerRunning(service.profiler_);
+    }
+
+    static void diagnoseExport(const ProfilerService &service)
+    {
+        std::fprintf(stderr, "timeout export state: exporting=%d completion_pending=%d stopping=%d\n",
+                     static_cast<int>(service.exporting_.load(std::memory_order_acquire)),
+                     static_cast<int>(service.export_completion_pending_.load(std::memory_order_acquire)),
+                     static_cast<int>(service.stopping_.load(std::memory_order_acquire)));
+        bool job_pending = false;
+        bool result_present = false;
+        bool worker_exited = false;
+        bool stop_requested = false;
+        {
+            const std::unique_lock lock(service.export_mutex_, std::try_to_lock);
+            if (!lock.owns_lock()) {
+                std::fprintf(stderr, "timeout export state: export_mutex=try-lock-unavailable\n");
+                return;
+            }
+            job_pending = service.export_job_.has_value();
+            result_present = service.export_result_.has_value();
+            worker_exited = service.export_worker_exited_;
+            stop_requested = service.export_stop_requested_;
+        }
+        std::fprintf(stderr,
+                     "timeout export state: job_pending=%d result_present=%d worker_exited=%d stop_requested=%d\n",
+                     static_cast<int>(job_pending), static_cast<int>(result_present), static_cast<int>(worker_exited),
+                     static_cast<int>(stop_requested));
     }
 };
 
@@ -132,6 +161,7 @@ void nativeWorker(std::atomic<bool> &run, std::atomic<std::uint64_t> &thread_id)
 
 void verifyProfilerTimeoutLifecycle(std::uint64_t worker_tid, const std::filesystem::path &root)
 {
+    const auto lifecycle_started = std::chrono::steady_clock::now();
     spark::StatisticsService statistics;
     spark::TrustedViewersState trusted_viewers(root / "trusted-viewers.json");
     TestDispatcher dispatcher;
@@ -156,16 +186,33 @@ void verifyProfilerTimeoutLifecycle(std::uint64_t worker_tid, const std::filesys
     assert(!service.exporting());
     assert(metadata_provider.serverMetadataCalls() == 0);
 
+    const auto export_tick_started = std::chrono::steady_clock::now();
     service.onTick(1.0);
     assert(metadata_provider.serverMetadataCalls() != 0);
     assert(!service.running());
     assert(service.exporting());
+    const auto export_wait_started = std::chrono::steady_clock::now();
     const bool export_completed = waitFor(
         [&] {
             service.onTick(1.0);
             return !service.exporting();
         },
         3s);
+    if (!export_completed) {
+        const auto failed_at = std::chrono::steady_clock::now();
+        const auto milliseconds = [](auto duration) {
+            return std::chrono::duration<double, std::milli>(duration).count();
+        };
+        std::fprintf(stderr,
+                     "timeout integration failure: phase=export-completion lifecycle_ms=%.3f "
+                     "before_export_tick_ms=%.3f export_tick_ms=%.3f export_wait_ms=%.3f "
+                     "metadata_calls=%d saved_success=%d\n",
+                     milliseconds(failed_at - lifecycle_started), milliseconds(export_tick_started - lifecycle_started),
+                     milliseconds(export_wait_started - export_tick_started),
+                     milliseconds(failed_at - export_wait_started), metadata_provider.serverMetadataCalls(),
+                     static_cast<int>(notifier.savedSuccess()));
+        spark::ProfilerServiceTestAccess::diagnoseExport(service);
+    }
     assert(export_completed);
     assert(notifier.savedSuccess());
 

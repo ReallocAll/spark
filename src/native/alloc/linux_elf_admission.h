@@ -26,6 +26,7 @@ constexpr std::size_t KSymbols = 1048576;
 constexpr std::size_t KVersions = 65536;
 constexpr std::size_t KRelocations = 262144;
 constexpr std::size_t KMetadata = 64 * 1024 * 1024;
+constexpr std::int64_t KDtRelrSz = 35;
 
 inline void require(bool condition, const char *message)
 {
@@ -464,7 +465,7 @@ struct Object {
                 (tag(DT_FLAGS_1) & ~static_cast<Elf64_Xword>(DF_1_NOW)) == 0 &&
                 (tags.contains(DT_BIND_NOW) || (tag(DT_FLAGS) & DF_BIND_NOW) != 0 || (tag(DT_FLAGS_1) & DF_1_NOW) != 0),
             "helper requires eager ordinary bindings");
-        require(tag(DT_RELSZ) == 0 && tag(DT_RELRSZ) == 0, "helper has unsupported REL or RELR relocations");
+        require(tag(DT_RELSZ) == 0 && tag(KDtRelrSz) == 0, "helper has unsupported REL or RELR relocations");
         require(tag(DT_RELASZ) % sizeof(Elf64_Rela) == 0 && tag(DT_RELAENT) == sizeof(Elf64_Rela),
                 "invalid helper RELA table");
         const auto count = tag(DT_RELASZ) / sizeof(Elf64_Rela);
