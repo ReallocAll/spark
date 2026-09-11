@@ -117,18 +117,10 @@ void HealthCommand::uploadHealthReport(CommandSender &sender)
         sender.sendMessage("A health report upload is already in progress.");
         return;
     }
-    if (upload_thread_.joinable()) {
-        bool exited = false;
-        {
-            std::scoped_lock lock(upload_exit_mutex_);
-            exited = upload_worker_exited_;
-        }
-        if (!exited || upload_thread_.get_id() == std::this_thread::get_id()) {
-            uploading_.store(false, std::memory_order_release);
-            sender.sendMessage("The previous health report upload is still finishing.");
-            return;
-        }
-        upload_thread_.join();
+    if (!upload_thread_.reapUntil(std::chrono::steady_clock::now())) {
+        uploading_.store(false, std::memory_order_release);
+        sender.sendMessage("The previous health report upload is still finishing.");
+        return;
     }
 
     const std::int64_t now_ms = monotonicUnixMillis();
@@ -143,16 +135,18 @@ void HealthCommand::uploadHealthReport(CommandSender &sender)
             upload_worker_exited_ = false;
         }
         try {
-            upload_thread_ = std::thread(
-                [this, data = std::move(data), sender_name, sender_is_player, now_ms, cancellation]() mutable {
-                    try {
-                        runHealthUpload(data, sender_name, sender_is_player, now_ms, cancellation);
-                    }
-                    catch (...) {
-                        uploading_.store(false, std::memory_order_release);
-                    }
-                    signalUploadWorkerExit();
-                });
+            if (!upload_thread_.start(
+                    [this, data = std::move(data), sender_name, sender_is_player, now_ms, cancellation]() mutable {
+                        try {
+                            runHealthUpload(data, sender_name, sender_is_player, now_ms, cancellation);
+                        }
+                        catch (...) {
+                            uploading_.store(false, std::memory_order_release);
+                        }
+                        signalUploadWorkerExit();
+                    })) {
+                throw std::runtime_error("health upload worker failed to start");
+            }
         }
         catch (...) {
             signalUploadWorkerExit();
@@ -195,7 +189,7 @@ UploadResult HealthCommand::uploadHealthData(const HealthData &data, Cancellatio
     }
     try {
         const std::string body = buildHealthData(data);
-        const std::string compressed = gzipCompress(body);
+        const std::string compressed = gzipCompress(body, cancellation);
         if (cancellation.stopRequested()) {
             result.error = "health report upload cancelled";
             return result;
@@ -246,17 +240,18 @@ void HealthCommand::completeHealthDashboard(HealthDashboard::OpenResult result)
     }
     try {
         dispatcher_.runOnMainThread([this, lifetime, result = std::move(result)]() mutable {
-            if (stopping_.load(std::memory_order_acquire) || lifetime.expired()) {
+            if (lifetime.expired() || stopping_.load(std::memory_order_acquire)) {
                 return;
             }
-            if (!dashboard_ || result.generation == 0 || result.generation != accepted_dashboard_generation_ ||
-                result.generation != dashboard_->generation()) {
+            if (!dashboard_ || result.generation == 0) {
                 return;
             }
             if (!result.ok) {
-                dashboard_sender_.clear();
-                dashboard_sender_unique_id_.clear();
-                accepted_dashboard_generation_ = 0;
+                if (result.generation == accepted_dashboard_generation_) {
+                    dashboard_sender_.clear();
+                    dashboard_sender_unique_id_.clear();
+                    accepted_dashboard_generation_ = 0;
+                }
                 try {
                     notifier_.notify(result.sender_name, "Failed to open the health dashboard.");
                 }
@@ -270,7 +265,7 @@ void HealthCommand::completeHealthDashboard(HealthDashboard::OpenResult result)
             catch (...) {  // NOLINT(bugprone-empty-catch): completion notification is best effort.
             }
             try {
-                if (activity_log_provider_) {
+                if (activity_log_provider_ && result.generation == accepted_dashboard_generation_) {
                     ActivityLog *log = activity_log_provider_();
                     if (log) {
                         log->add(Activity::url(result.sender_name, dashboard_sender_is_player_, dashboard_open_time_ms_,

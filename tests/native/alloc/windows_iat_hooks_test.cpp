@@ -57,7 +57,7 @@ public:
     }
 
     State &state(std::size_t index) { return states_.at(index); }
-    const State &state(std::size_t index) const { return states_.at(index); }
+    [[nodiscard]] const State &state(std::size_t index) const { return states_.at(index); }
 
     void failEnumeration(bool fail) noexcept { fail_enumeration_ = fail; }
 

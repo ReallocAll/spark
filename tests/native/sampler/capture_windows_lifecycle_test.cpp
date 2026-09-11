@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -9,6 +10,7 @@
 #include <limits>
 #include <mutex>
 #include <thread>
+#include <vector>
 
 #include "native/sampler/capture.h"
 #include "native/sampler/capture_windows_backend.h"
@@ -431,6 +433,8 @@ public:
         context_ = CONTEXT{};
         snapshot_.clear();
         last_instruction_pointer_ = 0;
+        code_read_count_ = 0;
+        invalid_read_ = false;
         setStackSize(0x200);
     }
 
@@ -449,7 +453,10 @@ public:
 
     void setRbp(std::uint64_t value) { context_.Rbp = value; }
     void setR13(std::uint64_t value) { context_.R13 = value; }
+    void setRbx(std::uint64_t value) { context_.Rbx = value; }
+    void setR12(std::uint64_t value) { context_.R12 = value; }
     void setRsp(std::uint64_t value) { context_.Rsp = value; }
+    void setFunctionEnd(std::uintptr_t offset) { function_.end = KFunctionBegin + offset; }
     void setPrimaryByte(std::size_t offset, std::uint8_t value) { primary_[offset] = value; }
 
     void setQword(std::uintptr_t stack_location, std::uint64_t stored_value)
@@ -507,7 +514,7 @@ public:
         }
     }
 
-    void setInstructionBytes(std::initializer_list<std::uint8_t> bytes, std::size_t offset = 0)
+    void setInstructionBytes(const std::vector<std::uint8_t> &bytes, std::size_t offset = 0)
     {
         instructions_.fill(0x90);
         std::size_t index = 0;
@@ -521,12 +528,15 @@ public:
 
     spark::WindowsWalkStatus step()
     {
+        scan_begin_ = context_.Rip;
+        scan_end_ = (std::min)(function_.end, scan_begin_ + spark::kWindowsStackEpilogueByteLimit);
         return spark::windowsUnwindNext(snapshot_, context_, last_instruction_pointer_, lookup, this, read, this);
     }
 
     [[nodiscard]] const CONTEXT &context() const { return context_; }
     [[nodiscard]] std::uintptr_t lastInstructionPointer() const { return last_instruction_pointer_; }
     [[nodiscard]] std::uint8_t primaryByte(std::size_t offset) const { return primary_[offset]; }
+    [[nodiscard]] bool readsValid() const { return !invalid_read_ && code_read_count_ > 0; }
 
 private:
     static void writeDword(std::array<std::uint8_t, 1024> &storage, std::size_t offset, std::uint32_t value)
@@ -560,12 +570,16 @@ private:
         auto &fixture = *static_cast<SyntheticUnwindFixture *>(opaque);
         if (copyRange(address, destination, bytes, KMetadataAddress, fixture.primary_.data(),
                       fixture.primary_.size()) ||
-            copyRange(address, destination, bytes, KChainAddress, fixture.chain_.data(), fixture.chain_.size()) ||
-            copyRange(address, destination, bytes, KFunctionBegin, fixture.instructions_.data(),
-                      fixture.instructions_.size())) {
+            copyRange(address, destination, bytes, KChainAddress, fixture.chain_.data(), fixture.chain_.size())) {
             return true;
         }
-        return false;
+        ++fixture.code_read_count_;
+        if (address < fixture.scan_begin_ || address >= fixture.scan_end_ || bytes > fixture.scan_end_ - address) {
+            fixture.invalid_read_ = true;
+            return false;
+        }
+        return copyRange(address, destination, bytes, KFunctionBegin, fixture.instructions_.data(),
+                         fixture.instructions_.size());
     }
 
     std::array<std::uint8_t, 1024> primary_{};
@@ -575,6 +589,10 @@ private:
     CONTEXT context_{};
     spark::WindowsStackSnapshot snapshot_{};
     std::uintptr_t last_instruction_pointer_ = 0;
+    std::uintptr_t scan_begin_ = 0;
+    std::uintptr_t scan_end_ = 0;
+    std::size_t code_read_count_ = 0;
+    bool invalid_read_ = false;
 };
 
 template <typename Predicate>
@@ -795,21 +813,254 @@ bool testSyntheticUnwindRejectionAndChains()
         return false;
     }
 
-    fixture.reset();
-    fixture.setContext(0xc0);
-    fixture.setPrimaryInfo(0, 0, 0, 0, {});
-    fixture.setInstructionBytes({0x49U, 0x83U, 0xc4U, 0x08U, 0xc3U}, 0xc0U);
-    if (!require(fixture.step() == spark::WindowsWalkStatus::Complete,
-                 "non-RSP REX epilogue was incorrectly unwound")) {
-        return false;
-    }
-
     if (!require(spark::windowsCanonicalAddress(0x00007fff00000000ULL) &&
                      spark::windowsCanonicalAddress(0xffff800000000000ULL) &&
                      !spark::windowsCanonicalAddress(0x0001000000000000ULL) &&
                      !spark::windowsCanonicalAddress(0xffff000000000000ULL),
                  "noncanonical Windows addresses were accepted")) {
         return false;
+    }
+    return true;
+}
+
+bool testOrdinaryBodyUnwind()
+{
+    using Fixture = SyntheticUnwindFixture;
+    constexpr std::uint64_t caller = 0x700000;
+    constexpr std::uint64_t bait = 0x710000;
+    constexpr std::uint64_t saved_r12 = 0x720000;
+    for (const auto &code : std::vector<std::vector<std::uint8_t>>{{0x48U, 0x8dU, 0x4cU, 0x24U, 0x20U},
+                                                                   {0x4cU, 0x8dU, 0x65U, 0x08U, 0xc3U},
+                                                                   {0x48U, 0x8dU, 0x5dU, 0x08U, 0xc3U}}) {
+        Fixture fixture;
+        fixture.setContext();
+        fixture.setPrimaryInfo(0, 4, 0, 0, {0x4204U});
+        fixture.setInstructionBytes(code, 0x80U);
+        fixture.setQword(Fixture::KStackBase, bait);
+        fixture.setQword(Fixture::KStackBase + 0x28U, caller);
+        if (!require(fixture.step() == spark::WindowsWalkStatus::Frame && fixture.context().Rip == caller &&
+                         fixture.lastInstructionPointer() == caller &&
+                         fixture.context().Rsp == Fixture::KStackBase + 0x30U && fixture.readsValid(),
+                     "ordinary non-RSP LEA did not fall back to unwind metadata")) {
+            return false;
+        }
+    }
+    Fixture fixture;
+    fixture.setContext();
+    fixture.setPrimaryInfo(0, 6, 0, 0, {0x4206U, 0xc002U});
+    fixture.setInstructionBytes({0x49U, 0x83U, 0xc4U, 0x08U, 0xc3U}, 0x80U);
+    fixture.setR12(bait);
+    fixture.setQword(Fixture::KStackBase, bait);
+    fixture.setQword(Fixture::KStackBase + 8U, bait);
+    fixture.setQword(Fixture::KStackBase + 0x28U, saved_r12);
+    fixture.setQword(Fixture::KStackBase + 0x30U, caller);
+    return require(fixture.step() == spark::WindowsWalkStatus::Frame && fixture.context().Rip == caller &&
+                       fixture.lastInstructionPointer() == caller &&
+                       fixture.context().Rsp == Fixture::KStackBase + 0x38U && fixture.context().R12 == saved_r12 &&
+                       fixture.readsValid(),
+                   "ordinary ADD R12 did not restore the metadata-backed register and return slot");
+}
+
+bool testEpilogueSuffixes()
+{
+    using Fixture = SyntheticUnwindFixture;
+    constexpr std::uint64_t caller = 0x700000;
+    constexpr std::uint64_t bait = 0x710000;
+    constexpr std::uint64_t saved_r12 = 0x720000;
+    constexpr std::uint64_t saved_rbx = 0x730000;
+    for (const auto offset : {0x80U, 0xe0U}) {
+        Fixture fixture;
+        fixture.setContext(offset + 4U);
+        fixture.setPrimaryInfo(0, 4, 0, 0, {0x4204U});
+        fixture.setInstructionBytes({0x48U, 0x83U, 0xc4U, 0x28U, 0xc3U}, offset);
+        fixture.setRsp(Fixture::KStackBase + 0x28U);
+        fixture.setQword(Fixture::KStackBase + 0x28U, caller);
+        fixture.setQword(Fixture::KStackBase + 0x50U, bait);
+        if (!require(fixture.step() == spark::WindowsWalkStatus::Frame && fixture.context().Rip == caller &&
+                         fixture.context().Rsp == Fixture::KStackBase + 0x30U && fixture.readsValid(),
+                     "RET suffix reapplied an already executed stack restoration")) {
+            return false;
+        }
+        const std::array<std::size_t, 4> stages{0U, 4U, 6U, 7U};
+        const std::array<std::size_t, 4> stack_offsets{0U, 0x28U, 0x30U, 0x38U};
+        for (std::size_t stage = 0; stage < stages.size(); ++stage) {
+            fixture.reset();
+            fixture.setContext(offset + stages[stage]);
+            fixture.setPrimaryInfo(0, 7, 0, 0, {0x4207U, 0xc003U, 0x3001U});
+            fixture.setInstructionBytes({0x48U, 0x83U, 0xc4U, 0x28U, 0x41U, 0x5cU, 0x5bU, 0xc3U}, offset);
+            for (std::size_t index = 0; index < 0x100U; index += 8U) {
+                fixture.setQword(Fixture::KStackBase + index, bait);
+            }
+            fixture.setQword(Fixture::KStackBase + 0x28U, saved_r12);
+            fixture.setQword(Fixture::KStackBase + 0x30U, saved_rbx);
+            fixture.setQword(Fixture::KStackBase + 0x38U, caller);
+            fixture.setRsp(Fixture::KStackBase + stack_offsets[stage]);
+            fixture.setR12(stage >= 2U ? saved_r12 : bait);
+            fixture.setRbx(stage >= 3U ? saved_rbx : bait);
+            if (!require(fixture.step() == spark::WindowsWalkStatus::Frame && fixture.context().Rip == caller &&
+                             fixture.context().Rsp == Fixture::KStackBase + 0x40U &&
+                             fixture.context().R12 == saved_r12 && fixture.context().Rbx == saved_rbx &&
+                             fixture.readsValid(),
+                         "epilogue suffix restored the wrong return slot or register")) {
+                return false;
+            }
+        }
+    }
+    for (const auto &code :
+         std::vector<std::vector<std::uint8_t>>{{0x48U, 0x81U, 0xc4U, 0x28U, 0x00U, 0x00U, 0x00U, 0xc3U},
+                                                {0x48U, 0x8dU, 0x65U, 0xf0U, 0xc3U},
+                                                {0x48U, 0x8dU, 0xa5U, 0xf0U, 0xffU, 0xffU, 0xffU, 0xc3U},
+                                                {0x49U, 0x8dU, 0x65U, 0xf0U, 0xc3U},
+                                                {0x49U, 0x8dU, 0xa5U, 0xf0U, 0xffU, 0xffU, 0xffU, 0xc3U}}) {
+        Fixture fixture;
+        fixture.setContext(0xe0U);
+        fixture.setPrimaryInfo(0, 0, code[0] == 0x49U ? 13U : 5U, 0, {});
+        fixture.setInstructionBytes(code, 0xe0U);
+        fixture.setRbp(Fixture::KStackBase + 0x38U);
+        fixture.setR13(Fixture::KStackBase + 0x38U);
+        fixture.setQword(Fixture::KStackBase, bait);
+        fixture.setQword(Fixture::KStackBase + 0x28U, caller);
+        if (!require(fixture.step() == spark::WindowsWalkStatus::Frame && fixture.context().Rip == caller &&
+                         fixture.context().Rsp == Fixture::KStackBase + 0x30U && fixture.readsValid(),
+                     "valid ADD32 or non-SIB frame-register LEA suffix failed")) {
+            return false;
+        }
+    }
+    Fixture fixture;
+    fixture.setContext(0xfdU);
+    fixture.setPrimaryInfo(0, 0, 0, 0, {});
+    fixture.setInstructionBytes({0xc2U, 0x10U, 0x00U}, 0xfdU);
+    fixture.setQword(Fixture::KStackBase, caller);
+    return require(fixture.step() == spark::WindowsWalkStatus::Frame && fixture.context().Rip == caller &&
+                       fixture.context().Rsp == Fixture::KStackBase + 0x18U && fixture.readsValid(),
+                   "RET imm16 did not pop the exact stack amount");
+}
+
+bool rejectedEpilogue(SyntheticUnwindFixture &fixture)
+{
+    std::array<std::uint8_t, sizeof(CONTEXT)> before{};
+    std::array<std::uint8_t, sizeof(CONTEXT)> after{};
+    std::memcpy(before.data(), &fixture.context(), before.size());
+    const auto status = fixture.step();
+    std::memcpy(after.data(), &fixture.context(), after.size());
+    return require(status == spark::WindowsWalkStatus::Complete && fixture.lastInstructionPointer() == 0 &&
+                       before == after && fixture.readsValid(),
+                   "invalid epilogue changed context, published a frame, or read outside its window");
+}
+
+bool testEpilogueRejectionsAndBounds()
+{
+    using Fixture = SyntheticUnwindFixture;
+    const std::vector<std::vector<std::uint8_t>> invalid{
+        {0x48U, 0x83U, 0xc4U, 0x08U, 0x48U, 0x83U, 0xc4U, 0x08U, 0xc3U},
+        {0x5bU, 0x48U, 0x83U, 0xc4U, 0x08U, 0xc3U},
+        {0x48U, 0x83U, 0xc4U, 0xffU, 0xc3U},
+        {0x48U, 0x81U, 0xc4U, 0xffU, 0xffU, 0xffU, 0xffU, 0xc3U},
+        {0x4cU, 0x83U, 0xc4U, 0x08U, 0xc3U},
+        {0x48U, 0x8dU, 0x64U, 0x24U, 0x08U, 0xc3U},
+        {0x49U, 0x8dU, 0x64U, 0x24U, 0x08U, 0xc3U},
+        {0x48U, 0x8dU, 0xe5U, 0xc3U},
+        {0x48U, 0x8dU, 0x25U, 0x00U, 0x00U, 0x00U, 0x00U, 0xc3U},
+        {0x49U, 0x8dU, 0x65U, 0x08U, 0xc3U},
+        {0x58U, 0xc3U},
+        {0x5cU, 0xc3U},
+        {0x41U, 0x58U, 0xc3U},
+        {0x48U, 0x83U, 0xc4U, 0x08U, 0x90U},
+        {0x5bU, 0xebU, 0x00U},
+        {0x5bU, 0x48U, 0x8dU, 0x4cU, 0x24U, 0x20U, 0xc3U},
+        {0x5bU, 0x49U, 0x83U, 0xc4U, 0x08U, 0xc3U},
+    };
+    for (const auto &code : invalid) {
+        Fixture fixture;
+        fixture.setContext();
+        fixture.setPrimaryInfo(0, 0, 5, 0, {});
+        fixture.setRbp(Fixture::KStackBase);
+        fixture.setR13(Fixture::KStackBase);
+        fixture.setInstructionBytes(code, 0x80U);
+        for (std::size_t offset = 0; offset < 0x100U; offset += 8U) {
+            fixture.setQword(Fixture::KStackBase + offset, 0x710000U + offset);
+        }
+        if (!rejectedEpilogue(fixture)) {
+            return false;
+        }
+    }
+    for (const auto rex : {0x48U, 0x49U}) {
+        Fixture fixture;
+        fixture.setContext();
+        fixture.setPrimaryInfo(0, 0, rex == 0x49U ? 12U : 5U, 0, {});
+        fixture.setR12(Fixture::KStackBase);
+        fixture.setInstructionBytes({static_cast<std::uint8_t>(rex), 0x8dU, 0x64U, 0x24U, 0xc3U, 0xc3U}, 0x80U);
+        fixture.setQword(Fixture::KStackBase + 0x24U, 0x700000U);
+        if (!rejectedEpilogue(fixture)) {
+            return false;
+        }
+    }
+    const std::vector<std::vector<std::uint8_t>> encodings{
+        {0x48U, 0x83U, 0xc4U, 0x28U},
+        {0x48U, 0x81U, 0xc4U, 0x28U, 0x00U, 0x00U, 0x00U},
+        {0x48U, 0x8dU, 0x65U, 0x08U},
+        {0x48U, 0x8dU, 0xa5U, 0x08U, 0x00U, 0x00U, 0x00U},
+        {0x49U, 0x8dU, 0x65U, 0x08U},
+        {0x49U, 0x8dU, 0xa5U, 0x08U, 0x00U, 0x00U, 0x00U},
+        {0x41U, 0x5cU},
+        {0xc2U, 0x10U, 0x00U},
+    };
+    for (const auto &code : encodings) {
+        for (std::size_t cut = 1; cut < code.size(); ++cut) {
+            Fixture fixture;
+            fixture.setContext();
+            fixture.setPrimaryInfo(0, 0, code[0] == 0x49U ? 13U : 5U, 0, {});
+            fixture.setRbp(Fixture::KStackBase);
+            fixture.setR13(Fixture::KStackBase);
+            fixture.setInstructionBytes(code, 0x80U);
+            fixture.setFunctionEnd(0x80U + cut);
+            fixture.setQword(Fixture::KStackBase, 0x700000U);
+            if (!rejectedEpilogue(fixture)) {
+                return false;
+            }
+        }
+    }
+    for (const auto &code : std::vector<std::vector<std::uint8_t>>{{0xc3U}, {0x5bU, 0xc3U}}) {
+        Fixture fixture;
+        fixture.setContext();
+        fixture.setPrimaryInfo(0, 0, 0, 0, {});
+        fixture.setInstructionBytes(code, 0x80U);
+        fixture.setStackSize(code.size() == 1U ? 7U : 8U);
+        if (code.size() > 1U) {
+            fixture.setQword(Fixture::KStackBase, 0x700000U);
+        }
+        if (!rejectedEpilogue(fixture)) {
+            return false;
+        }
+    }
+    for (const bool immediate : {false, true}) {
+        for (const bool over_budget : {false, true}) {
+            Fixture fixture;
+            fixture.setContext(0x20U);
+            fixture.setPrimaryInfo(0, 0, 0, 0, {});
+            const std::size_t pops = (immediate ? 61U : 63U) + (over_budget ? 1U : 0U);
+            std::vector<std::uint8_t> code(pops, 0x5bU);
+            code.push_back(immediate ? 0xc2U : 0xc3U);
+            if (immediate) {
+                code.push_back(0x10U);
+                code.push_back(0x00U);
+            }
+            fixture.setInstructionBytes(code, 0x20U);
+            fixture.setStackSize(0x300U);
+            fixture.setQword(Fixture::KStackBase + pops * 8U, 0x700000U);
+            if (over_budget) {
+                if (!rejectedEpilogue(fixture)) {
+                    return false;
+                }
+            }
+            else if (!require(fixture.step() == spark::WindowsWalkStatus::Frame && fixture.context().Rip == 0x700000U &&
+                                  fixture.context().Rsp ==
+                                      Fixture::KStackBase + (pops + 1U) * 8U + (immediate ? 0x10U : 0U) &&
+                                  fixture.readsValid(),
+                              "exactly 64-byte epilogue did not respect its read budget")) {
+                return false;
+            }
+        }
     }
     return true;
 }
@@ -1081,7 +1332,7 @@ bool testSamplerStopAndRestart()
         spark::CaptureTestAccess::setWindowsBackend(nullptr);
         return false;
     }
-    const bool captured_again = backend.waitForSuccessfulResume(1, 2s);
+    const bool captured_again = waitFor([&] { return backend.closeCalls() >= 1; }, 2s);
     const bool stopped_again = sampler.stop();
     spark::CaptureTestAccess::setWindowsBackend(nullptr);
     return require(captured_again && backend.unwindCalls() >= 2, "sampler did not capture again after restart") &&
@@ -1092,7 +1343,8 @@ bool testSamplerStopAndRestart()
 
 int main()
 {
-    if (!testSyntheticUnwindOperations() || !testSyntheticUnwindRejectionAndChains() || !testFailureStages() ||
+    if (!testSyntheticUnwindOperations() || !testSyntheticUnwindRejectionAndChains() || !testOrdinaryBodyUnwind() ||
+        !testEpilogueSuffixes() || !testEpilogueRejectionsAndBounds() || !testFailureStages() ||
         !testUnwindBoundsAndCycles() || !testResumeRetryAndPriorSuspendCount() || !testDisarmCancellationAndRearm() ||
         !testSamplerStopAndRestart()) {
         return 1;

@@ -43,6 +43,9 @@ struct Probe {
     std::atomic<bool> upload_cancelled{false};
     std::atomic<bool> close_during_work{false};
     std::atomic<int> trusted_send_count{0};
+    std::atomic<int> factory_count{0};
+    std::atomic<int> destroyed_count{0};
+    std::atomic<bool> allow_close{true};
 
     void configureFactory(bool block);
     void releaseFactory();
@@ -56,6 +59,7 @@ struct Probe {
 class FakeConnection final : public spark::HealthDashboardConnection {
 public:
     explicit FakeConnection(Probe &probe);
+    ~FakeConnection() override { ++probe_.destroyed_count; }
 
     std::string open(const UploadCallback &upload, const spark::CancellationToken &cancellation) override;
     bool tick() override;

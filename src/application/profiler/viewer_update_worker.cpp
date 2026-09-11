@@ -1,5 +1,6 @@
 #include "application/profiler/viewer_update_worker.h"
 
+#include <exception>
 #include <utility>
 
 namespace spark {
@@ -11,7 +12,9 @@ ViewerUpdateWorker::ViewerUpdateWorker(ExecuteCallback execute, CompletionCallba
 
 ViewerUpdateWorker::~ViewerUpdateWorker()
 {
-    stop();
+    if (!stopUntil(std::chrono::steady_clock::now() + std::chrono::seconds(5))) {
+        std::terminate();
+    }
 }
 
 bool ViewerUpdateWorker::start()
@@ -19,21 +22,30 @@ bool ViewerUpdateWorker::start()
     if (running_.load(std::memory_order_acquire)) {
         return true;
     }
-    if (thread_.joinable() && thread_.get_id() != std::this_thread::get_id()) {
-        thread_.join();
+    if (!thread_.reapUntil(std::chrono::steady_clock::now())) {
+        return false;
     }
     {
         std::scoped_lock lock(mutex_);
         work_.reset();
         work_active_ = false;
         open_pending_ = false;
+        cancellation_.reset();
+        exited_ = false;
         running_.store(true, std::memory_order_release);
     }
     try {
-        thread_ = std::thread([this] { run(); });
+        if (!thread_.start([this] { run(); })) {
+            running_.store(false, std::memory_order_release);
+            std::scoped_lock lock(mutex_);
+            exited_ = true;
+            return false;
+        }
     }
     catch (...) {
         running_.store(false, std::memory_order_release);
+        std::scoped_lock lock(mutex_);
+        exited_ = true;
         return false;
     }
     return true;
@@ -41,11 +53,36 @@ bool ViewerUpdateWorker::start()
 
 void ViewerUpdateWorker::stop()
 {
+    static_cast<void>(stopUntil(std::chrono::steady_clock::now() + std::chrono::seconds(5)));
+}
+
+void ViewerUpdateWorker::requestStop()
+{
+    {
+        std::scoped_lock lock(mutex_);
+        cancellation_.requestStop();
+        work_.reset();
+        open_pending_ = false;
+    }
     running_.store(false, std::memory_order_release);
     cv_.notify_all();
-    if (thread_.joinable() && thread_.get_id() != std::this_thread::get_id()) {
-        thread_.join();
+}
+
+bool ViewerUpdateWorker::stopUntil(std::chrono::steady_clock::time_point deadline)
+{
+    requestStop();
+    return thread_.reapUntil(deadline);
+}
+
+bool ViewerUpdateWorker::quiesceUntil(std::chrono::steady_clock::time_point deadline)
+{
+    std::unique_lock lock(mutex_);
+    if (!exit_cv_.wait_until(lock, deadline, [this] { return !work_ && !work_active_; })) {
+        return false;
     }
+    const bool running = running_.load(std::memory_order_acquire);
+    lock.unlock();
+    return running || thread_.reapUntil(deadline);
 }
 
 std::optional<std::uint64_t> ViewerUpdateWorker::enqueueOpen(ExportContext context,
@@ -59,7 +96,9 @@ std::optional<std::uint64_t> ViewerUpdateWorker::enqueueOpen(ExportContext conte
             return std::nullopt;
         }
         ++generation_;
+        cancellation_.reset();
         WorkItem work;
+        work.cancellation = cancellation_.token();
         work.type = WorkType::Open;
         work.context = std::move(context);
         work.socket = std::move(socket);
@@ -100,6 +139,7 @@ bool ViewerUpdateWorker::enqueueWork(WorkType type, ExportContext context, std::
             return false;
         }
         WorkItem work;
+        work.cancellation = cancellation_.token();
         work.type = type;
         work.context = std::move(context);
         work.socket = std::move(socket);
@@ -113,6 +153,7 @@ bool ViewerUpdateWorker::enqueueWork(WorkType type, ExportContext context, std::
 void ViewerUpdateWorker::invalidate()
 {
     std::scoped_lock lock(mutex_);
+    cancellation_.requestStop();
     ++generation_;
     work_.reset();
     open_pending_ = false;
@@ -127,7 +168,7 @@ bool ViewerUpdateWorker::current(std::uint64_t generation) const
 bool ViewerUpdateWorker::available() const
 {
     std::scoped_lock lock(mutex_);
-    return !work_ && !work_active_;
+    return !work_ && !work_active_ && (running_.load(std::memory_order_acquire) || !thread_.joinable());
 }
 
 bool ViewerUpdateWorker::openPending() const
@@ -154,52 +195,66 @@ bool ViewerUpdateWorker::completeOpen(std::uint64_t generation)
 
 void ViewerUpdateWorker::run() noexcept
 {
+    struct ExitGuard {
+        ViewerUpdateWorker &worker;
+        ~ExitGuard()
+        {
+            {
+                std::scoped_lock lock(worker.mutex_);
+                worker.work_active_ = false;
+                worker.exited_ = true;
+            }
+            worker.exit_cv_.notify_all();
+        }
+    } exit_guard{*this};
     try {
         while (running_.load(std::memory_order_acquire)) {
-            WorkItem work;
             {
-                std::unique_lock lock(mutex_);
-                cv_.wait(lock, [this] { return !running_.load(std::memory_order_acquire) || work_.has_value(); });
-                if (!running_.load(std::memory_order_acquire)) {
-                    break;
+                WorkItem work;
+                {
+                    std::unique_lock lock(mutex_);
+                    cv_.wait(lock, [this] { return !running_.load(std::memory_order_acquire) || work_.has_value(); });
+                    if (!running_.load(std::memory_order_acquire)) {
+                        break;
+                    }
+                    if (!work_) {
+                        continue;
+                    }
+                    work = std::move(*work_);
+                    work_.reset();
+                    work_active_ = true;
                 }
-                if (!work_) {
-                    continue;
-                }
-                work = std::move(*work_);
-                work_.reset();
-                work_active_ = true;
-            }
 
-            std::string url;
-            try {
-                url = execute_(work);
-            }
-            catch (...) {
-                markFailure();
-                return;
-            }
-
-            {
-                std::scoped_lock lock(mutex_);
-                work_active_ = false;
-            }
-
-            if (work.type == WorkType::Open) {
-                Completion completion;
-                completion.type = work.type;
-                completion.generation = work.generation;
-                completion.url = std::move(url);
-                completion.socket = std::move(work.socket);
-                completion.sender_name = std::move(work.sender_name);
+                std::string url;
                 try {
-                    completion_(std::move(completion));
+                    url = execute_(work);
                 }
                 catch (...) {
                     markFailure();
                     return;
                 }
+
+                if (work.type == WorkType::Open) {
+                    Completion completion;
+                    completion.type = work.type;
+                    completion.generation = work.generation;
+                    completion.url = std::move(url);
+                    completion.socket = work.socket;
+                    completion.sender_name = std::move(work.sender_name);
+                    try {
+                        completion_(std::move(completion));
+                    }
+                    catch (...) {
+                        markFailure();
+                        return;
+                    }
+                }
             }
+            {
+                std::scoped_lock lock(mutex_);
+                work_active_ = false;
+            }
+            exit_cv_.notify_all();
         }
     }
     catch (...) {
@@ -213,7 +268,7 @@ void ViewerUpdateWorker::markFailure() noexcept
     failed_.store(true, std::memory_order_release);
     try {
         std::scoped_lock lock(mutex_);
-        work_active_ = false;
+        cancellation_.requestStop();
         open_pending_ = false;
         work_.reset();
     }

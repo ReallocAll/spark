@@ -1,3 +1,5 @@
+#include <algorithm>
+#include <array>
 #include <iostream>
 #include <string>
 
@@ -56,6 +58,27 @@ int main()
 
     // --- InheritanceMap tests ---
     using spark::symbol_guess::InheritanceMap;
+
+    {
+        std::array<std::pair<std::string, std::string>, 5> edges = {
+            {{"D1", "A"}, {"D1", "B"}, {"D2", "A"}, {"D2", "B"}, {"X", "Y"}}};
+        do {
+            InheritanceMap graph;
+            for (const auto &[derived, base] : edges) {
+                graph.addBase(derived, base);
+                graph.addBase(derived, base);
+            }
+            CHECK(!graph.findCommonAncestor({"D1", "D2"}));
+            std::vector<VtableEvidence> evidence = {
+                {.class_name = "D1", .slot = 5}, {.class_name = "D2", .slot = 5}, {.class_name = "D1", .slot = 5}};
+            CHECK(spark::symbol_guess::chooseVtableLabel(evidence, &graph).empty());
+            std::ranges::reverse(evidence);
+            CHECK(spark::symbol_guess::chooseVtableLabel(evidence, &graph).empty());
+            graph.addBase("B", "A");
+            CHECK(graph.findCommonAncestor({"D1", "D2"}) == "B");
+            CHECK(spark::symbol_guess::chooseVtableLabel(evidence, &graph).label == "vtable: B::vfn[5]");
+        } while (std::ranges::next_permutation(edges).found);
+    }
 
     // Empty map: no resolution, still returns empty.
     {

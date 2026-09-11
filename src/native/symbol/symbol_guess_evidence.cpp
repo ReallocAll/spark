@@ -132,8 +132,7 @@ std::optional<std::string> InheritanceMap::findCommonAncestor(const std::set<std
     if (common.size() == 1) {
         return *common.begin();
     }
-    // Multiple common ancestors: find the most derived one (the one that no
-    // other common ancestor is a parent of).
+    std::optional<std::string> owner;
     for (const std::string &candidate : common) {
         bool is_most_derived = true;
         for (const std::string &other : common) {
@@ -143,10 +142,13 @@ std::optional<std::string> InheritanceMap::findCommonAncestor(const std::set<std
             }
         }
         if (is_most_derived) {
-            return candidate;
+            if (owner) {
+                return std::nullopt;
+            }
+            owner = candidate;
         }
     }
-    return std::nullopt;
+    return owner;
 }
 
 TypedLabel formatEvidenceLabel(EvidenceSource source, std::string_view message, bool tentative)

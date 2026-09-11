@@ -37,7 +37,7 @@ ProfilerService::ProfilerService(StatisticsService &statistics, std::string bds_
       background_thread_dumper_(std::move(background_thread_dumper)), bytebin_url_(std::move(bytebin_url)),
       viewer_url_(std::move(viewer_url)), bytesocks_host_(std::move(bytesocks_host)), trusted_viewers_(trusted_viewers)
 {
-#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+#ifdef SPARK_ALLOCATION_LIFECYCLE_TESTING
     export_function_ = [this](Profiler &profiler, const ExportContext &context, bool save_to_file,
                               const CancellationToken &cancellation) {
         return exporter_.exportProfile(profiler, context, save_to_file, cancellation);
@@ -71,8 +71,14 @@ void ProfilerService::shutdown()
 
 bool ProfilerService::shutdown(std::string &error)
 {
+#ifdef SPARK_ALLOCATION_LIFECYCLE_TESTING
+    const auto deadline = std::chrono::steady_clock::now() + export_shutdown_timeout_;
+#else
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+#endif
     error.clear();
-    resetProfilerTimeout();
+    stopping_.store(true, std::memory_order_release);
+    requestProfilerTimeoutStop();
     profiler_.requestStop();
     {
         std::scoped_lock lock(export_mutex_);
@@ -85,20 +91,23 @@ bool ProfilerService::shutdown(std::string &error)
     }
     export_cv_.notify_all();
     if (viewer_open_) {
-        viewer_open_->shutdown();
+        viewer_open_->requestStop();
     }
 
-#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
-    const auto export_shutdown_timeout = export_shutdown_timeout_;
-#else
-    constexpr auto export_shutdown_timeout = std::chrono::milliseconds(5000);
-#endif
-    if (!waitForExportWorker(export_shutdown_timeout)) {
-        error = "profile export worker did not stop within 5000 milliseconds";
+    const bool timer_stopped = profiler_timeout_.reapUntil(deadline);
+    const bool export_stopped = waitForExportWorkerUntil(deadline);
+    const bool viewer_stopped = !viewer_open_ || viewer_open_->shutdownUntil(deadline);
+    if (!timer_stopped || !export_stopped || !viewer_stopped) {
+        if (!timer_stopped) {
+            error = "profiler timer did not stop within 5000 milliseconds";
+        }
+        else if (!export_stopped) {
+            error = "profile export worker did not stop within 5000 milliseconds";
+        }
+        else {
+            error = "live viewer did not stop within 5000 milliseconds";
+        }
         return false;
-    }
-    if (export_thread_.joinable()) {
-        export_thread_.join();
     }
 
     // Shutdown has no safe sender for a late result. Consume it only after the
@@ -136,17 +145,32 @@ void ProfilerService::closeViewerSocket()
 
 void ProfilerService::resetProfilerTimeout() noexcept
 {
+    static_cast<void>(resetProfilerTimeoutUntil(std::chrono::steady_clock::now()));
+}
+
+bool ProfilerService::resetProfilerTimeoutUntil(std::chrono::steady_clock::time_point deadline) noexcept
+{
+    requestProfilerTimeoutStop();
+    return profiler_timeout_.reapUntil(deadline);
+}
+
+void ProfilerService::requestProfilerTimeoutStop() noexcept
+{
     if (CiDiagnostics *diagnostics = globalCiDiagnostics(); diagnostics != nullptr) {
         diagnostics->publish(CiDiagnosticContext::Timeout, CiDiagnosticPhase::TimeoutCancel);
     }
-    profiler_timeout_.cancel();
-    timeout_completion_pending_.store(false, std::memory_order_release);
+    timeout_generation_.fetch_add(1, std::memory_order_acq_rel);
+    timeout_completion_pending_.store(0, std::memory_order_release);
+    profiler_timeout_.requestStop();
 }
 
 bool ProfilerService::armProfilerTimeout(std::int64_t timeout_seconds) noexcept
 {
+    if (stopping_.load(std::memory_order_acquire) || !profiler_timeout_.reapUntil(std::chrono::steady_clock::now())) {
+        return false;
+    }
     if (timeout_seconds <= 0) {
-        timeout_completion_pending_.store(false, std::memory_order_release);
+        timeout_completion_pending_.store(0, std::memory_order_release);
         return true;
     }
 
@@ -158,19 +182,29 @@ bool ProfilerService::armProfilerTimeout(std::int64_t timeout_seconds) noexcept
         return false;
     }
 
-    timeout_completion_pending_.store(false, std::memory_order_release);
+    timeout_completion_pending_.store(0, std::memory_order_release);
+    const auto generation = timeout_generation_.fetch_add(1, std::memory_order_acq_rel) + 1;
     const auto delay = std::chrono::milliseconds(static_cast<MillisecondsRep>(timeout_seconds) *
                                                  static_cast<MillisecondsRep>(k_milliseconds_per_second));
     if (CiDiagnostics *diagnostics = globalCiDiagnostics(); diagnostics != nullptr) {
         diagnostics->publish(CiDiagnosticContext::Timeout, CiDiagnosticPhase::TimeoutArm);
     }
-    return profiler_timeout_.arm(delay, [this]() noexcept {
+    return profiler_timeout_.arm(delay, [this, generation]() noexcept {
         if (CiDiagnostics *diagnostics = globalCiDiagnostics(); diagnostics != nullptr) {
             diagnostics->publish(CiDiagnosticContext::TimeoutWorker, CiDiagnosticPhase::TimeoutFired,
                                  ciDiagnosticCurrentThreadId());
         }
+        if (timeout_generation_.load(std::memory_order_acquire) != generation ||
+            stopping_.load(std::memory_order_acquire)) {
+            return;
+        }
         profiler_.requestStop();
-        timeout_completion_pending_.store(true, std::memory_order_release);
+#ifdef SPARK_ALLOCATION_LIFECYCLE_TESTING
+        if (timeout_publication_hook_) {
+            timeout_publication_hook_();
+        }
+#endif
+        timeout_completion_pending_.store(generation, std::memory_order_release);
     });
 }
 
@@ -300,7 +334,7 @@ void ProfilerService::finishProfiler(const std::string &sender_name, bool sender
 
 void ProfilerService::ensureExportWorker()
 {
-    std::scoped_lock lock(export_mutex_);
+    std::unique_lock lock(export_mutex_);
     if (export_thread_.joinable()) {
         if (export_worker_exited_) {
             throw std::runtime_error("the profile export worker has exited");
@@ -311,10 +345,14 @@ void ProfilerService::ensureExportWorker()
         throw std::runtime_error("the profile export worker is stopping");
     }
     export_worker_exited_ = false;
+    lock.unlock();
     try {
-        export_thread_ = std::thread([this] { exportWorkerLoop(); });
+        if (!export_thread_.start([this] { exportWorkerLoop(); })) {
+            throw std::runtime_error("the profile export worker could not start");
+        }
     }
     catch (...) {
+        lock.lock();
         export_worker_exited_ = true;
         throw;
     }
@@ -322,6 +360,12 @@ void ProfilerService::ensureExportWorker()
 
 void ProfilerService::exportWorkerLoop() noexcept
 {
+#ifdef SPARK_ALLOCATION_LIFECYCLE_TESTING
+    {
+        std::scoped_lock lock(export_mutex_);
+        export_worker_id_for_testing_ = std::this_thread::get_id();
+    }
+#endif
     CiDiagnostics *diagnostics = globalCiDiagnostics();
     const std::uint64_t worker_tid = ciDiagnosticCurrentThreadId();
     std::optional<ExportJob> active_job;
@@ -337,7 +381,7 @@ void ProfilerService::exportWorkerLoop() noexcept
                 export_job_.reset();
             }
 
-#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+#ifdef SPARK_ALLOCATION_LIFECYCLE_TESTING
             if (export_job_preparation_hook_) {
                 export_job_preparation_hook_();
             }
@@ -350,7 +394,7 @@ void ProfilerService::exportWorkerLoop() noexcept
                 CiDiagnostics::Scope diagnostic_scope(diagnostics, CiDiagnosticContext::Export,
                                                       CiDiagnosticPhase::ExportEnter, CiDiagnosticPhase::ExportComplete,
                                                       CiDiagnosticPhase::ExportFailed, worker_tid);
-#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+#ifdef SPARK_ALLOCATION_LIFECYCLE_TESTING
                 ProfileExporter::Result result = export_function_(profiler_, active_job->context,
                                                                   active_job->save_to_file, active_job->cancellation);
 #else
@@ -381,7 +425,7 @@ void ProfilerService::exportWorkerLoop() noexcept
             }
             active_job.reset();
             export_cv_.notify_all();
-#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+#ifdef SPARK_ALLOCATION_LIFECYCLE_TESTING
             if (export_post_publication_hook_) {
                 export_post_publication_hook_();
             }
@@ -426,11 +470,12 @@ void ProfilerService::exportWorkerLoop() noexcept
 
 bool ProfilerService::waitForExportWorker(std::chrono::milliseconds timeout)
 {
-    std::unique_lock lock(export_mutex_);
-    if (!export_thread_.joinable() || export_worker_exited_) {
-        return true;
-    }
-    return export_exit_cv_.wait_for(lock, timeout, [this] { return export_worker_exited_; });
+    return waitForExportWorkerUntil(std::chrono::steady_clock::now() + timeout);
+}
+
+bool ProfilerService::waitForExportWorkerUntil(std::chrono::steady_clock::time_point deadline)
+{
+    return export_thread_.reapUntil(deadline);
 }
 
 bool ProfilerService::consumeFinishedExport(bool notify) noexcept
@@ -568,8 +613,13 @@ void ProfilerService::announceResult(ExportResult result) noexcept
 
 void ProfilerService::onTick(double mspt)
 {
+    profiler_timeout_.reapUntil(std::chrono::steady_clock::now());
+    if (stopping_.load(std::memory_order_acquire)) {
+        return;
+    }
     consumeFinishedExport(true);
-    if (timeout_completion_pending_.exchange(false, std::memory_order_acq_rel)) {
+    const auto completed_generation = timeout_completion_pending_.exchange(0, std::memory_order_acq_rel);
+    if (completed_generation != 0 && completed_generation == timeout_generation_.load(std::memory_order_acquire)) {
         if (CiDiagnostics *diagnostics = globalCiDiagnostics(); diagnostics != nullptr) {
             diagnostics->publish(CiDiagnosticContext::Timeout, CiDiagnosticPhase::TimeoutCompletion,
                                  ciDiagnosticCurrentThreadId());
@@ -646,7 +696,15 @@ void ProfilerService::startBackgroundProfiler()
 bool ProfilerService::startBackgroundSession() noexcept
 {
     try {
-        if (!background_enabled_ || profiler_.running() || exporting_.load() || main_tid_ == 0) {
+        if (stopping_.load(std::memory_order_acquire) || !background_enabled_ || profiler_.running() ||
+            exporting_.load() || main_tid_ == 0) {
+            return false;
+        }
+
+        const auto replacement_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+        const bool timer_stopped = resetProfilerTimeoutUntil(replacement_deadline);
+        const bool viewer_stopped = !viewer_open_ || viewer_open_->retireUntil(replacement_deadline);
+        if (!timer_stopped || !viewer_stopped) {
             return false;
         }
 

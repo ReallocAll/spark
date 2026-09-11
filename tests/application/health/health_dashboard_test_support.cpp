@@ -133,7 +133,7 @@ void FakeConnection::requestStop() noexcept
 bool FakeConnection::closeWithin(std::chrono::milliseconds timeout) noexcept
 {
     std::unique_lock lock(mutex_);
-    if (!cv_.wait_for(lock, timeout, [this] { return !work_active_; })) {
+    if (!cv_.wait_for(lock, timeout, [this] { return !work_active_ && probe_.allow_close.load(); })) {
         return false;
     }
     open_state_ = false;
@@ -273,6 +273,7 @@ std::unique_ptr<spark::HealthDashboard> makeDashboard(Probe &probe,
                                                       spark::HealthDashboard::CompletionCallback completion)
 {
     auto factory = [&probe] {
+        ++probe.factory_count;
         bool open_success = true;
         bool open_block = false;
         {

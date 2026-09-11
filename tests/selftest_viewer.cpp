@@ -192,21 +192,27 @@ bool verifyAllocationViewerLifecycle(std::uint64_t worker_tid)
             return std::string("https://spark.lucko.me/test");
         });
     service.cmdOpen(sender, spark::Arguments({"open"}, true));
-    if (!waitForCondition(
+    const auto first_deadline = std::chrono::steady_clock::now() + 3s;
+    if (!waitForConditionUntil(
             [&] {
+                service.onTick(1.0);
                 return !spark::ProfilerServiceTestAccess::viewerOpenPending(service) &&
                        spark::ProfilerServiceTestAccess::hasViewerSocket(service);
             },
-            3s)) {
+            first_deadline)) {
         service.shutdown();
         return false;
     }
 
     std::shared_ptr<spark::ViewerSocket> first = spark::ProfilerServiceTestAccess::viewerSocket(service);
     spark::ViewerSocketTestAccess::terminate(*first, spark::WebSocketClient::TerminationKind::RemoteClose);
-    service.onTick(1.0);
-    if (!service.running() || !spark::ProfilerServiceTestAccess::backendRunning(service) ||
-        spark::ProfilerServiceTestAccess::hasViewerSocket(service)) {
+    if (!waitForConditionUntil(
+            [&] {
+                service.onTick(1.0);
+                return !spark::ProfilerServiceTestAccess::hasViewerSocket(service);
+            },
+            first_deadline) ||
+        !service.running() || !spark::ProfilerServiceTestAccess::backendRunning(service)) {
         service.shutdown();
         return false;
     }
@@ -214,6 +220,7 @@ bool verifyAllocationViewerLifecycle(std::uint64_t worker_tid)
     service.cmdOpen(sender, spark::Arguments({"open"}, true));
     if (!waitForCondition(
             [&] {
+                service.onTick(1.0);
                 return !spark::ProfilerServiceTestAccess::viewerOpenPending(service) &&
                        spark::ProfilerServiceTestAccess::hasViewerSocket(service);
             },
@@ -273,16 +280,32 @@ bool verifyWorkerExceptionBoundaries(std::uint64_t worker_tid)
             return std::string();
         });
     service.cmdOpen(sender, spark::Arguments({"open"}, true));
-    if (!waitForCondition([&] { return !spark::ProfilerServiceTestAccess::viewerOpenPending(service); }, 3s) ||
+    if (!waitForCondition(
+            [&] {
+                service.onTick(1.0);
+                return !spark::ProfilerServiceTestAccess::viewerOpenPending(service) &&
+                       !spark::ProfilerServiceTestAccess::hasViewerSocket(service);
+            },
+            3s) ||
         !service.running() || !spark::ProfilerServiceTestAccess::samplerRunning(service)) {
         std::fprintf(stderr, "worker exception: viewer failure escaped or left sampler paused\n");
         return false;
     }
     spark::ProfilerServiceTestAccess::setLiveExportPausedHook(service, {});
+    std::atomic<bool> second_open_called{false};
     spark::ProfilerServiceTestAccess::setViewerOpenFunction(
-        service, [](spark::ViewerSocket &, const spark::ViewerSocket::UploadCallback &) { return std::string(); });
+        service, [&](spark::ViewerSocket &, const spark::ViewerSocket::UploadCallback &) {
+            second_open_called.store(true);
+            return std::string();
+        });
     service.cmdOpen(sender, spark::Arguments({"open"}, true));
-    if (!waitForCondition([&] { return !spark::ProfilerServiceTestAccess::viewerOpenPending(service); }, 3s)) {
+    if (!waitForCondition(
+            [&] {
+                service.onTick(1.0);
+                return second_open_called.load() && !spark::ProfilerServiceTestAccess::viewerOpenPending(service) &&
+                       !spark::ProfilerServiceTestAccess::hasViewerSocket(service);
+            },
+            3s)) {
         return false;
     }
 

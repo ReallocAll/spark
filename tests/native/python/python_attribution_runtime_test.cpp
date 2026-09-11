@@ -28,28 +28,28 @@ struct SnapshotRecord {
     PythonStackProvider::Snapshot snapshot;
 };
 
-EndstonePythonAttribution *g_bridge = nullptr;
-std::vector<SnapshotRecord> g_snapshots;
-std::string g_late_attach_diagnostic;
+EndstonePythonAttribution *Bridge = nullptr;
+std::vector<SnapshotRecord> Snapshots;
+std::string LateAttachDiagnostic;
 
 void snapshotThunk() noexcept
 {
-    if (g_bridge == nullptr) {
+    if (Bridge == nullptr) {
         return;
     }
     SnapshotRecord record;
     record.native_tid = spark::currentNativeThreadId();
-    if (g_bridge->snapshot(record.native_tid, record.snapshot)) {
-        g_snapshots.push_back(record);
+    if (Bridge->snapshot(record.native_tid, record.snapshot)) {
+        Snapshots.push_back(record);
     }
 }
 
 void lateAttachThunk() noexcept
 {
-    if (g_bridge == nullptr) {
+    if (Bridge == nullptr) {
         return;
     }
-    if (!g_bridge->start(g_late_attach_diagnostic)) {
+    if (!Bridge->start(LateAttachDiagnostic)) {
         return;
     }
     snapshotThunk();
@@ -91,7 +91,7 @@ bool anySnapshotContains(const PythonAttributionExport &state, const std::vector
 {
     const auto codes = codeMap(state);
     return std::ranges::any_of(
-        g_snapshots, [&](const SnapshotRecord &record) { return containsOrdered(namesFor(record, codes), expected); });
+        Snapshots, [&](const SnapshotRecord &record) { return containsOrdered(namesFor(record, codes), expected); });
 }
 
 std::size_t countName(const SnapshotRecord &record, const std::unordered_map<PythonCodeId, PythonCodeMetadata> &codes,
@@ -115,6 +115,7 @@ class PythonRuntime {
 public:
     bool open(const char *path)
     {
+        // NOLINTNEXTLINE(clang-analyzer-optin.taint.GenericTaint) -- Trusted test runtime.
         handle_ = ::dlopen(path, RTLD_NOW | RTLD_GLOBAL);
         if (handle_ == nullptr) {
             std::cerr << "dlopen failed: " << ::dlerror() << '\n';
@@ -127,8 +128,8 @@ public:
     }
 
     void initialize() const { initialize_(); }
-    int run(const std::string &script) const { return run_(script.c_str(), nullptr); }
-    int finalize() const { return finalize_(); }
+    [[nodiscard]] int run(const std::string &script) const { return run_(script.c_str(), nullptr); }
+    [[nodiscard]] int finalize() const { return finalize_(); }
 
     ~PythonRuntime()
     {
@@ -169,8 +170,8 @@ bool verifyFallback(EndstonePythonAttribution &bridge)
 
 bool verifyLifecycleWorkloads(PythonRuntime &runtime, EndstonePythonAttribution &bridge)
 {
-    g_bridge = &bridge;
-    g_snapshots.clear();
+    Bridge = &bridge;
+    Snapshots.clear();
     std::string diagnostic;
     if (!bridge.start(diagnostic)) {
         return expect(false, "PEP 669 bridge start failed");
@@ -304,7 +305,7 @@ json.dumps({'spark': [1, 2, 3], 'nested': {'ok': True}})
                  "plugin -> external dependency stack was not observed");
 
     const auto codes = codeMap(state);
-    const bool deep_recursion = std::ranges::any_of(g_snapshots, [&](const SnapshotRecord &record) {
+    const bool deep_recursion = std::ranges::any_of(Snapshots, [&](const SnapshotRecord &record) {
         return record.snapshot.depth == PythonStackProvider::kMaxDepth && countName(record, codes, "recurse") >= 250;
     });
     ok &= expect(deep_recursion, "deep recursion did not reach bounded shadow-stack capacity");
@@ -341,16 +342,16 @@ json.dumps({'spark': [1, 2, 3], 'nested': {'ok': True}})
     ok &= expect(state.diagnostics.snapshot_failures == 0, "single-threaded lifecycle checks had snapshot failures");
 
     bridge.stop();
-    g_bridge = nullptr;
+    Bridge = nullptr;
     return ok;
 }
 
 bool verifyLateAttach(PythonRuntime &runtime)
 {
     EndstonePythonAttribution bridge;
-    g_bridge = &bridge;
-    g_snapshots.clear();
-    g_late_attach_diagnostic.clear();
+    Bridge = &bridge;
+    Snapshots.clear();
+    LateAttachDiagnostic.clear();
 
     const auto attach_address = reinterpret_cast<std::uintptr_t>(&lateAttachThunk);
     std::string script = R"PY(
@@ -383,14 +384,24 @@ late_a()
                  "late-attach final snapshot inconsistent");
     ok &= expect(final_snapshot.depth == 0, "late-attached frames did not unwind after returning to native caller");
     bridge.stop();
-    g_bridge = nullptr;
+    Bridge = nullptr;
     return ok;
 }
 
 }  // namespace
 
-int main()
+int main(int argc, char **argv)
 {
+    std::string_view expected_mode;
+    for (int index = 1; index < argc; ++index) {
+        const std::string_view argument = argv[index];
+        if ((argument != "--expect-mode=monitoring" && argument != "--expect-mode=fallback") ||
+            (!expected_mode.empty() && expected_mode != argument)) {
+            std::cerr << "unknown or conflicting expected mode argument: " << argument << '\n';
+            return 2;
+        }
+        expected_mode = argument;
+    }
 #ifdef _WIN32
     std::cerr << "This standalone runtime test currently targets Linux CI; Windows compilation is covered by the main "
                  "build.\n";
@@ -412,13 +423,19 @@ int main()
     std::string diagnostic;
     if (!bridge.start(diagnostic)) {
         std::cerr << "bridge.start failed: " << diagnostic << '\n';
-        runtime.finalize();
+        static_cast<void>(runtime.finalize());
         return 1;
     }
     const PythonAttributionExport initial = bridge.exportState();
     bridge.stop();
 
     bool ok = true;
+    if (!expected_mode.empty() &&
+        !expect(initial.diagnostics.supported == (expected_mode == "--expect-mode=monitoring"),
+                "runtime support does not match expected mode")) {
+        expect(runtime.finalize() == 0, "Py_FinalizeEx failed after mode mismatch");
+        return 1;
+    }
     if (!initial.diagnostics.supported) {
         ok &= verifyFallback(bridge);
     }

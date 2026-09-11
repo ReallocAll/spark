@@ -79,10 +79,9 @@ private:
 
 void worker(std::atomic<std::uint64_t> &worker_tid, std::atomic<bool> &run);
 
-template <typename Predicate, typename Rep, typename Period>
-bool waitForCondition(Predicate pred, std::chrono::duration<Rep, Period> timeout)
+template <typename Predicate>
+bool waitForConditionUntil(Predicate pred, std::chrono::steady_clock::time_point deadline)
 {
-    const auto deadline = std::chrono::steady_clock::now() + timeout;
     while (std::chrono::steady_clock::now() < deadline) {
         if (pred()) {
             return true;
@@ -90,6 +89,12 @@ bool waitForCondition(Predicate pred, std::chrono::duration<Rep, Period> timeout
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
     return pred();
+}
+
+template <typename Predicate, typename Rep, typename Period>
+bool waitForCondition(Predicate pred, std::chrono::duration<Rep, Period> timeout)
+{
+    return waitForConditionUntil(std::move(pred), std::chrono::steady_clock::now() + timeout);
 }
 
 void hotOuter();
@@ -259,10 +264,17 @@ struct ProfilerServiceTestAccess {
     }
 };
 
+struct WebSocketClientTestAccess {
+    static void setRunning(WebSocketClient &client, bool running) { client.running_.store(running); }
+};
+
 struct ViewerSocketTestAccess {
     static void markOpen(ViewerSocket &socket)
     {
+        std::scoped_lock transport_lock(socket.transport_mutex_);
         socket.prepareOpen();
+        socket.ws_ = std::make_unique<WebSocketClient>();
+        WebSocketClientTestAccess::setRunning(*socket.ws_, true);
         socket.state_.store(ViewerSocket::ConnectionState::Open, std::memory_order_release);
     }
 

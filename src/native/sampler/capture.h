@@ -49,6 +49,10 @@ private:
 #ifdef __linux__
     static void setHandlerGateForTesting(std::atomic<bool> *entered, std::atomic<bool> *release);
     static void setHandlerWakeGateForTesting(std::atomic<bool> *entered, std::atomic<bool> *release);
+    static void setHandlerPublishGateForTesting(std::atomic<bool> *entered, std::atomic<bool> *release);
+    static void setTimeoutGateForTesting(std::atomic<bool> *entered, std::atomic<bool> *release);
+    static CaptureBuffer heldResultForTesting();
+    static bool idleForTesting();
     static void setNextTokenForTesting(std::uintptr_t next_token);
 #endif
 };

@@ -6,7 +6,6 @@
 #include <atomic>
 #include <bit>
 #include <cerrno>
-#include <climits>
 #include <csignal>
 #include <cstdint>
 #include <cstdio>
@@ -20,6 +19,7 @@
 #include <sys/syscall.h>
 
 #include "native/sampler/capture.h"
+#include "native/sampler/capture_linux_module.h"
 
 namespace spark {
 
@@ -28,6 +28,7 @@ namespace {
 constexpr int KSignal = SIGPROF;
 constexpr unsigned KPhaseBits = 2;
 constexpr std::uint64_t KPhaseMask = (std::uint64_t{1} << KPhaseBits) - 1;
+constexpr std::uint64_t KAbandoned = 0;
 constexpr std::uint64_t KRequested = 1;
 constexpr std::uint64_t KCapturing = 2;
 constexpr std::uint64_t KComplete = 3;
@@ -64,6 +65,10 @@ std::atomic<std::atomic<bool> *> GTestHandlerEntered{nullptr};
 std::atomic<std::atomic<bool> *> GTestHandlerRelease{nullptr};
 std::atomic<std::atomic<bool> *> GTestHandlerWakeEntered{nullptr};
 std::atomic<std::atomic<bool> *> GTestHandlerWakeRelease{nullptr};
+std::atomic<std::atomic<bool> *> GTestHandlerPublishEntered{nullptr};
+std::atomic<std::atomic<bool> *> GTestHandlerPublishRelease{nullptr};
+std::atomic<std::atomic<bool> *> GTestTimeoutEntered{nullptr};
+std::atomic<std::atomic<bool> *> GTestTimeoutRelease{nullptr};
 static_assert(std::atomic<std::atomic<bool> *>::is_always_lock_free);
 
 void handler(int, siginfo_t *, void *);
@@ -76,6 +81,11 @@ std::uint64_t captureState(Token token, std::uint64_t phase)
 std::uint64_t statePhase(std::uint64_t state)
 {
     return state & KPhaseMask;
+}
+
+bool bufferOwnedByHandler(std::uint64_t state)
+{
+    return state != 0 && (statePhase(state) == KCapturing || statePhase(state) == KAbandoned);
 }
 
 bool monotonicNow(timespec &now)
@@ -161,7 +171,7 @@ bool waitForQuiescence(const timespec &deadline)
 {
     for (;;) {
         const std::uint64_t state = GState.load(std::memory_order_acquire);
-        const bool capturing = statePhase(state) == KCapturing;
+        const bool capturing = bufferOwnedByHandler(state);
         const bool in_handler = GHandlerUseCount.load(std::memory_order_acquire) != 0;
         if (!capturing && !in_handler) {
             return true;
@@ -173,7 +183,7 @@ bool waitForQuiescence(const timespec &deadline)
         }
         if (timeout.tv_sec == 0 && timeout.tv_nsec == 0) {
             const std::uint64_t final_state = GState.load(std::memory_order_acquire);
-            return statePhase(final_state) != KCapturing && GHandlerUseCount.load(std::memory_order_acquire) == 0;
+            return !bufferOwnedByHandler(final_state) && GHandlerUseCount.load(std::memory_order_acquire) == 0;
         }
 
         pollfd event{};
@@ -184,27 +194,13 @@ bool waitForQuiescence(const timespec &deadline)
         const std::uint64_t after_state = GState.load(std::memory_order_acquire);
         const bool after_handler = GHandlerUseCount.load(std::memory_order_acquire) != 0;
         if (result < 0 && error != EINTR) {
-            return statePhase(after_state) != KCapturing && !after_handler;
+            return !bufferOwnedByHandler(after_state) && !after_handler;
         }
         if (result == 0) {
-            return statePhase(after_state) != KCapturing && !after_handler;
+            return !bufferOwnedByHandler(after_state) && !after_handler;
         }
         drainEventFd();
     }
-}
-
-bool samePathAsExecutable(const char *path)
-{
-    if (path == nullptr) {
-        return false;
-    }
-    char executable[PATH_MAX]{};
-    const ssize_t length = ::readlink("/proc/self/exe", executable, sizeof(executable) - 1);
-    if (length <= 0 || static_cast<std::size_t>(length) >= sizeof(executable)) {
-        return false;
-    }
-    executable[length] = '\0';
-    return std::strcmp(path, executable) == 0;
 }
 
 bool pinHandlerModule()
@@ -226,7 +222,7 @@ bool pinHandlerModule()
     }
     constexpr int flags = RTLD_NOW | RTLD_LOCAL | RTLD_NODELETE;
     GModulePin = ::dlopen(module.dli_fname, flags);
-    if (GModulePin == nullptr && samePathAsExecutable(module.dli_fname)) {
+    if (GModulePin == nullptr && detail::mainExecutableOwnsAddress(reinterpret_cast<std::uintptr_t>(&handler))) {
         GModulePin = ::dlopen(nullptr, flags);
     }
     return GModulePin != nullptr;
@@ -295,7 +291,17 @@ void handler(int, siginfo_t *info, void *)
         }
     }
     GResult.count = cpptrace::safe_generate_raw_trace(GResult.ips, CaptureBuffer::kMax, 0);
-    GState.store(captureState(token, KComplete), std::memory_order_release);
+    if (auto *entered = GTestHandlerPublishEntered.load(std::memory_order_acquire)) {
+        entered->store(true, std::memory_order_release);
+        auto *release = GTestHandlerPublishRelease.load(std::memory_order_acquire);
+        while (release != nullptr && !release->load(std::memory_order_acquire)) {
+        }
+    }
+    expected = capturing_state;
+    if (!GState.compare_exchange_strong(expected, captureState(token, KComplete), std::memory_order_release)) {
+        expected = captureState(token, KAbandoned);
+        GState.compare_exchange_strong(expected, 0, std::memory_order_release);
+    }
     if (auto *entered = GTestHandlerWakeEntered.load(std::memory_order_acquire)) {
         entered->store(true, std::memory_order_release);
         auto *release = GTestHandlerWakeRelease.load(std::memory_order_acquire);
@@ -419,6 +425,28 @@ void Capture::setNextTokenForTesting(std::uintptr_t next_token)
     GNextToken.store(next_token, std::memory_order_relaxed);
 }
 
+void Capture::setHandlerPublishGateForTesting(std::atomic<bool> *entered, std::atomic<bool> *release)
+{
+    GTestHandlerPublishRelease.store(release, std::memory_order_release);
+    GTestHandlerPublishEntered.store(entered, std::memory_order_release);
+}
+
+void Capture::setTimeoutGateForTesting(std::atomic<bool> *entered, std::atomic<bool> *release)
+{
+    GTestTimeoutRelease.store(release, std::memory_order_release);
+    GTestTimeoutEntered.store(entered, std::memory_order_release);
+}
+
+CaptureBuffer Capture::heldResultForTesting()
+{
+    return GResult;
+}
+
+bool Capture::idleForTesting()
+{
+    return GState.load(std::memory_order_acquire) == 0 && GHandlerUseCount.load(std::memory_order_acquire) == 0;
+}
+
 bool Capture::captureThread(std::uint64_t tid, CaptureBuffer &out)
 {
     out.count = 0;
@@ -448,7 +476,6 @@ bool Capture::captureThread(std::uint64_t tid, CaptureBuffer &out)
     const std::uint64_t capturing_state = captureState(token, KCapturing);
     const std::uint64_t complete_state = captureState(token, KComplete);
     drainEventFd();
-    GResult.count = 0;
     std::uint64_t expected_state = 0;
     if (!GState.compare_exchange_strong(expected_state, requested_state, std::memory_order_acq_rel)) {
         return false;
@@ -475,9 +502,20 @@ bool Capture::captureThread(std::uint64_t tid, CaptureBuffer &out)
         }
         if (state == capturing_state) {
             if (!waitForState(complete_state, deadline_two)) {
-                return false;
+                if (auto *entered = GTestTimeoutEntered.load(std::memory_order_acquire)) {
+                    entered->store(true, std::memory_order_release);
+                    auto *release = GTestTimeoutRelease.load(std::memory_order_acquire);
+                    while (release != nullptr && !release->load(std::memory_order_acquire)) {
+                    }
+                }
+                state = capturing_state;
+                if (GState.compare_exchange_strong(state, captureState(token, KAbandoned), std::memory_order_acq_rel)) {
+                    return false;
+                }
             }
-            state = complete_state;
+            else {
+                state = complete_state;
+            }
         }
         if (state == complete_state) {
             std::uint64_t expected = complete_state;

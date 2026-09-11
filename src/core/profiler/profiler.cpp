@@ -21,7 +21,7 @@ std::int64_t nowMs()
 
 std::uint64_t saturatingAdd(std::uint64_t left, std::uint64_t right) noexcept
 {
-    const auto maximum = (std::numeric_limits<std::uint64_t>::max)();
+    const auto maximum = std::numeric_limits<std::uint64_t>::max();
     return left > maximum - right ? maximum : left + right;
 }
 
@@ -122,11 +122,11 @@ bool Profiler::startPersistentAllocationCounting(std::string &error)
     config.session_seed = persistent_allocation_session_seed_;
     config.all_threads = true;
     config.count_only = true;
-    persistent_allocation_stop_accumulated_.store(false, std::memory_order_release);
     allocation_sampler_.setRecoverySink(nullptr);
     if (!allocation_sampler_.start(config, error)) {
         return false;
     }
+    persistent_allocation_stop_accumulated_.store(false, std::memory_order_release);
     persistent_allocation_counting_active_.store(true, std::memory_order_release);
     return true;
 }
@@ -506,18 +506,25 @@ bool Profiler::resumePersistentAllocationCounting(std::string &error)
             return false;
         }
     }
-    // If a failed allocation stop left native cleanup incomplete, finish that
-    // cleanup before releasing the export/discard barrier or starting count-only.
+    // Retire native ownership before discarding even a failed session.
     if (mode_ == ProfileMode::Allocation && !running_.load(std::memory_order_acquire) &&
-        (!allocation_sampler_.running() || allocation_sampler_.backendCleanupPending())) {
-        std::string cleanup_error;
-        if (!allocation_sampler_.stop(cleanup_error)) {
-            error = std::move(cleanup_error);
-            return false;
+        !persistent_allocation_counting_active_.load(std::memory_order_acquire)) {
+        const auto cleanup_pending = [this] {
+            return allocation_sampler_.running() || allocation_sampler_.backendCleanupPending() ||
+                   allocation_sampler_.aggregatorMayBeAlive();
+        };
+        if (cleanup_pending()) {
+            std::string cleanup_error;
+            allocation_sampler_.stop(cleanup_error);
+            if (cleanup_pending()) {
+                error = cleanup_error.empty() ? "the allocation backend is still finishing cleanup"
+                                              : std::move(cleanup_error);
+                return false;
+            }
         }
-        if (allocation_sampler_.backendCleanupPending()) {
-            error = "the allocation backend is still finishing cleanup";
-            return false;
+        if (persistent_allocation_counting_enabled_.load(std::memory_order_acquire) &&
+            !persistent_allocation_stop_accumulated_.exchange(true, std::memory_order_acq_rel)) {
+            accumulatePersistentAllocationBytes();
         }
         stopRecoveryWriter();
     }

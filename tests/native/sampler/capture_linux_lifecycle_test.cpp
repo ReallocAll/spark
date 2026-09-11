@@ -6,6 +6,7 @@
 #include <csignal>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <limits>
 #include <thread>
 
@@ -27,6 +28,16 @@ struct CaptureTestAccess {
     }
 
     static void setNextToken(std::uintptr_t next_token) { Capture::setNextTokenForTesting(next_token); }
+    static void setHandlerPublishGate(std::atomic<bool> *entered, std::atomic<bool> *release)
+    {
+        Capture::setHandlerPublishGateForTesting(entered, release);
+    }
+    static void setTimeoutGate(std::atomic<bool> *entered, std::atomic<bool> *release)
+    {
+        Capture::setTimeoutGateForTesting(entered, release);
+    }
+    static CaptureBuffer heldResult() { return Capture::heldResultForTesting(); }
+    static bool idle() { return Capture::idleForTesting(); }
 };
 
 }  // namespace spark
@@ -66,6 +77,7 @@ public:
     void unblock() { unblock_.store(true, std::memory_order_release); }
 
     bool unblocked() const { return unblocked_.load(std::memory_order_acquire); }
+    std::uint64_t progress() const { return work_.load(std::memory_order_relaxed); }
 
 private:
     void run()
@@ -284,12 +296,89 @@ bool testTokenExhaustion()
            require(disarmed, "disarm failed after token exhaustion");
 }
 
+bool testTimeoutOwnership(bool after_write, bool completion_wins)
+{
+    std::atomic<bool> entered{false};
+    std::atomic<bool> release{false};
+    std::atomic<bool> timeout_entered{false};
+    std::atomic<bool> timeout_release{false};
+    std::atomic<bool> wake_entered{false};
+    std::atomic<bool> wake_release{false};
+    TargetThread target(false);
+    if (!require(waitFor([&] { return target.ready(); }, 1s) && spark::Capture::arm(),
+                 "timeout ownership target did not arm")) {
+        return false;
+    }
+    if (after_write) {
+        spark::CaptureTestAccess::setHandlerPublishGate(&entered, &release);
+    }
+    else {
+        spark::CaptureTestAccess::setHandlerGate(&entered, &release);
+    }
+    if (completion_wins) {
+        spark::CaptureTestAccess::setTimeoutGate(&timeout_entered, &timeout_release);
+        spark::CaptureTestAccess::setHandlerWakeGate(&wake_entered, &wake_release);
+    }
+    spark::CaptureBuffer buffer{};
+    bool result = true;
+    const auto start = std::chrono::steady_clock::now();
+    std::thread capture([&] { result = spark::Capture::captureThread(target.id(), buffer); });
+    const bool held = waitFor([&] { return entered.load(std::memory_order_acquire); }, 1s);
+    bool ok = require(held, "timeout handler did not reach gate");
+    spark::CaptureBuffer saved{};
+    if (held && after_write) {
+        saved = spark::CaptureTestAccess::heldResult();
+        ok &= require(saved.count > 0, "held handler did not capture frames");
+    }
+    if (completion_wins) {
+        ok &= require(waitFor([&] { return timeout_entered.load(std::memory_order_acquire); }, 3s),
+                      "caller did not reach second-deadline cleanup");
+        release.store(true, std::memory_order_release);
+        ok &= require(waitFor([&] { return wake_entered.load(std::memory_order_acquire); }, 1s),
+                      "handler did not win completion publication");
+        timeout_release.store(true, std::memory_order_release);
+    }
+    capture.join();
+    const auto elapsed = std::chrono::steady_clock::now() - start;
+    ok &= require(!result && buffer.count == 0 && elapsed >= 1900ms && elapsed < 3500ms,
+                  "second-deadline failure was not bounded");
+    if (!completion_wins) {
+        for (int attempt = 0; attempt < 16; ++attempt) {
+            spark::CaptureBuffer retry{};
+            ok &= require(!spark::Capture::captureThread(target.id(), retry) && retry.count == 0,
+                          "retry acquired an abandoned live buffer");
+            if (held && after_write) {
+                const auto current = spark::CaptureTestAccess::heldResult();
+                ok &= require(current.count == saved.count &&
+                                  std::memcmp(current.ips, saved.ips, saved.count * sizeof(saved.ips[0])) == 0,
+                              "timed-out caller or retry modified handler storage");
+            }
+        }
+    }
+    const auto progress = target.progress();
+    release.store(true, std::memory_order_release);
+    wake_release.store(true, std::memory_order_release);
+    ok &= require(waitFor([&] { return target.progress() != progress && spark::CaptureTestAccess::idle(); }, 1s),
+                  "handler did not resume target and release its token");
+    spark::CaptureTestAccess::setHandlerGate(nullptr, nullptr);
+    spark::CaptureTestAccess::setHandlerPublishGate(nullptr, nullptr);
+    spark::CaptureTestAccess::setTimeoutGate(nullptr, nullptr);
+    spark::CaptureTestAccess::setHandlerWakeGate(nullptr, nullptr);
+    spark::CaptureBuffer fresh{};
+    ok &= require(spark::Capture::captureThread(target.id(), fresh) && fresh.count > 0,
+                  "fresh token did not capture frames without rearming");
+    ok &= require(waitFor([] { return spark::CaptureTestAccess::idle(); }, 1s), "fresh token did not return to idle");
+    ok &= require(spark::Capture::disarm(), "timeout ownership cleanup failed");
+    return ok;
+}
+
 }  // namespace
 
 int main()
 {
-    if (!testConcurrentAdmission() || !testDelayedDelivery() || !testQuiescenceRetry() || !testCompleteBeforeWake() ||
-        !testTokenExhaustion()) {
+    if (!testTimeoutOwnership(false, false) || !testTimeoutOwnership(true, false) ||
+        !testTimeoutOwnership(true, true) || !testConcurrentAdmission() || !testDelayedDelivery() ||
+        !testQuiescenceRetry() || !testCompleteBeforeWake() || !testTokenExhaustion()) {
         return 1;
     }
     for (int i = 0; i < 3; ++i) {

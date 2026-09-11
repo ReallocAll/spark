@@ -1,4 +1,6 @@
+#include <algorithm>
 #include <chrono>
+#include <exception>
 #include <initializer_list>
 #include <limits>
 #include <utility>
@@ -40,7 +42,9 @@ ViewerSocket::ViewerSocket(Config config, Crypto::KeyPair key_pair)
 
 ViewerSocket::~ViewerSocket()
 {
-    close();
+    if (!closeWithin(std::chrono::seconds(2))) {
+        std::terminate();
+    }
 }
 
 SocketChannelInfo ViewerSocket::channelInfo() const
@@ -54,6 +58,9 @@ SocketChannelInfo ViewerSocket::channelInfo() const
 std::string ViewerSocket::open(const UploadCallback &upload, const CancellationToken &cancellation)
 {
     std::scoped_lock open_lock(open_mutex_);
+    if (cancellation.stopRequested()) {
+        return {};
+    }
     std::uint64_t generation = 0;
     bool generation_started = false;
     try {
@@ -69,6 +76,13 @@ std::string ViewerSocket::open(const UploadCallback &upload, const CancellationT
             generation = prepareOpen();
             generation_started = true;
             ws_ = std::make_unique<WebSocketClient>();
+            if (!ws_->setLocalCloseMessage(encodeServerClose(key_pair_.private_key_pkcs8))) {
+                state_.store(ConnectionState::Closed, std::memory_order_release);
+                return {};
+            }
+            if (transport_created_for_testing_) {
+                transport_created_for_testing_(*ws_);
+            }
             ws_->setMessageCallback([this](const std::string &data) { onMessage(data); });
             ws_->setCloseCallback([this, generation](const WebSocketClient::Termination &termination) {
                 onTransportClosed(generation, termination);
@@ -181,7 +195,14 @@ void ViewerSocket::requestStop() noexcept
     state_.store(ConnectionState::Closed, std::memory_order_release);
     connection_generation_.fetch_add(1, std::memory_order_acq_rel);
     try {
-        setCloseState(CloseReason::LocalClose);
+        std::unique_lock transport_lock(transport_mutex_, std::try_to_lock);
+        if (transport_lock.owns_lock() && ws_) {
+            ws_->requestStop();
+        }
+        std::unique_lock lock(close_mutex_, std::try_to_lock);
+        if (lock.owns_lock() && close_reason_ == CloseReason::None) {
+            close_reason_ = CloseReason::LocalClose;
+        }
     }
     catch (...) {
         state_.store(ConnectionState::Closed, std::memory_order_release);
@@ -190,13 +211,25 @@ void ViewerSocket::requestStop() noexcept
 
 bool ViewerSocket::closeWithin(std::chrono::milliseconds timeout) noexcept
 {
+    return closeUntil(std::chrono::steady_clock::now() + std::max(timeout, std::chrono::milliseconds::zero()));
+}
+
+bool ViewerSocket::closeUntil(std::chrono::steady_clock::time_point deadline) noexcept
+{
     requestStop();
     try {
-        std::scoped_lock transport_lock(transport_mutex_);
+        std::unique_lock open_lock(open_mutex_, std::defer_lock);
+        if (!open_lock.try_lock() && !open_lock.try_lock_until(deadline)) {
+            return false;
+        }
+        std::unique_lock transport_lock(transport_mutex_, std::defer_lock);
+        if (!transport_lock.try_lock() && !transport_lock.try_lock_until(deadline)) {
+            return false;
+        }
         if (!ws_) {
             return true;
         }
-        if (!ws_->closeWithin(timeout)) {
+        if (!ws_->closeUntil(deadline)) {
             return false;
         }
         ws_.reset();
@@ -209,36 +242,7 @@ bool ViewerSocket::closeWithin(std::chrono::milliseconds timeout) noexcept
 
 void ViewerSocket::close() noexcept
 {
-    try {
-        std::scoped_lock transport_lock(transport_mutex_);
-        const bool was_open =
-            state_.exchange(ConnectionState::Closed, std::memory_order_acq_rel) == ConnectionState::Open;
-        connection_generation_.fetch_add(1, std::memory_order_acq_rel);
-        try {
-            setCloseState(CloseReason::LocalClose);
-        }
-        catch (...) {
-            state_.store(ConnectionState::Closed, std::memory_order_release);
-        }
-        if (ws_) {
-            if (was_open && ws_->isOpen()) {
-                try {
-                    const auto private_key = key_pair_.private_key_pkcs8;
-                    WebSocketClient::DeferredEncoder encoder = [private_key]() {
-                        return encodeServerClose(private_key);
-                    };
-                    enqueueDeferredLocked(std::move(encoder), accountedBytes({private_key.size()}));
-                }
-                catch (...) {
-                    setDeferredSendError();
-                }
-            }
-            ws_->close();
-        }
-    }
-    catch (...) {
-        state_.store(ConnectionState::Closed, std::memory_order_release);
-    }
+    static_cast<void>(closeWithin(std::chrono::seconds(2)));
 }
 
 ViewerSocket::CloseReason ViewerSocket::closeReason() const

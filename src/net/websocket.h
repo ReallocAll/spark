@@ -13,6 +13,7 @@
 #include <thread>
 #include <utility>
 
+#include "core/util/deadline_thread.h"
 #include "net/cancellation.h"
 
 namespace spark {
@@ -56,12 +57,14 @@ public:
     bool sendDeferred(DeferredEncoder encoder, std::size_t accounted_input_bytes) noexcept;
 
     void requestStop() noexcept;
+    bool setLocalCloseMessage(std::string message) noexcept;
     bool closeWithin(std::chrono::milliseconds timeout) noexcept;
+    bool closeUntil(std::chrono::steady_clock::time_point deadline) noexcept;
 
     // Close the connection and join the background thread.
     void close() noexcept;
 
-    bool isOpen() const { return running_.load(); }
+    bool isOpen() const { return running_.load() && !cancellation_.stopRequested() && !thread_.failed(); }
     Termination termination() const;
 
     void setMessageCallback(MessageCallback cb) { message_cb_ = std::move(cb); }
@@ -117,7 +120,9 @@ private:
 
     std::atomic<bool> running_{false};
     std::atomic<bool> local_close_requested_{false};
-    std::thread thread_;
+    std::string local_close_message_;
+    bool local_close_attempted_ = false;
+    detail::DeadlineThread thread_;
     std::mutex worker_exit_mutex_;
     std::condition_variable worker_exit_cv_;
     bool worker_exited_ = true;
@@ -137,6 +142,9 @@ private:
     std::string incoming_message_for_testing_;
     std::atomic<std::uint64_t> *resource_cleanup_count_for_testing_ = nullptr;
     std::function<std::string(const CancellationToken &)> create_channel_for_testing_;
+    std::function<int()> handshake_for_testing_;
+    std::function<void()> after_handshake_for_testing_;
+    SendFunction send_for_testing_;
 };
 
 }  // namespace spark

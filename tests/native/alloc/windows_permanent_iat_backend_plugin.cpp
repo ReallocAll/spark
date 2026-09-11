@@ -24,34 +24,34 @@ namespace {
 using MallocFn = void *(__cdecl *)(std::size_t);
 using FreeFn = void(__cdecl *)(void *);
 
-std::unique_ptr<spark::WindowsAllocationIatHooks> g_hooks;
-MallocFn g_malloc = nullptr;
-FreeFn g_free = nullptr;
-std::atomic<std::uint64_t> g_calls{0};
-std::atomic<bool> g_hold{false};
-std::atomic<bool> g_entered{false};
-char g_error[512]{};
+std::unique_ptr<spark::WindowsAllocationIatHooks> GHooks;
+MallocFn GMalloc = nullptr;
+FreeFn GFree = nullptr;
+std::atomic<std::uint64_t> GCalls{0};
+std::atomic<bool> GHold{false};
+std::atomic<bool> GEntered{false};
+char GError[512]{};
 
 void setError(const char *operation, const std::string &detail) noexcept
 {
-    std::snprintf(g_error, sizeof(g_error), "%s failed: %s", operation, detail.c_str());
+    std::snprintf(GError, sizeof(GError), "%s failed: %s", operation, detail.c_str());
 }
 
 extern "C" void *__cdecl hookMalloc(std::size_t size) noexcept
 {
-    g_calls.fetch_add(1, std::memory_order_relaxed);
-    g_entered.store(true, std::memory_order_release);
-    while (g_hold.load(std::memory_order_acquire)) {
+    GCalls.fetch_add(1, std::memory_order_relaxed);
+    GEntered.store(true, std::memory_order_release);
+    while (GHold.load(std::memory_order_acquire)) {
         (void)::SwitchToThread();
     }
-    MallocFn original = g_malloc;
+    MallocFn original = GMalloc;
     return original != nullptr ? original(size) : nullptr;
 }
 
 extern "C" void __cdecl hookFree(void *pointer) noexcept
 {
-    g_calls.fetch_add(1, std::memory_order_relaxed);
-    FreeFn original = g_free;
+    GCalls.fetch_add(1, std::memory_order_relaxed);
+    FreeFn original = GFree;
     if (original != nullptr) {
         original(pointer);
     }
@@ -59,47 +59,47 @@ extern "C" void __cdecl hookFree(void *pointer) noexcept
 
 void resetBackend() noexcept
 {
-    g_hooks.reset();
-    g_malloc = nullptr;
-    g_free = nullptr;
+    GHooks.reset();
+    GMalloc = nullptr;
+    GFree = nullptr;
 }
 
 }  // namespace
 
 extern "C" __declspec(dllexport) int __cdecl windowsPermanentIatBackendInstall() noexcept
 {
-    g_error[0] = '\0';
-    if (g_hooks != nullptr) {
+    GError[0] = '\0';
+    if (GHooks != nullptr) {
         return 1;
     }
 
     HMODULE ucrt = ::GetModuleHandleW(L"ucrtbase.dll");
     if (ucrt == nullptr) {
-        std::snprintf(g_error, sizeof(g_error), "ucrtbase.dll is not loaded");
+        std::snprintf(GError, sizeof(GError), "ucrtbase.dll is not loaded");
         return 0;
     }
-    g_malloc = reinterpret_cast<MallocFn>(::GetProcAddress(ucrt, "malloc"));
-    g_free = reinterpret_cast<FreeFn>(::GetProcAddress(ucrt, "free"));
-    if (g_malloc == nullptr || g_free == nullptr) {
-        std::snprintf(g_error, sizeof(g_error), "required UCRT allocator exports are unavailable");
+    GMalloc = reinterpret_cast<MallocFn>(::GetProcAddress(ucrt, "malloc"));
+    GFree = reinterpret_cast<FreeFn>(::GetProcAddress(ucrt, "free"));
+    if (GMalloc == nullptr || GFree == nullptr) {
+        std::snprintf(GError, sizeof(GError), "required UCRT allocator exports are unavailable");
         resetBackend();
         return 0;
     }
 
     try {
-        g_hooks = std::make_unique<spark::WindowsAllocationIatHooks>();
+        GHooks = std::make_unique<spark::WindowsAllocationIatHooks>();
         std::string error;
-        if (!g_hooks->addTarget(reinterpret_cast<void *>(g_malloc), reinterpret_cast<void *>(&hookMalloc), error)) {
+        if (!GHooks->addTarget(reinterpret_cast<void *>(GMalloc), reinterpret_cast<void *>(&hookMalloc), error)) {
             setError("addTarget(malloc)", error);
             resetBackend();
             return 0;
         }
-        if (!g_hooks->addTarget(reinterpret_cast<void *>(g_free), reinterpret_cast<void *>(&hookFree), error)) {
+        if (!GHooks->addTarget(reinterpret_cast<void *>(GFree), reinterpret_cast<void *>(&hookFree), error)) {
             setError("addTarget(free)", error);
             resetBackend();
             return 0;
         }
-        if (!g_hooks->install(error)) {
+        if (!GHooks->install(error)) {
             setError("install", error);
             resetBackend();
             return 0;
@@ -107,7 +107,7 @@ extern "C" __declspec(dllexport) int __cdecl windowsPermanentIatBackendInstall()
         return 1;
     }
     catch (...) {
-        std::snprintf(g_error, sizeof(g_error), "allocation IAT backend setup threw an exception");
+        std::snprintf(GError, sizeof(GError), "allocation IAT backend setup threw an exception");
         resetBackend();
         return 0;
     }
@@ -115,12 +115,12 @@ extern "C" __declspec(dllexport) int __cdecl windowsPermanentIatBackendInstall()
 
 extern "C" __declspec(dllexport) int __cdecl windowsPermanentIatBackendUninstall() noexcept
 {
-    g_error[0] = '\0';
-    if (g_hooks == nullptr) {
+    GError[0] = '\0';
+    if (GHooks == nullptr) {
         return 1;
     }
     std::string error;
-    if (!g_hooks->uninstall(error)) {
+    if (!GHooks->uninstall(error)) {
         setError("uninstall", error);
         return 0;
     }
@@ -130,25 +130,25 @@ extern "C" __declspec(dllexport) int __cdecl windowsPermanentIatBackendUninstall
 
 extern "C" __declspec(dllexport) const char *__cdecl windowsPermanentIatBackendError() noexcept
 {
-    return g_error;
+    return GError;
 }
 
 extern "C" __declspec(dllexport) std::uint64_t __cdecl windowsPermanentIatBackendCalls() noexcept
 {
-    return g_calls.load(std::memory_order_acquire);
+    return GCalls.load(std::memory_order_acquire);
 }
 
 extern "C" __declspec(dllexport) void __cdecl windowsPermanentIatBackendSetHold(int enabled) noexcept
 {
-    g_hold.store(enabled != 0, std::memory_order_release);
+    GHold.store(enabled != 0, std::memory_order_release);
 }
 
 extern "C" __declspec(dllexport) void __cdecl windowsPermanentIatBackendResetEntered() noexcept
 {
-    g_entered.store(false, std::memory_order_release);
+    GEntered.store(false, std::memory_order_release);
 }
 
 extern "C" __declspec(dllexport) int __cdecl windowsPermanentIatBackendEntered() noexcept
 {
-    return g_entered.load(std::memory_order_acquire) ? 1 : 0;
+    return GEntered.load(std::memory_order_acquire) ? 1 : 0;
 }

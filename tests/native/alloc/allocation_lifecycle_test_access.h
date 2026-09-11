@@ -2,6 +2,8 @@
 #define ENDSTONE_SPARK_ALLOCATION_LIFECYCLE_TEST_ACCESS_H
 
 #include <atomic>
+#include <cstdint>
+#include <string_view>
 
 #include "native/alloc/allocation_sampler.h"
 
@@ -18,10 +20,34 @@ struct StartFailureGate {
     std::atomic<bool> fail_now{false};
 };
 
+#if defined(__linux__)
+struct LinuxAllocationTestControl {
+    std::atomic<unsigned> start_failure{0};
+    std::atomic<bool> key_delete_failure{false};
+    void (*aggregator_entry)() noexcept = nullptr;
+    void (*before_event)() noexcept = nullptr;
+    void (*before_final_record)() noexcept = nullptr;
+    void (*snapshot_admitted)() noexcept = nullptr;
+    void (*snapshot_before_aggregate)() noexcept = nullptr;
+    void (*snapshot_before_restore)() noexcept = nullptr;
+    std::atomic<bool> snapshot_restored{false};
+    std::atomic<void (*)() noexcept> before_hook{nullptr};
+    std::atomic<void (*)() noexcept> before_tls{nullptr};
+    bool (*scan_module)(std::string_view) noexcept = nullptr;
+};
+#endif
+
 struct AllocationLifecycleTestAccess {
     static bool holdTrackingCall(AllocationSampler &, TrackingGate &) noexcept;
     static void armThreadCreationFailure(AllocationSampler &, StartFailureGate &) noexcept;
     static void disarmThreadCreationFailure(AllocationSampler &) noexcept;
+#if defined(__linux__)
+    static bool configureLinux(AllocationSampler &, LinuxAllocationTestControl *) noexcept;
+    static void requestLinuxRescan(AllocationSampler &) noexcept;
+    static std::uint32_t linuxGroup(const AllocationSampler &) noexcept;
+    static bool linuxKeyCreated(const AllocationSampler &) noexcept;
+    static bool linuxRescanActive(const AllocationSampler &) noexcept;
+#endif
 };
 
 }  // namespace spark::test

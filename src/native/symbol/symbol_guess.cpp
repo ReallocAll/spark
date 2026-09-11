@@ -88,6 +88,7 @@ std::unordered_map<std::uint64_t, GuessResult> analyzeMainModuleSymbols(std::spa
 #include <link.h>
 #include <mnemonics.h>
 
+#include <array>
 #include <chrono>
 #include <cstring>
 #include <limits>
@@ -231,7 +232,336 @@ bool isThisAdjustment(const _DInst &instruction)
            instruction.ops[1].index == R_RDI;
 }
 
+struct InstructionGraph {
+    std::vector<_DInst> instructions;
+    std::vector<std::vector<std::size_t>> successors;
+    std::vector<std::vector<std::size_t>> predecessors;
+};
+
+struct InstructionReader {
+    std::span<const std::uint8_t> code;
+    const dwarf::ImageView *image = nullptr;
+    std::uint64_t base = 0;
+    std::size_t size = 0;
+
+    std::optional<_DInst> decode(std::size_t offset, std::size_t *count) const
+    {
+        if (image == nullptr) {
+            return decodeOne(code.subspan(offset), base + offset, count);
+        }
+        std::array<std::uint8_t, 15> bytes{};
+        const auto length = std::min(bytes.size(), size - offset);
+        if (!image->read(base + offset, bytes.data(), length)) {
+            return std::nullopt;
+        }
+        return decodeOne(std::span(bytes).first(length), base + offset, count);
+    }
+};
+
+std::optional<InstructionGraph> decodeGraph(const InstructionReader &reader, std::size_t *count,
+                                            bool reverse_worklist = false)
+{
+    const auto base = reader.base;
+    if (reader.size == 0 || reader.size > static_cast<std::size_t>((std::numeric_limits<int>::max)()) ||
+        reader.size > (std::numeric_limits<std::uint64_t>::max)() - base) {
+        return std::nullopt;
+    }
+    InstructionGraph graph;
+    std::map<std::size_t, std::size_t> starts;
+    std::vector<std::size_t> work{0};
+    std::vector<std::pair<std::size_t, std::size_t>> edges;
+    while (!work.empty()) {
+        const auto offset = work.back();
+        work.pop_back();
+        auto next = starts.lower_bound(offset);
+        if (next != starts.end() && next->first == offset) {
+            continue;
+        }
+        if (next != starts.begin()) {
+            const auto previous = std::prev(next);
+            if (previous->first + graph.instructions[previous->second].size > offset) {
+                return std::nullopt;
+            }
+        }
+        const auto instruction = reader.decode(offset, count);
+        if (!instruction || (next != starts.end() && next->first < offset + instruction->size)) {
+            return std::nullopt;
+        }
+        const auto id = graph.instructions.size();
+        starts.emplace(offset, id);
+        graph.instructions.push_back(*instruction);
+        std::vector<std::size_t> destinations;
+        const auto flow = META_GET_FC(instruction->meta);
+        if (flow == FC_CND_BRANCH || flow == FC_UNC_BRANCH) {
+            if (instruction->opsNo != 1 || instruction->ops[0].type != O_PC) {
+                return std::nullopt;
+            }
+            const auto target = INSTRUCTION_GET_TARGET(&*instruction);
+            if (target >= base && target - base < reader.size) {
+                destinations.push_back(static_cast<std::size_t>(target - base));
+            }
+        }
+        if (flow == FC_NONE || flow == FC_CMOV || flow == FC_CALL || flow == FC_CND_BRANCH) {
+            const auto fallthrough = offset + instruction->size;
+            if (fallthrough >= reader.size) {
+                return std::nullopt;
+            }
+            destinations.push_back(fallthrough);
+        }
+        else if (flow != FC_RET && flow != FC_UNC_BRANCH) {
+            return std::nullopt;
+        }
+        std::ranges::sort(destinations);
+        const auto duplicate = std::ranges::unique(destinations);
+        destinations.erase(duplicate.begin(), duplicate.end());
+        for (auto target : destinations) {
+            edges.emplace_back(id, target);
+        }
+        if (reverse_worklist) {
+            std::ranges::reverse(destinations);
+        }
+        work.insert(work.end(), destinations.begin(), destinations.end());
+    }
+    graph.successors.resize(graph.instructions.size());
+    graph.predecessors.resize(graph.instructions.size());
+    for (const auto &[source, offset] : edges) {
+        const auto target = starts.at(offset);
+        graph.successors[source].push_back(target);
+        graph.predecessors[target].push_back(source);
+    }
+    return graph;
+}
+
+std::vector<bool> cyclicInstructions(const InstructionGraph &graph)
+{
+    const auto count = graph.instructions.size();
+    std::vector<std::uint8_t> visited(count);
+    std::vector<std::size_t> order;
+    for (std::size_t start = 0; start < count; ++start) {
+        if (visited[start]) {
+            continue;
+        }
+        std::vector<std::pair<std::size_t, std::size_t>> stack{{start, 0}};
+        visited[start] = 1;
+        while (!stack.empty()) {
+            auto &[node, edge] = stack.back();
+            if (edge == graph.successors[node].size()) {
+                order.push_back(node);
+                stack.pop_back();
+                continue;
+            }
+            const auto target = graph.successors[node][edge++];
+            if (!visited[target]) {
+                visited[target] = 1;
+                stack.emplace_back(target, 0);
+            }
+        }
+    }
+    std::ranges::fill(visited, 0);
+    std::vector<bool> cyclic(count);
+    std::ranges::reverse(order);
+    for (auto start : order) {
+        if (visited[start]) {
+            continue;
+        }
+        std::vector<std::size_t> component;
+        std::vector<std::size_t> work{start};
+        visited[start] = 1;
+        while (!work.empty()) {
+            const auto node = work.back();
+            work.pop_back();
+            component.push_back(node);
+            for (auto target : graph.predecessors[node]) {
+                if (!visited[target]) {
+                    visited[target] = 1;
+                    work.push_back(target);
+                }
+            }
+        }
+        if (component.size() > 1 ||
+            std::ranges::find(graph.successors[start], start) != graph.successors[start].end()) {
+            for (auto node : component) {
+                cyclic[node] = true;
+            }
+        }
+    }
+    return cyclic;
+}
+
+bool isMemory(const _Operand &operand)
+{
+    return operand.type == O_SMEM || operand.type == O_MEM || operand.type == O_DISP;
+}
+
+bool multiplyReadsRegister(const _DInst &instruction, unsigned reg)
+{
+    if ((instruction.opcode != I_IMUL && instruction.opcode != I_MUL) || instruction.opsNo == 0 ||
+        instruction.ops[0].size != 64) {
+        return false;
+    }
+    const auto reads = [reg](const _Operand &operand) {
+        return operand.type == O_REG && operand.size == 64 && operand.index == reg;
+    };
+    if (instruction.opsNo == 1) {
+        return reads(instruction.ops[0]);
+    }
+    if (instruction.opcode == I_IMUL && instruction.opsNo == 2) {
+        return reads(instruction.ops[0]) || reads(instruction.ops[1]);
+    }
+    return instruction.opcode == I_IMUL && instruction.opsNo == 3 && reads(instruction.ops[1]);
+}
+
+std::optional<std::string> lambdaOwner(std::string_view label)
+{
+    if (label.find("function::__func<") == std::string_view::npos || label.find("::vfn[6]") == std::string_view::npos) {
+        return std::nullopt;
+    }
+    const auto lt = label.find('<');
+    int depth = 0;
+    for (std::size_t i = lt; i < label.size(); ++i) {
+        if (label[i] == '<') {
+            ++depth;
+        }
+        else if (label[i] == '>') {
+            if (--depth == 0) {
+                break;
+            }
+        }
+        else if (label[i] == ',' && depth == 1) {
+            return std::string(label.substr(lt + 1, i - lt - 1));
+        }
+    }
+    return std::nullopt;
+}
+
 }  // namespace
+
+TypedLabel decodeCodePattern(std::span<const std::uint8_t> code, std::uint64_t function_rva,
+                             std::size_t *decoded_instructions, bool reverse_worklist)
+{
+    const auto graph =
+        decodeGraph({.code = code, .base = function_rva, .size = code.size()}, decoded_instructions, reverse_worklist);
+    if (!graph) {
+        return {};
+    }
+    const auto cyclic = cyclicInstructions(*graph);
+    bool hash32 = false;
+    bool hash64 = false;
+    bool cas = false;
+    bool xadd = false;
+    std::size_t shifts = 0;
+    std::size_t nots = 0;
+    for (std::size_t i = 0; i < graph->instructions.size(); ++i) {
+        const auto &instruction = graph->instructions[i];
+        if (instruction.opcode == I_IMUL && instruction.opsNo == 3 && instruction.ops[0].size == 32 &&
+            instruction.ops[2].type == O_IMM && instruction.ops[2].size == 32 && instruction.imm.dword == 0x9E3779B9) {
+            hash32 = true;
+        }
+        if (instruction.opcode == I_MOV && instruction.opsNo == 2 && instruction.ops[0].type == O_REG &&
+            instruction.ops[0].size == 64 && instruction.ops[1].type == O_IMM && instruction.ops[1].size == 64 &&
+            instruction.imm.qword == 0x9DDFEA08EB382D69 && graph->successors[i].size() == 1) {
+            const auto next = graph->successors[i][0];
+            const auto &multiply = graph->instructions[next];
+            if (graph->predecessors[next].size() == 1 && multiply.addr == instruction.addr + instruction.size &&
+                multiplyReadsRegister(multiply, instruction.ops[0].index)) {
+                hash64 = true;
+            }
+        }
+        if (instruction.opsNo == 2 && isMemory(instruction.ops[0]) && (instruction.flags & FLAG_LOCK) != 0) {
+            cas = cas || (instruction.opcode == I_CMPXCHG && cyclic[i]);
+            xadd = xadd || instruction.opcode == I_XADD;
+        }
+        if ((instruction.opcode == I_SHR || instruction.opcode == I_SAR) && instruction.opsNo == 2 &&
+            instruction.ops[0].type == O_REG && instruction.ops[1].type == O_IMM && instruction.imm.qword == 1) {
+            ++shifts;
+        }
+        if (instruction.opcode == I_NOT && instruction.opsNo == 1 && instruction.ops[0].type == O_REG &&
+            instruction.ops[0].size == 64) {
+            ++nots;
+        }
+    }
+    std::string label;
+    if (hash32) {
+        label = "type?: hash_table_lookup (Knuth multiplicative hash)";
+    }
+    else if (hash64) {
+        label = "type?: hash_table_lookup (64-bit hash multiplier)";
+    }
+    else if (code.size() < 100 && cas) {
+        label = "type?: atomic_cas_loop (lock cmpxchg)";
+    }
+    else if (code.size() < 100 && xadd) {
+        label = "type?: atomic_fetch_add (lock xadd)";
+    }
+    else if (code.size() <= 1500 && shifts >= 2 && nots >= 1) {
+        label = "type?: binary_search (shift-right halving)";
+    }
+    return label.empty()
+             ? TypedLabel{}
+             : TypedLabel{.label = std::move(label), .kind = GuessKind::Type, .confidence = Confidence::Medium};
+}
+
+LambdaBodyIndex collectLambdaBodyIndex(const dwarf::ImageView &image, const std::vector<dwarf::FunctionRange> &ranges,
+                                       const std::unordered_map<std::uint64_t, TypedLabel> &labels,
+                                       std::size_t *decoded_instructions)
+{
+    LambdaBodyIndex index;
+    std::unordered_map<std::uint64_t, std::set<std::string>> owners;
+    for (const auto &[root, label] : labels) {
+        const auto owner = lambdaOwner(label.label);
+        if (!owner) {
+            continue;
+        }
+        const auto *function = dwarf::functionContaining(ranges, root);
+        if (function == nullptr || function->end <= function->begin ||
+            function->end - function->begin > static_cast<std::uint64_t>((std::numeric_limits<int>::max)()) ||
+            !image.executable(function->begin, static_cast<std::size_t>(function->end - function->begin))) {
+            return {};
+        }
+        const auto graph = decodeGraph({.image = &image,
+                                        .base = function->begin,
+                                        .size = static_cast<std::size_t>(function->end - function->begin)},
+                                       decoded_instructions);
+        if (!graph) {
+            return {};
+        }
+        std::set<std::uint64_t> targets;
+        for (const auto &instruction : graph->instructions) {
+            if (instruction.opcode != I_CALL) {
+                continue;
+            }
+            if (instruction.opsNo != 1 || instruction.ops[0].type != O_PC) {
+                return {};
+            }
+            const auto *target = dwarf::functionContaining(ranges, INSTRUCTION_GET_TARGET(&instruction));
+            if (target != nullptr && target->end - target->begin >= 500) {
+                targets.insert(target->root);
+            }
+        }
+        index.wrappers.push_back({.root = root, .owner = *owner, .targets = {targets.begin(), targets.end()}});
+        for (auto target : targets) {
+            owners[target].insert(*owner);
+        }
+    }
+    for (const auto &wrapper : index.wrappers) {
+        if (wrapper.targets.size() == 1 && owners.at(wrapper.targets[0]).size() == 1) {
+            index.labels.emplace(wrapper.targets[0], TypedLabel{.label = "call?: " + wrapper.owner + " (lambda body)",
+                                                                .kind = GuessKind::Call,
+                                                                .confidence = Confidence::Medium});
+        }
+    }
+    index.complete = true;
+    return index;
+}
+
+TypedLabel projectLambdaBodyLabel(const LambdaBodyIndex &index, std::uint64_t root, const TypedLabel &earlier)
+{
+    if (!earlier.empty()) {
+        return earlier;
+    }
+    const auto found = index.labels.find(root);
+    return index.complete && found != index.labels.end() ? found->second : TypedLabel{};
+}
 
 std::optional<DecodedThunk> decodeStrictThunk(std::span<const std::uint8_t> code, std::uint64_t function_rva,
                                               std::size_t *decoded_instructions)
@@ -306,6 +636,7 @@ using FunctionRange = symbol_guess::dwarf::FunctionRange;
 struct GuessTable {
     std::vector<FunctionRange> ranges;
     std::unordered_map<std::uint64_t, symbol_guess::TypedLabel> labels;
+    symbol_guess::linux::LambdaBodyIndex lambda_bodies;
     symbol_guess::dwarf::ParseStats range_stats;
     symbol_guess::linux::BuildStats stats;
 };
@@ -939,81 +1270,6 @@ void scanCandidateReferences(const ImageView &img, const GuessTable &table,
 
 const GuessTable &guessTable();
 
-// Control-flow walker matching decodeRipRelativeLeaTargets but collecting
-// direct CALL targets (call rel32) instead of LEA rip-relative operands.
-std::vector<std::uint64_t> decodeDirectCallTargets(std::span<const std::uint8_t> code, std::uint64_t function_rva,
-                                                   std::size_t *decoded_instructions)
-{
-    if (code.empty() || code.size() > static_cast<std::size_t>((std::numeric_limits<int>::max)())) {
-        return {};
-    }
-
-    std::vector<std::size_t> work{0};
-    std::unordered_set<std::size_t> visited;
-    std::set<std::uint64_t> targets;
-    while (!work.empty()) {
-        std::size_t cursor = work.back();
-        work.pop_back();
-        while (cursor < code.size()) {
-            _CodeInfo info{};
-            info.codeOffset = function_rva + cursor;
-            info.code = code.data() + cursor;
-            info.codeLen = static_cast<int>(code.size() - cursor);
-            info.dt = Decode64Bits;
-            info.features = DF_STOP_ON_FLOW_CONTROL | DF_STOP_ON_UNDECODEABLE;
-            _DInst instructions[64]{};
-            unsigned used = 0;
-            const _DecodeResult result = distorm_decompose64(&info, instructions, 64, &used);
-            if ((result == DECRES_INPUTERR || result == DECRES_NONE) || used == 0) {
-                break;
-            }
-
-            bool stop = false;
-            for (unsigned i = 0; i < used; ++i) {
-                const _DInst &instruction = instructions[i];
-                if (instruction.flags == FLAG_NOT_DECODABLE || instruction.size == 0 ||
-                    instruction.addr < function_rva || instruction.addr - function_rva >= code.size()) {
-                    stop = true;
-                    break;
-                }
-                const auto offset = static_cast<std::size_t>(instruction.addr - function_rva);
-                if (!visited.insert(offset).second) {
-                    stop = true;
-                    break;
-                }
-                if (decoded_instructions != nullptr) {
-                    ++*decoded_instructions;
-                }
-                if (instruction.opcode == I_CALL && instruction.opsNo >= 1 && instruction.ops[0].type == O_PC) {
-                    targets.insert(INSTRUCTION_GET_TARGET(&instruction));
-                }
-
-                const unsigned flow = META_GET_FC(instruction.meta);
-                if (flow == FC_CND_BRANCH || flow == FC_UNC_BRANCH) {
-                    for (const _Operand &operand : instruction.ops) {
-                        if (operand.type != O_PC) {
-                            continue;
-                        }
-                        const std::uint64_t target = INSTRUCTION_GET_TARGET(&instruction);
-                        if (target >= function_rva && target - function_rva < code.size()) {
-                            work.push_back(static_cast<std::size_t>(target - function_rva));
-                        }
-                        break;
-                    }
-                }
-                cursor = offset + instruction.size;
-                if (flow == FC_RET || flow == FC_SYS || flow == FC_UNC_BRANCH || flow == FC_INT || flow == FC_HLT) {
-                    stop = true;
-                }
-            }
-            if (stop) {
-                break;
-            }
-        }
-    }
-    return {targets.begin(), targets.end()};
-}
-
 std::unordered_map<std::uint64_t, GuessResult> guessBatch(std::span<const std::uint64_t> rvas)
 {
     std::unordered_map<std::uint64_t, GuessResult> out;
@@ -1164,90 +1420,20 @@ std::unordered_map<std::uint64_t, GuessResult> guessBatch(std::span<const std::u
         }
     }
 
-    // Lambda body propagation: vfn[6] is operator(); propagate name to a single surviving CALL target.
     for (const auto &[root, inputs] : root_inputs) {
-        const auto label_it = table.labels.find(root);
-        if (label_it == table.labels.end()) {
+        if (!out[inputs[0]].label.empty()) {
             continue;
         }
-        const std::string &vtable_label = label_it->second.label;
-        if (vtable_label.find("function::__func<") == std::string::npos ||
-            vtable_label.find("::vfn[6]") == std::string::npos) {
-            continue;
-        }
-
-        // Extract the lambda type name between '<' and the first ',' at bracket
-        // depth 1, so nested templates inside the lambda name are handled.
-        const std::size_t lt = vtable_label.find('<');
-        if (lt == std::string::npos) {
-            continue;
-        }
-        int depth = 0;
-        std::size_t comma = std::string::npos;
-        for (std::size_t i = lt; i < vtable_label.size(); ++i) {
-            if (vtable_label[i] == '<') {
-                ++depth;
-            }
-            else if (vtable_label[i] == '>') {
-                --depth;
-                if (depth == 0) {
-                    break;
-                }
-            }
-            else if (vtable_label[i] == ',' && depth == 1) {
-                comma = i;
-                break;
-            }
-        }
-        if (comma == std::string::npos) {
-            continue;
-        }
-        const std::string lambda_name = vtable_label.substr(lt + 1, comma - lt - 1);
-
-        const FunctionRange *function = functionContaining(table, root);
-        if (function == nullptr || function->end <= function->begin) {
-            continue;
-        }
-        const Section *section = img.sectionContaining(function->begin, function->end - function->begin);
-        if (section == nullptr || !section->executable) {
-            continue;
-        }
-        const auto code = std::span(img.at(function->begin), static_cast<std::size_t>(function->end - function->begin));
-        const auto call_targets = decodeDirectCallTargets(code, function->begin, &batch.decoded_instructions);
-
-        std::vector<std::uint64_t> candidates;
-        for (std::uint64_t target : call_targets) {
-            const FunctionRange *target_func = functionContaining(table, target);
-            if (target_func == nullptr) {
-                continue;
-            }
-            const std::uint64_t target_root = target_func->root;
-            const auto target_it = root_inputs.find(target_root);
-            if (target_it == root_inputs.end()) {
-                continue;
-            }
-            if (!out[target_it->second[0]].label.empty()) {
-                continue;
-            }
-            if (target_func->end - target_func->begin < 500) {
-                continue;
-            }
-            candidates.push_back(target_root);
-        }
-
-        if (candidates.size() == 1) {
-            const symbol_guess::TypedLabel body_label{.label = "call?: " + lambda_name + " (lambda body)",
-                                                      .kind = GuessKind::Call,
-                                                      .confidence = Confidence::Medium};
-            for (std::uint64_t rva : root_inputs.at(candidates[0])) {
-                out[rva] = makeGuess(candidates[0], body_label);
+        const auto label = symbol_guess::linux::projectLambdaBodyLabel(table.lambda_bodies, root);
+        if (!label.empty()) {
+            for (auto rva : inputs) {
+                out[rva] = makeGuess(root, label);
             }
             ++batch.lambda_body_labels;
         }
     }
 
-    // Code pattern detection: scan unresolved functions for characteristic
-    // byte patterns that reveal function behavior.
+    // Decode tentative code-pattern evidence in unresolved functions.
     for (const auto &[root, inputs] : root_inputs) {
         if (!out[inputs[0]].label.empty()) {
             continue;
@@ -1262,92 +1448,12 @@ std::unordered_map<std::uint64_t, GuessResult> guessBatch(std::span<const std::u
         }
         const auto code = std::span(img.at(function->begin), static_cast<std::size_t>(function->end - function->begin));
 
-        // Knuth's multiplicative hash constant 0x9E3779B9 (little-endian).
-        const unsigned char k_hash_constant[] = {0xB9, 0x79, 0x37, 0x9E};
-        if (std::search(code.begin(), code.end(), k_hash_constant, k_hash_constant + 4) != code.end()) {
-            const symbol_guess::TypedLabel label{.label = "type?: hash_table_lookup (Knuth multiplicative hash)",
-                                                 .kind = GuessKind::Type,
-                                                 .confidence = Confidence::Medium};
-            for (std::uint64_t rva : inputs) {
+        const auto label = symbol_guess::linux::decodeCodePattern(code, function->begin, &batch.decoded_instructions);
+        if (!label.empty()) {
+            for (auto rva : inputs) {
                 out[rva] = makeGuess(root, label);
             }
             ++batch.code_pattern_labels;
-            continue;
-        }
-
-        // CityHash/FarmHash 64-bit hash multiplier 0x9DDFEA08EB382D69
-        // (little-endian). Used in Hash128to64 and similar integer hash functions.
-        const unsigned char k_hash64_constant[] = {0x69, 0x2D, 0x38, 0xEB, 0x08, 0xEA, 0xDF, 0x9D};
-        if (std::search(code.begin(), code.end(), k_hash64_constant, k_hash64_constant + 8) != code.end()) {
-            const symbol_guess::TypedLabel label{.label = "type?: hash_table_lookup (64-bit hash multiplier)",
-                                                 .kind = GuessKind::Type,
-                                                 .confidence = Confidence::Medium};
-            for (std::uint64_t rva : inputs) {
-                out[rva] = makeGuess(root, label);
-            }
-            ++batch.code_pattern_labels;
-            continue;
-        }
-
-        // Atomic operations in small functions.
-        if (code.size() < 100) {
-            // lock cmpxchg: F0 0F B1 or F0 48 0F B1
-            const unsigned char k_lock_cmpxchg[] = {0xF0, 0x0F, 0xB1};
-            const unsigned char k_lock_cmpxchg64[] = {0xF0, 0x48, 0x0F, 0xB1};
-            if (std::search(code.begin(), code.end(), k_lock_cmpxchg, k_lock_cmpxchg + 3) != code.end() ||
-                std::search(code.begin(), code.end(), k_lock_cmpxchg64, k_lock_cmpxchg64 + 4) != code.end()) {
-                const symbol_guess::TypedLabel label{.label = "type?: atomic_cas_loop (lock cmpxchg)",
-                                                     .kind = GuessKind::Type,
-                                                     .confidence = Confidence::Medium};
-                for (std::uint64_t rva : inputs) {
-                    out[rva] = makeGuess(root, label);
-                }
-                ++batch.code_pattern_labels;
-                continue;
-            }
-
-            // lock xadd: F0 0F C1 or F0 48 0F C1
-            const unsigned char k_lock_xadd[] = {0xF0, 0x0F, 0xC1};
-            const unsigned char k_lock_xadd64[] = {0xF0, 0x48, 0x0F, 0xC1};
-            if (std::search(code.begin(), code.end(), k_lock_xadd, k_lock_xadd + 3) != code.end() ||
-                std::search(code.begin(), code.end(), k_lock_xadd64, k_lock_xadd64 + 4) != code.end()) {
-                const symbol_guess::TypedLabel label{.label = "type?: atomic_fetch_add (lock xadd)",
-                                                     .kind = GuessKind::Type,
-                                                     .confidence = Confidence::Medium};
-                for (std::uint64_t rva : inputs) {
-                    out[rva] = makeGuess(root, label);
-                }
-                ++batch.code_pattern_labels;
-                continue;
-            }
-        }
-
-        // Binary search detection: shift-right-by-1 + not-reg range adjustment in compact functions.
-        if (code.size() <= 1500) {
-            int shift_right_1_count = 0;
-            int not_count = 0;
-            for (std::size_t i = 0; i + 1 < code.size(); ++i) {
-                if (code[i] == 0xD1) {
-                    const unsigned char modrm = code[i + 1];
-                    if ((modrm >= 0xE8 && modrm <= 0xEF) || (modrm >= 0xF8 && modrm <= 0xFF)) {
-                        ++shift_right_1_count;
-                    }
-                }
-                if (i + 2 < code.size() && code[i] >= 0x48 && code[i] <= 0x4F && code[i + 1] == 0xF7 &&
-                    code[i + 2] >= 0xD0 && code[i + 2] <= 0xD7) {
-                    ++not_count;
-                }
-            }
-            if (shift_right_1_count >= 2 && not_count >= 1) {
-                const symbol_guess::TypedLabel label{.label = "type?: binary_search (shift-right halving)",
-                                                     .kind = GuessKind::Type,
-                                                     .confidence = Confidence::Medium};
-                for (std::uint64_t rva : inputs) {
-                    out[rva] = makeGuess(root, label);
-                }
-                ++batch.code_pattern_labels;
-                continue;
-            }
         }
     }
 
@@ -1376,10 +1482,24 @@ GuessTable buildTable()
         return table;
     }
     collectVtableLabels(img, table);
+    table.lambda_bodies =
+        symbol_guess::linux::collectLambdaBodyIndex(img, table.ranges, table.labels, &table.stats.decoded_instructions);
     table.stats.approximate_bytes =
         table.ranges.capacity() * sizeof(FunctionRange) +
         table.labels.size() * (sizeof(decltype(table.labels)::value_type) + sizeof(void *) * 2);
     for (const auto &[root, label] : table.labels) {
+        (void)root;
+        table.stats.approximate_bytes += label.label.capacity();
+    }
+    table.stats.approximate_bytes +=
+        table.lambda_bodies.wrappers.capacity() * sizeof(symbol_guess::linux::LambdaWrapper) +
+        table.lambda_bodies.labels.size() *
+            (sizeof(decltype(table.lambda_bodies.labels)::value_type) + sizeof(void *) * 2) +
+        table.lambda_bodies.labels.bucket_count() * sizeof(void *);
+    for (const auto &wrapper : table.lambda_bodies.wrappers) {
+        table.stats.approximate_bytes += wrapper.owner.capacity() + wrapper.targets.capacity() * sizeof(std::uint64_t);
+    }
+    for (const auto &[root, label] : table.lambda_bodies.labels) {
         (void)root;
         table.stats.approximate_bytes += label.label.capacity();
     }

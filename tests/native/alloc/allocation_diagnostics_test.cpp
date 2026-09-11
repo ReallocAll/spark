@@ -127,7 +127,7 @@ struct DiagnosticsFixture {
     void recordHelperFailure() noexcept
     {
         try {
-            std::lock_guard lock(helper_mutex);
+            std::scoped_lock lock(helper_mutex);
             if (helper_exception == nullptr) {
                 helper_exception = std::current_exception();
             }
@@ -140,7 +140,7 @@ struct DiagnosticsFixture {
     bool helperFailed() noexcept
     {
         try {
-            std::lock_guard lock(helper_mutex);
+            std::scoped_lock lock(helper_mutex);
             return helper_exception != nullptr;
         }
         catch (...) {
@@ -1520,7 +1520,7 @@ bool verifyMainImageRange()
 {
 #if defined(_WIN32) && defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
     using Access = spark::test::AllocationDiagnosticsTestAccess;
-    const auto limit = (std::numeric_limits<std::uintptr_t>::max)();
+    const auto limit = std::numeric_limits<std::uintptr_t>::max();
     if (!Access::mainImageRangeContains(100, 10, 100) || !Access::mainImageRangeContains(100, 10, 109) ||
         Access::mainImageRangeContains(100, 10, 99) || Access::mainImageRangeContains(100, 10, 110) ||
         Access::mainImageRangeContains(0, 10, 0) || Access::mainImageRangeContains(100, 0, 100) ||
@@ -1634,7 +1634,7 @@ bool verifyFileTimeConversion()
     std::uint64_t value = 0;
     if (!spark::test::AllocationDiagnosticsTestAccess::fileTimeToNanoseconds(0, 10, value) || value != 1000 ||
         spark::test::AllocationDiagnosticsTestAccess::fileTimeToNanoseconds(
-            (std::numeric_limits<std::uint32_t>::max)(), (std::numeric_limits<std::uint32_t>::max)(), value)) {
+            std::numeric_limits<std::uint32_t>::max(), std::numeric_limits<std::uint32_t>::max(), value)) {
         return report("FILETIME conversion oracle failed");
     }
 #endif

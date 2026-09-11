@@ -41,15 +41,18 @@ jobs:
       - name: Validate release
         id: release_meta
         shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
         run: |
           if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
             VERSION="${GITHUB_REF_NAME#v}"
             TAG_TRIGGER=true
             DRY_RUN=false
           else
-            VERSION="${{ inputs.version }}"
+            VERSION="$INPUT_VERSION"
             TAG_TRIGGER=false
-            DRY_RUN="${{ inputs.dry_run }}"
+            DRY_RUN="$INPUT_DRY_RUN"
           fi
           if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "::error::Invalid version format: $VERSION (expected X.Y.Z)"
@@ -98,7 +101,7 @@ jobs:
         shell: bash
         run: |
           echo "=== Dry Run ==="
-          echo "Ref: ${{ github.ref }}"
+          echo "Ref: $GITHUB_REF"
           echo "Version: $VERSION"
           echo "Tag: v$VERSION"
           echo "Date: $DATE"
@@ -225,8 +228,39 @@ jobs:
       - name: Install dependencies
         run: conan install . --build=missing
 
+      - name: Locate Python test runtime
+        shell: python {0}
+        run: |
+          import ctypes
+          import os
+          from pathlib import Path
+          import sys
+          import sysconfig
+
+          if sys.version_info < (3, 12):
+              raise SystemExit("Python >= 3.12 is required for native runtime tests")
+          if sys.platform == "win32":
+              runtime = Path(sys.base_prefix) / f"python{sys.version_info.major}{sys.version_info.minor}.dll"
+          else:
+              libdir = sysconfig.get_config_var("LIBDIR")
+              library = sysconfig.get_config_var("LDLIBRARY")
+              if not libdir or not library or ".so" not in library:
+                  raise SystemExit("Selected Python has no configured shared runtime")
+              runtime = Path(libdir) / library
+          if not runtime.is_file():
+              raise SystemExit(f"Selected Python shared runtime is missing: {runtime}")
+          runtime = runtime.resolve()
+          library = ctypes.CDLL(str(runtime))
+          library.Py_GetVersion.restype = ctypes.c_char_p
+          version = library.Py_GetVersion().decode().split()[0]
+          if version != sys.version.split()[0]:
+              raise SystemExit(f"Python runtime version mismatch: {version} != {sys.version.split()[0]}")
+          print(f"Python test runtime: {runtime} ({version})")
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as output:
+              output.write(f"SPARK_TEST_LIBPYTHON={runtime}\n")
+
       - name: Configure
-        run: cmake --preset conan-relwithdebinfo
+        run: cmake --preset conan-relwithdebinfo "-DSPARK_TEST_LIBPYTHON:FILEPATH=$env:SPARK_TEST_LIBPYTHON"
 
       - name: Build
         run: cmake --build --preset conan-relwithdebinfo
@@ -300,8 +334,39 @@ jobs:
       - name: Install dependencies
         run: conan install . --build=missing
 
+      - name: Locate Python test runtime
+        shell: python {0}
+        run: |
+          import ctypes
+          import os
+          from pathlib import Path
+          import sys
+          import sysconfig
+
+          if sys.version_info < (3, 12):
+              raise SystemExit("Python >= 3.12 is required for native runtime tests")
+          if sys.platform == "win32":
+              runtime = Path(sys.base_prefix) / f"python{sys.version_info.major}{sys.version_info.minor}.dll"
+          else:
+              libdir = sysconfig.get_config_var("LIBDIR")
+              library = sysconfig.get_config_var("LDLIBRARY")
+              if not libdir or not library or ".so" not in library:
+                  raise SystemExit("Selected Python has no configured shared runtime")
+              runtime = Path(libdir) / library
+          if not runtime.is_file():
+              raise SystemExit(f"Selected Python shared runtime is missing: {runtime}")
+          runtime = runtime.resolve()
+          library = ctypes.CDLL(str(runtime))
+          library.Py_GetVersion.restype = ctypes.c_char_p
+          version = library.Py_GetVersion().decode().split()[0]
+          if version != sys.version.split()[0]:
+              raise SystemExit(f"Python runtime version mismatch: {version} != {sys.version.split()[0]}")
+          print(f"Python test runtime: {runtime} ({version})")
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as output:
+              output.write(f"SPARK_TEST_LIBPYTHON={runtime}\n")
+
       - name: Configure
-        run: cmake --preset conan-relwithdebinfo
+        run: cmake --preset conan-relwithdebinfo "-DSPARK_TEST_LIBPYTHON:FILEPATH=$SPARK_TEST_LIBPYTHON" "-DENDSTONE_SPARK_GATEWAY_SAMPLER_TESTS=ON"
 
       - name: Build
         run: cmake --build --preset conan-relwithdebinfo
@@ -309,11 +374,14 @@ jobs:
       - name: Run tests
         run: ctest --test-dir build/RelWithDebInfo --output-on-failure
 
+      - name: Package Linux runtime
+        run: cmake --build --preset conan-relwithdebinfo --target spark_linux_archive
+
       - name: Upload release asset
         uses: actions/upload-artifact@v7
         with:
           name: release-linux
-          path: build/RelWithDebInfo/endstone_spark.so
+          path: build/RelWithDebInfo/endstone_spark-linux-x86_64.tar.gz
           if-no-files-found: error
 
   publish:
@@ -348,6 +416,9 @@ jobs:
           name: release-linux
           path: release-linux
 
+      - name: Verify Linux runtime archive
+        run: python tests/native/alloc/verify_linux_gateway.py archive release-linux/endstone_spark-linux-x86_64.tar.gz
+
       - name: Verify Windows hashes before publishing
         shell: pwsh
         run: |
@@ -370,7 +441,7 @@ jobs:
           cp release-windows/SHA256SUMS release-windows/SHA256SUMS-windows
           cmp -- release-windows/SHA256SUMS release-windows/SHA256SUMS-windows
           test -f release-windows/SHA256SUMS-windows
-          test -f release-linux/endstone_spark.so
+          test -f release-linux/endstone_spark-linux-x86_64.tar.gz
           gh release create "v${{ needs.release.outputs.version }}" \
             --repo "${{ github.repository }}" \
             --title "v${{ needs.release.outputs.version }}" \
@@ -378,4 +449,4 @@ jobs:
             release-windows/endstone_spark.dll \
             release-windows/endstone_spark.pdb \
             release-windows/SHA256SUMS-windows \
-            release-linux/endstone_spark.so
+            release-linux/endstone_spark-linux-x86_64.tar.gz

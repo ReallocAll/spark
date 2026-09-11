@@ -27,6 +27,12 @@ public:
     virtual bool hasClient() const = 0;
     virtual void requestStop() noexcept = 0;
     virtual bool closeWithin(std::chrono::milliseconds timeout) noexcept = 0;
+    virtual bool closeUntil(std::chrono::steady_clock::time_point deadline) noexcept
+    {
+        const auto now = std::chrono::steady_clock::now();
+        return closeWithin(now < deadline ? std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now)
+                                          : std::chrono::milliseconds::zero());
+    }
     virtual void close() = 0;
     virtual SocketChannelInfo channelInfo() const = 0;
     virtual bool sendStatistics(const std::string &platform, const std::string &system, const std::string &metrics) = 0;

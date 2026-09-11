@@ -657,175 +657,140 @@ enum class EpilogueResult {
     Ambiguous,
 };
 
-[[nodiscard]] inline bool readInstructionByte(WindowsMetadataReader reader, void *reader_context,
-                                              std::uintptr_t address, std::uintptr_t function_end,
-                                              std::uint8_t &value) noexcept
-{
-    return address < function_end && readMetadata(reader, reader_context, address, &value, sizeof(value));
-}
-
-[[nodiscard]] inline bool readInstructionBytes(WindowsMetadataReader reader, void *reader_context,
-                                               std::uintptr_t address, std::uintptr_t function_end, std::uint8_t *bytes,
-                                               std::size_t count) noexcept
-{
-    if (count == 0 || address > function_end || count > function_end - address) {
-        return false;
-    }
-    return readMetadata(reader, reader_context, address, bytes, count);
-}
-
-[[nodiscard]] inline EpilogueResult unwindEpilogue(const WindowsRuntimeFunction &function, CONTEXT &context,
-                                                   const WindowsStackSnapshot &snapshot, WindowsMetadataReader reader,
-                                                   void *reader_context) noexcept
+[[nodiscard]] inline EpilogueResult unwindEpilogue(const WindowsRuntimeFunction &function, const ParsedUnwindInfo &info,
+                                                   CONTEXT &context, const WindowsStackSnapshot &snapshot,
+                                                   WindowsMetadataReader reader, void *reader_context) noexcept
 {
     if (reader == nullptr || function.begin >= function.end || context.Rip < function.begin ||
-        context.Rip >= function.end || function.end - context.Rip > kWindowsStackEpilogueByteLimit) {
+        context.Rip >= function.end) {
         return EpilogueResult::NotEpilogue;
     }
 
     CONTEXT next = context;
     std::uintptr_t instruction = static_cast<std::uintptr_t>(next.Rip);
+    const auto available = function.end - instruction;
+    const auto budget = available < kWindowsStackEpilogueByteLimit ? available : kWindowsStackEpilogueByteLimit;
+    const auto scan_end = instruction + budget;
     bool recognized = false;
-    for (std::size_t consumed = 0; consumed < kWindowsStackEpilogueByteLimit && instruction < function.end;) {
+    while (instruction < scan_end) {
+        const auto read = [&](std::size_t offset, void *destination, std::size_t count) {
+            const auto remaining = scan_end - instruction;
+            return offset <= remaining && count <= remaining - offset &&
+                   readMetadata(reader, reader_context, instruction + offset, destination, count);
+        };
         std::uint8_t first = 0;
-        if (!readInstructionByte(reader, reader_context, instruction, function.end, first)) {
+        if (!read(0, &first, sizeof(first))) {
             return recognized ? EpilogueResult::Ambiguous : EpilogueResult::NotEpilogue;
         }
 
         if (first == 0xc3U || first == 0xc2U) {
             std::array<std::uint8_t, 2> immediate{};
-            if (first == 0xc2U && !readInstructionBytes(reader, reader_context, instruction + 1U, function.end,
-                                                        immediate.data(), immediate.size())) {
+            if (first == 0xc2U && !read(1, immediate.data(), immediate.size())) {
                 return EpilogueResult::Ambiguous;
             }
             DWORD64 return_address = 0;
             std::uintptr_t next_rsp = 0;
+            const auto adjustment = sizeof(DWORD64) + static_cast<std::uint64_t>(immediate[0]) +
+                                    (static_cast<std::uint64_t>(immediate[1]) << 8U);
             if (!readStackQword(snapshot, static_cast<std::uintptr_t>(next.Rsp), return_address) ||
-                !windowsAddAddress(static_cast<std::uintptr_t>(next.Rsp), sizeof(DWORD64), next_rsp)) {
-                return EpilogueResult::Ambiguous;
-            }
-            next.Rsp = static_cast<DWORD64>(next_rsp);
-            if (first == 0xc2U && !windowsAddAddress(static_cast<std::uintptr_t>(next.Rsp),
-                                                     static_cast<std::uint64_t>(immediate[0]) |
-                                                         (static_cast<std::uint64_t>(immediate[1]) << 8U),
-                                                     next_rsp)) {
+                !windowsAddAddress(static_cast<std::uintptr_t>(next.Rsp), adjustment, next_rsp) ||
+                return_address == 0 || !windowsCanonicalAddress(static_cast<std::uintptr_t>(return_address))) {
                 return EpilogueResult::Ambiguous;
             }
             next.Rsp = static_cast<DWORD64>(next_rsp);
             next.Rip = return_address;
-            if (next.Rip == 0 || !windowsCanonicalAddress(static_cast<std::uintptr_t>(next.Rip))) {
-                return EpilogueResult::Ambiguous;
-            }
             context = next;
             return EpilogueResult::Unwound;
         }
 
         std::size_t length = 0;
-        if ((first & 0xf8U) == 0x58U) {
-            const auto reg = static_cast<std::uint8_t>(first & 0x07U);
-            if (!validNonVolatileRegister(reg)) {
-                return EpilogueResult::Ambiguous;
-            }
-            DWORD64 value = 0;
-            std::uintptr_t next_rsp = 0;
-            if (!readStackQword(snapshot, static_cast<std::uintptr_t>(next.Rsp), value) ||
-                !windowsAddAddress(static_cast<std::uintptr_t>(next.Rsp), sizeof(DWORD64), next_rsp)) {
-                return EpilogueResult::Ambiguous;
-            }
-            next.Rsp = static_cast<DWORD64>(next_rsp);
-            *integerRegister(next, reg) = value;
-            length = 1;
-            recognized = true;
-        }
-        else if (first == 0x41U) {
-            std::uint8_t opcode = 0;
-            if (!readInstructionByte(reader, reader_context, instruction + 1U, function.end, opcode) ||
-                (opcode & 0xf8U) != 0x58U) {
-                return recognized ? EpilogueResult::Ambiguous : EpilogueResult::NotEpilogue;
-            }
-            const auto reg = static_cast<std::uint8_t>(8U + (opcode & 0x07U));
-            if (!validNonVolatileRegister(reg)) {
-                return EpilogueResult::Ambiguous;
-            }
-            DWORD64 value = 0;
-            std::uintptr_t next_rsp = 0;
-            if (!readStackQword(snapshot, static_cast<std::uintptr_t>(next.Rsp), value) ||
-                !windowsAddAddress(static_cast<std::uintptr_t>(next.Rsp), sizeof(DWORD64), next_rsp)) {
-                return EpilogueResult::Ambiguous;
-            }
-            next.Rsp = static_cast<DWORD64>(next_rsp);
-            *integerRegister(next, reg) = value;
-            length = 2;
-            recognized = true;
-        }
-        else if (first == 0x48U || first == 0x49U) {
-            std::array<std::uint8_t, 3> prefix{};
-            if (!readInstructionBytes(reader, reader_context, instruction, function.end, prefix.data(),
-                                      prefix.size())) {
-                return recognized ? EpilogueResult::Ambiguous : EpilogueResult::NotEpilogue;
-            }
-            if (first == 0x48U && prefix[1] == 0x83U && prefix[2] == 0xc4U) {
-                std::uint8_t amount_byte = 0;
-                if (!readInstructionByte(reader, reader_context, instruction + 3U, function.end, amount_byte)) {
+        if ((first & 0xf8U) == 0x58U || first == 0x41U) {
+            std::uint8_t opcode = first;
+            if (first == 0x41U) {
+                if (!read(1, &opcode, sizeof(opcode))) {
                     return EpilogueResult::Ambiguous;
                 }
-                std::uintptr_t next_rsp = 0;
-                if (!windowsAddAddress(static_cast<std::uintptr_t>(next.Rsp), amount_byte, next_rsp)) {
-                    return EpilogueResult::Ambiguous;
-                }
-                next.Rsp = static_cast<DWORD64>(next_rsp);
-                length = 4;
-                recognized = true;
-            }
-            else if (first == 0x48U && prefix[1] == 0x81U && prefix[2] == 0xc4U) {
-                std::array<std::uint8_t, 4> amount_bytes{};
-                if (!readInstructionBytes(reader, reader_context, instruction + 3U, function.end, amount_bytes.data(),
-                                          amount_bytes.size())) {
-                    return EpilogueResult::Ambiguous;
-                }
-                const auto amount = static_cast<std::uint64_t>(amount_bytes[0]) |
-                                    (static_cast<std::uint64_t>(amount_bytes[1]) << 8U) |
-                                    (static_cast<std::uint64_t>(amount_bytes[2]) << 16U) |
-                                    (static_cast<std::uint64_t>(amount_bytes[3]) << 24U);
-                std::uintptr_t next_rsp = 0;
-                if (!windowsAddAddress(static_cast<std::uintptr_t>(next.Rsp), amount, next_rsp)) {
-                    return EpilogueResult::Ambiguous;
-                }
-                next.Rsp = static_cast<DWORD64>(next_rsp);
-                length = 7;
-                recognized = true;
-            }
-            else if (prefix[1] == 0x8dU) {
-                const auto modrm = prefix[2];
-                const auto mode = static_cast<std::uint8_t>(modrm >> 6U);
-                const auto destination = static_cast<std::uint8_t>((modrm >> 3U) & 0x07U);
-                const auto base = static_cast<std::uint8_t>((modrm & 0x07U) | (first == 0x49U ? 8U : 0U));
-                if (destination != 4 || base == 4 || !validNonVolatileRegister(base) || (mode != 1 && mode != 2)) {
+                if ((opcode & 0xf8U) != 0x58U) {
                     return recognized ? EpilogueResult::Ambiguous : EpilogueResult::NotEpilogue;
                 }
-                std::int64_t displacement = 0;
-                if (mode == 1) {
-                    std::uint8_t displacement_byte = 0;
-                    if (!readInstructionByte(reader, reader_context, instruction + 3U, function.end,
-                                             displacement_byte)) {
-                        return EpilogueResult::Ambiguous;
-                    }
-                    displacement = static_cast<std::int8_t>(displacement_byte);
-                    length = 4;
+            }
+            const auto reg = static_cast<std::uint8_t>((opcode & 0x07U) + (first == 0x41U ? 8U : 0U));
+            if (!validNonVolatileRegister(reg)) {
+                return EpilogueResult::Ambiguous;
+            }
+            DWORD64 value = 0;
+            std::uintptr_t next_rsp = 0;
+            if (!readStackQword(snapshot, static_cast<std::uintptr_t>(next.Rsp), value) ||
+                !windowsAddAddress(static_cast<std::uintptr_t>(next.Rsp), sizeof(DWORD64), next_rsp)) {
+                return EpilogueResult::Ambiguous;
+            }
+            next.Rsp = static_cast<DWORD64>(next_rsp);
+            *integerRegister(next, reg) = value;
+            length = first == 0x41U ? 2U : 1U;
+        }
+        else if ((first & 0xf8U) == 0x48U) {
+            std::uint8_t opcode = 0;
+            if (!read(1, &opcode, sizeof(opcode))) {
+                return EpilogueResult::Ambiguous;
+            }
+            if (opcode != 0x83U && opcode != 0x81U && opcode != 0x8dU) {
+                return recognized ? EpilogueResult::Ambiguous : EpilogueResult::NotEpilogue;
+            }
+            std::uint8_t modrm = 0;
+            if (!read(2, &modrm, sizeof(modrm))) {
+                return EpilogueResult::Ambiguous;
+            }
+            if (opcode == 0x83U || opcode == 0x81U) {
+                const auto destination = static_cast<std::uint8_t>((modrm & 0x07U) | ((first & 1U) != 0 ? 8U : 0U));
+                if (modrm != 0xc4U || destination != 4U) {
+                    return recognized ? EpilogueResult::Ambiguous : EpilogueResult::NotEpilogue;
                 }
-                else {
-                    std::array<std::uint8_t, 4> displacement_bytes{};
-                    if (!readInstructionBytes(reader, reader_context, instruction + 3U, function.end,
-                                              displacement_bytes.data(), displacement_bytes.size())) {
-                        return EpilogueResult::Ambiguous;
-                    }
-                    displacement =
-                        static_cast<std::int32_t>(static_cast<std::uint32_t>(displacement_bytes[0]) |
-                                                  (static_cast<std::uint32_t>(displacement_bytes[1]) << 8U) |
-                                                  (static_cast<std::uint32_t>(displacement_bytes[2]) << 16U) |
-                                                  (static_cast<std::uint32_t>(displacement_bytes[3]) << 24U));
-                    length = 7;
+                if (recognized || first != 0x48U) {
+                    return EpilogueResult::Ambiguous;
                 }
+                std::array<std::uint8_t, 4> immediate{};
+                const std::size_t immediate_size = opcode == 0x83U ? 1U : 4U;
+                if (!read(3, immediate.data(), immediate_size)) {
+                    return EpilogueResult::Ambiguous;
+                }
+                const std::int64_t amount =
+                    immediate_size == 1U ? static_cast<std::int8_t>(immediate[0])
+                                         : static_cast<std::int32_t>(static_cast<std::uint32_t>(immediate[0]) |
+                                                                     (static_cast<std::uint32_t>(immediate[1]) << 8U) |
+                                                                     (static_cast<std::uint32_t>(immediate[2]) << 16U) |
+                                                                     (static_cast<std::uint32_t>(immediate[3]) << 24U));
+                std::uintptr_t adjusted = 0;
+                if (amount < 0 || !windowsAddAddress(static_cast<std::uintptr_t>(next.Rsp),
+                                                     static_cast<std::uint64_t>(amount), adjusted)) {
+                    return EpilogueResult::Ambiguous;
+                }
+                next.Rsp = adjusted;
+                length = 3U + immediate_size;
+            }
+            else {
+                const auto mode = static_cast<std::uint8_t>(modrm >> 6U);
+                const auto destination =
+                    static_cast<std::uint8_t>(((modrm >> 3U) & 0x07U) | ((first & 4U) != 0 ? 8U : 0U));
+                const auto base = static_cast<std::uint8_t>((modrm & 0x07U) | ((first & 1U) != 0 ? 8U : 0U));
+                if (destination != 4U) {
+                    return recognized ? EpilogueResult::Ambiguous : EpilogueResult::NotEpilogue;
+                }
+                if (recognized || (first != 0x48U && first != 0x49U) || (modrm & 0x07U) == 4U ||
+                    !validNonVolatileRegister(base) || base != info.frame_register || (mode != 1 && mode != 2)) {
+                    return EpilogueResult::Ambiguous;
+                }
+                std::array<std::uint8_t, 4> displacement_bytes{};
+                const std::size_t displacement_size = mode == 1 ? 1U : 4U;
+                if (!read(3, displacement_bytes.data(), displacement_size)) {
+                    return EpilogueResult::Ambiguous;
+                }
+                const std::int64_t displacement =
+                    displacement_size == 1U
+                        ? static_cast<std::int8_t>(displacement_bytes[0])
+                        : static_cast<std::int32_t>(static_cast<std::uint32_t>(displacement_bytes[0]) |
+                                                    (static_cast<std::uint32_t>(displacement_bytes[1]) << 8U) |
+                                                    (static_cast<std::uint32_t>(displacement_bytes[2]) << 16U) |
+                                                    (static_cast<std::uint32_t>(displacement_bytes[3]) << 24U));
                 const auto *base_register = integerRegister(next, base);
                 std::uintptr_t adjusted = 0;
                 const bool address_ok =
@@ -837,20 +802,16 @@ enum class EpilogueResult {
                     return EpilogueResult::Ambiguous;
                 }
                 next.Rsp = adjusted;
-                recognized = true;
-            }
-            else {
-                return recognized ? EpilogueResult::Ambiguous : EpilogueResult::NotEpilogue;
+                length = 3U + displacement_size;
             }
         }
         else {
             return recognized ? EpilogueResult::Ambiguous : EpilogueResult::NotEpilogue;
         }
-        if (length == 0 || consumed > kWindowsStackEpilogueByteLimit - length ||
-            instruction > (std::numeric_limits<std::uintptr_t>::max)() - length) {
+        if (length == 0 || length > scan_end - instruction) {
             return EpilogueResult::Ambiguous;
         }
-        consumed += length;
+        recognized = true;
         instruction += length;
     }
     return recognized ? EpilogueResult::Ambiguous : EpilogueResult::NotEpilogue;
@@ -899,8 +860,12 @@ enum class EpilogueResult {
             static_cast<std::uintptr_t>(context.Rip) >= function.end) {
             return WindowsWalkStatus::Complete;
         }
+        windows_stack_snapshot_detail::ParsedUnwindInfo info{};
+        if (!windows_stack_snapshot_detail::parseUnwindInfo(function, info, reader, reader_context)) {
+            return WindowsWalkStatus::Complete;
+        }
         const auto epilogue =
-            windows_stack_snapshot_detail::unwindEpilogue(function, context, snapshot, reader, reader_context);
+            windows_stack_snapshot_detail::unwindEpilogue(function, info, context, snapshot, reader, reader_context);
         if (epilogue == windows_stack_snapshot_detail::EpilogueResult::Ambiguous) {
             context = previous;
             return WindowsWalkStatus::Complete;
@@ -917,10 +882,6 @@ enum class EpilogueResult {
             return WindowsWalkStatus::Frame;
         }
 
-        windows_stack_snapshot_detail::ParsedUnwindInfo info{};
-        if (!windows_stack_snapshot_detail::parseUnwindInfo(function, info, reader, reader_context)) {
-            return WindowsWalkStatus::Complete;
-        }
         windows_stack_snapshot_detail::ApplyState state{};
         CONTEXT next = context;
         if (!windows_stack_snapshot_detail::applyUnwindInfo(function, info, false, next, snapshot, reader,

@@ -91,7 +91,8 @@ struct ProfileMetadata {
         extra_platform_metadata["Python monitoring callback failures"] =
             std::to_string(diag.monitoring_callbacks_failed);
         extra_platform_metadata["Python frame representation"] =
-            pythonJsonString("class=[Python] module; method=qualname; descriptor=filename; line=co_firstlineno");
+            pythonJsonString("class=[Python] module; method=qualname; descriptor=safe filename [CodeId N]; "
+                             "line=co_firstlineno; CodeId=session-local");
 
         for (const PythonCodeMetadata &code : python.codes) {
             python_codes.emplace(code.code_id, code);

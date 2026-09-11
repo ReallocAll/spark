@@ -342,6 +342,7 @@ private:
         static constexpr std::string_view kSource = R"PY(
 import ctypes
 import importlib.metadata
+import ntpath
 import os
 import sys
 import sysconfig
@@ -370,6 +371,7 @@ _STATUS = ctypes.PYFUNCTYPE(None, ctypes.c_int, ctypes.c_char_p)(STATUS_ADDR)
 _FAILURE = ctypes.PYFUNCTYPE(None, ctypes.c_char_p)(FAILURE_ADDR)
 
 _cache = {}
+_admission_closed = False
 _module_files = {}
 _tool_id = None
 _plugin_root = os.path.normcase(os.path.abspath(os.path.join('plugins', '.local')))
@@ -417,8 +419,14 @@ def _module_for(filename):
         _refresh_modules()
         module = _module_files.get(normalized)
     if module is None:
-        stem = os.path.basename(normalized)
-        module = stem.rsplit('.', 1)[0] if stem else '<unknown>'
+        stem = ntpath.basename(filename)
+        if filename.startswith('<') and filename.endswith('>'):
+            known = filename in ('<string>', '<stdin>', '<unknown>')
+            frozen = filename.startswith('<frozen ') and all(
+                part.isascii() and part.isidentifier() for part in filename[8:-1].split('.')
+            )
+            stem = os.path.normcase(filename) if known or frozen else '<virtual>'
+        module = stem.rsplit('.', 1)[0] if stem not in ('', '.', '..') else '<unknown>'
     return normalized, module
 
 
@@ -438,14 +446,17 @@ def _category(filename, module):
 
 
 def _code_id(code):
+    global _admission_closed
     key = id(code)
     cached = _cache.get(key)
     if cached is not None and cached[0] is code:
         return cached[1]
+    if _admission_closed:
+        return 0
     filename, module = _module_for(code.co_filename)
     category, source = _category(filename, module)
     code_id = int(_REGISTER(
-        filename.encode('utf-8', 'replace'),
+        code.co_filename.encode('utf-8', 'replace'),
         module.encode('utf-8', 'replace'),
         code.co_name.encode('utf-8', 'replace'),
         code.co_qualname.encode('utf-8', 'replace'),
@@ -453,8 +464,10 @@ def _code_id(code):
         int(category),
         source.encode('utf-8', 'replace'),
     ))
-    # Hold the code object strongly for the session so its address cannot be
-    # recycled and a reloaded function can never inherit an older CodeId.
+    if code_id == 0:
+        _admission_closed = True
+        return 0
+    # Retain successful identities until stop for the native pointer cache.
     _cache[key] = (code, code_id)
     return code_id
 

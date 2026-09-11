@@ -7,6 +7,7 @@
 #include <string_view>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 
 #include "core/profiler/profile_mode.h"
 
@@ -17,7 +18,14 @@ namespace spark {
 // number, BY_NAME keeps each thread separate, AS_ONE merges everything.
 class ThreadGrouper {
 public:
+    using GroupKey = std::pair<std::string, std::uint64_t>;
+
     explicit ThreadGrouper(ThreadGrouperMode mode) : mode_(mode) {}
+
+    GroupKey groupKey(std::uint64_t tid, std::string_view name)
+    {
+        return {group(tid, name), mode_ == ThreadGrouperMode::ByName ? tid : 0};
+    }
 
     std::string group(std::uint64_t tid, std::string_view name)
     {

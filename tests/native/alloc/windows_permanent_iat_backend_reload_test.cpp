@@ -32,19 +32,19 @@ using SetHoldFn = void(__cdecl *)(int);
 using ResetEnteredFn = void(__cdecl *)();
 using EnteredFn = int(__cdecl *)();
 
-constexpr std::size_t kReloadCycles = 1000;
-constexpr std::size_t kWorkers = 4;
-constexpr std::uint64_t kTimeoutMs = 5000;
-constexpr wchar_t kClientName[] = L"windows_permanent_iat_backend_client.dll";
-constexpr wchar_t kPluginName[] = L"windows_permanent_iat_backend_plugin.dll";
+constexpr std::size_t KReloadCycles = 1000;
+constexpr std::size_t KWorkers = 4;
+constexpr std::uint64_t KTimeoutMs = 5000;
+constexpr wchar_t KClientName[] = L"windows_permanent_iat_backend_client.dll";
+constexpr wchar_t KPluginName[] = L"windows_permanent_iat_backend_plugin.dll";
 
-std::atomic<std::size_t> g_cycle{0};
-std::atomic<unsigned> g_phase{0};
+std::atomic<std::size_t> GCycle{0};
+std::atomic<unsigned> GPhase{0};
 
 [[noreturn]] void fail(const char *reason)
 {
     std::fprintf(stderr, "stage=permanent-iat-backend-reload failure=%s cycle=%zu phase=%u\n", reason,
-                 g_cycle.load(std::memory_order_relaxed), g_phase.load(std::memory_order_relaxed));
+                 GCycle.load(std::memory_order_relaxed), GPhase.load(std::memory_order_relaxed));
     std::fflush(stderr);
     std::abort();
 }
@@ -55,7 +55,7 @@ LONG WINAPI unhandledExceptionFilter(EXCEPTION_POINTERS *exception) noexcept
     const DWORD code = record != nullptr ? record->ExceptionCode : 0;
     const void *address = record != nullptr ? record->ExceptionAddress : nullptr;
     std::uintptr_t rip = 0;
-#if defined(_M_X64)
+#ifdef _M_X64
     if (exception != nullptr && exception->ContextRecord != nullptr) {
         rip = static_cast<std::uintptr_t>(exception->ContextRecord->Rip);
     }
@@ -63,7 +63,7 @@ LONG WINAPI unhandledExceptionFilter(EXCEPTION_POINTERS *exception) noexcept
     std::fprintf(stderr,
                  "stage=permanent-iat-backend-reload exception=0x%08lx address=%p rip=0x%llx cycle=%zu phase=%u\n",
                  static_cast<unsigned long>(code), address, static_cast<unsigned long long>(rip),
-                 g_cycle.load(std::memory_order_relaxed), g_phase.load(std::memory_order_relaxed));
+                 GCycle.load(std::memory_order_relaxed), GPhase.load(std::memory_order_relaxed));
     std::fflush(stderr);
     return EXCEPTION_CONTINUE_SEARCH;
 }
@@ -109,24 +109,24 @@ void clientRoundTrip(ClientMallocFn client_malloc, ClientFreeFn client_free, std
 int main()
 {
     ::SetUnhandledExceptionFilter(&unhandledExceptionFilter);
-    std::fprintf(stderr, "stage=permanent-iat-backend-reload begin cycles=%zu workers=%zu\n", kReloadCycles, kWorkers);
+    std::fprintf(stderr, "stage=permanent-iat-backend-reload begin cycles=%zu workers=%zu\n", KReloadCycles, KWorkers);
 
-    const std::wstring client_path = siblingPath(kClientName);
-    const std::wstring plugin_path = siblingPath(kPluginName);
+    const std::wstring client_path = siblingPath(KClientName);
+    const std::wstring plugin_path = siblingPath(KPluginName);
     HMODULE client = ::LoadLibraryW(client_path.c_str());
     if (client == nullptr) {
         std::fprintf(stderr, "stage=permanent-iat-backend-reload client-load-failure error=%lu\n",
                      static_cast<unsigned long>(::GetLastError()));
         return 2;
     }
-    ClientMallocFn client_malloc = requiredExport<ClientMallocFn>(client, "windowsPermanentIatClientMalloc");
-    ClientFreeFn client_free = requiredExport<ClientFreeFn>(client, "windowsPermanentIatClientFree");
+    auto client_malloc = requiredExport<ClientMallocFn>(client, "windowsPermanentIatClientMalloc");
+    auto client_free = requiredExport<ClientFreeFn>(client, "windowsPermanentIatClientFree");
     clientRoundTrip(client_malloc, client_free, 64);
 
     std::uint64_t total_worker_calls = 0;
-    for (std::size_t cycle = 0; cycle < kReloadCycles; ++cycle) {
-        g_cycle.store(cycle, std::memory_order_release);
-        g_phase.store(1, std::memory_order_release);
+    for (std::size_t cycle = 0; cycle < KReloadCycles; ++cycle) {
+        GCycle.store(cycle, std::memory_order_release);
+        GPhase.store(1, std::memory_order_release);
 
         HMODULE plugin = ::LoadLibraryW(plugin_path.c_str());
         if (plugin == nullptr) {
@@ -134,15 +134,15 @@ int main()
                          static_cast<unsigned long>(::GetLastError()));
             std::abort();
         }
-        InstallFn install = requiredExport<InstallFn>(plugin, "windowsPermanentIatBackendInstall");
-        UninstallFn uninstall = requiredExport<UninstallFn>(plugin, "windowsPermanentIatBackendUninstall");
-        ErrorFn backend_error = requiredExport<ErrorFn>(plugin, "windowsPermanentIatBackendError");
-        CallsFn calls = requiredExport<CallsFn>(plugin, "windowsPermanentIatBackendCalls");
-        SetHoldFn set_hold = requiredExport<SetHoldFn>(plugin, "windowsPermanentIatBackendSetHold");
-        ResetEnteredFn reset_entered = requiredExport<ResetEnteredFn>(plugin, "windowsPermanentIatBackendResetEntered");
-        EnteredFn entered = requiredExport<EnteredFn>(plugin, "windowsPermanentIatBackendEntered");
+        auto install = requiredExport<InstallFn>(plugin, "windowsPermanentIatBackendInstall");
+        auto uninstall = requiredExport<UninstallFn>(plugin, "windowsPermanentIatBackendUninstall");
+        auto backend_error = requiredExport<ErrorFn>(plugin, "windowsPermanentIatBackendError");
+        auto calls = requiredExport<CallsFn>(plugin, "windowsPermanentIatBackendCalls");
+        auto set_hold = requiredExport<SetHoldFn>(plugin, "windowsPermanentIatBackendSetHold");
+        auto reset_entered = requiredExport<ResetEnteredFn>(plugin, "windowsPermanentIatBackendResetEntered");
+        auto entered = requiredExport<EnteredFn>(plugin, "windowsPermanentIatBackendEntered");
 
-        g_phase.store(2, std::memory_order_release);
+        GPhase.store(2, std::memory_order_release);
         if (install() == 0) {
             std::fprintf(stderr, "stage=permanent-iat-backend-reload install-failure cycle=%zu error=%s\n", cycle,
                          backend_error());
@@ -157,8 +157,8 @@ int main()
         std::atomic<bool> stop{false};
         std::atomic<std::uint64_t> worker_calls{0};
         std::vector<std::thread> workers;
-        workers.reserve(kWorkers);
-        for (std::size_t worker = 0; worker < kWorkers; ++worker) {
+        workers.reserve(KWorkers);
+        for (std::size_t worker = 0; worker < KWorkers; ++worker) {
             workers.emplace_back([&, worker] {
                 std::size_t size = 32 + worker;
                 while (!stop.load(std::memory_order_acquire)) {
@@ -169,7 +169,7 @@ int main()
             });
         }
 
-        const std::uint64_t worker_deadline = ::GetTickCount64() + kTimeoutMs;
+        const std::uint64_t worker_deadline = ::GetTickCount64() + KTimeoutMs;
         while (worker_calls.load(std::memory_order_acquire) < 1000) {
             if (::GetTickCount64() >= worker_deadline) {
                 fail("worker-start-timeout");
@@ -192,10 +192,10 @@ int main()
             uninstall_finished.store(true, std::memory_order_release);
         });
 
-        g_phase.store(3, std::memory_order_release);
+        GPhase.store(3, std::memory_order_release);
         reset_entered();
         set_hold(1);
-        const std::uint64_t entered_deadline = ::GetTickCount64() + kTimeoutMs;
+        const std::uint64_t entered_deadline = ::GetTickCount64() + KTimeoutMs;
         while (entered() == 0) {
             if (::GetTickCount64() >= entered_deadline) {
                 fail("held-handler-entry-timeout");
@@ -216,11 +216,11 @@ int main()
             std::abort();
         }
 
-        g_phase.store(4, std::memory_order_release);
+        GPhase.store(4, std::memory_order_release);
         if (::FreeLibrary(plugin) == FALSE) {
             fail("plugin-FreeLibrary");
         }
-        if (::GetModuleHandleW(kPluginName) != nullptr) {
+        if (::GetModuleHandleW(KPluginName) != nullptr) {
             fail("plugin-remained-loaded");
         }
 
@@ -243,18 +243,18 @@ int main()
 
         if ((cycle + 1) % 25 == 0) {
             std::fprintf(stderr, "stage=permanent-iat-backend-reload progress=%zu/%zu total_worker_calls=%llu\n",
-                         cycle + 1, kReloadCycles, static_cast<unsigned long long>(total_worker_calls));
+                         cycle + 1, KReloadCycles, static_cast<unsigned long long>(total_worker_calls));
             std::fflush(stderr);
         }
     }
 
-    g_phase.store(5, std::memory_order_release);
+    GPhase.store(5, std::memory_order_release);
     clientRoundTrip(client_malloc, client_free, 128);
     if (::FreeLibrary(client) == FALSE) {
         fail("client-FreeLibrary");
     }
 
-    std::fprintf(stderr, "stage=permanent-iat-backend-reload pass cycles=%zu total_worker_calls=%llu\n", kReloadCycles,
+    std::fprintf(stderr, "stage=permanent-iat-backend-reload pass cycles=%zu total_worker_calls=%llu\n", KReloadCycles,
                  static_cast<unsigned long long>(total_worker_calls));
     return 0;
 }

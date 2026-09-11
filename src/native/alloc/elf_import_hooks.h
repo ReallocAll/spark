@@ -14,6 +14,7 @@ struct ElfImportHookSpec {
     const char *name = nullptr;
     void *replacement = nullptr;
     bool required = false;
+    void *original = nullptr;
 };
 
 struct ElfImportHookCapability {
@@ -29,6 +30,7 @@ struct ElfImportHookCapability {
 class ElfImportHooks {
 public:
     using ScanModuleGate = bool (*)(std::string_view) noexcept;
+    using BeforeWriteGate = void (*)(void **, bool) noexcept;
 
     ElfImportHooks() = default;
     ~ElfImportHooks() = default;
@@ -49,6 +51,7 @@ public:
     std::size_t failedModuleCount() const noexcept { return failed_modules_; }
     const std::vector<ElfImportHookCapability> &capabilities() const noexcept { return capabilities_; }
     void setScanModuleGateForTesting(ScanModuleGate gate) noexcept { scan_module_gate_ = gate; }
+    void setBeforeWriteGateForTesting(BeforeWriteGate gate) noexcept { before_write_gate_ = gate; }
 
 private:
     struct Target {
@@ -59,7 +62,6 @@ private:
         std::uintptr_t module_base = 0;
         std::string module_name;
         bool main_executable = false;
-        bool lazy_plt = false;
     };
 
     struct Page {
@@ -78,6 +80,7 @@ private:
     std::vector<Page> pages_;
     std::vector<ElfImportHookCapability> capabilities_;
     ScanModuleGate scan_module_gate_ = nullptr;
+    BeforeWriteGate before_write_gate_ = nullptr;
     bool prepared_ = false;
     bool installed_ = false;
     std::size_t hooked_modules_ = 0;

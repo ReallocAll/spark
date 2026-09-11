@@ -40,7 +40,7 @@
 // clang-format on
 
 #include "native/alloc/allocation_profile_aggregation.h"
-#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+#ifdef SPARK_ALLOCATION_LIFECYCLE_TESTING
 #include "native/alloc/allocation_diagnostics_test_access.h"
 #include "native/alloc/allocation_lifecycle_test_access.h"
 #endif
@@ -52,6 +52,12 @@
 #include "native/alloc/windows_dynamic_stack_capture.h"
 #include "native/sampler/thread_info.h"
 #include "profiling_window.h"
+
+#ifdef SPARK_ALLOCATION_LAST_ERROR_TESTING
+#define SPARK_ALLOCATION_LAST_ERROR_TEST_IMPLEMENTATION
+#include "native/alloc/windows_allocation_last_error_test.inc"
+#undef SPARK_ALLOCATION_LAST_ERROR_TEST_IMPLEMENTATION
+#endif
 
 namespace spark {
 namespace {
@@ -66,7 +72,7 @@ static_assert((KWindowsHotCounterShards & (KWindowsHotCounterShards - 1)) == 0);
 constexpr std::size_t KMaxSampledThreads = 256;
 constexpr std::size_t KMaxThreadStates = 2048;
 
-#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+#ifdef SPARK_ALLOCATION_LIFECYCLE_TESTING
 struct AllocationThreadCreationFailureForTesting {};
 
 void yieldLifecycleTest() noexcept
@@ -87,7 +93,7 @@ bool waitFixtureWorkerGate(test::AllocationFixtureWorkerGate &gate) noexcept
         yieldLifecycleTest();
     }
     try {
-        std::lock_guard lock(gate.seed_mutex);
+        std::scoped_lock lock(gate.seed_mutex);
     }
     catch (...) {
         gate.timed_out.store(true, std::memory_order_release);
@@ -106,7 +112,7 @@ struct MainImageRange {
 
     static MainImageRange validated(std::uintptr_t base, std::uintptr_t size) noexcept
     {
-        if (base == 0 || size == 0 || size > (std::numeric_limits<std::uintptr_t>::max)() - base) {
+        if (base == 0 || size == 0 || size > std::numeric_limits<std::uintptr_t>::max() - base) {
             return {};
         }
         return {.base = base, .size = size};
@@ -156,7 +162,7 @@ bool fileTimeToNanoseconds(std::uint32_t high, std::uint32_t low, std::uint64_t 
 {
     const std::uint64_t units = (static_cast<std::uint64_t>(high) << 32) | static_cast<std::uint64_t>(low);
     constexpr std::uint64_t k_nanoseconds_per_file_time_unit = 100;
-    if (units > (std::numeric_limits<std::uint64_t>::max)() / k_nanoseconds_per_file_time_unit) {
+    if (units > std::numeric_limits<std::uint64_t>::max() / k_nanoseconds_per_file_time_unit) {
         value = 0;
         return false;
     }
@@ -352,6 +358,9 @@ struct AllocationSampler::Impl {
 
         ~TrackingCallGuard()
         {
+#ifdef SPARK_ALLOCATION_LAST_ERROR_TESTING
+            ::SetLastError(0xBADC0DE);
+#endif
             if (active_) {
                 counters_->tracking_hook_calls.fetch_sub(1, std::memory_order_release);
             }
@@ -363,6 +372,34 @@ struct AllocationSampler::Impl {
         Impl &impl_;
         HotCounters *counters_ = nullptr;
         bool active_ = false;
+    };
+
+    class AllocatorLastErrorGuard {
+    public:
+        AllocatorLastErrorGuard() noexcept : error_(::GetLastError()) {}
+        ~AllocatorLastErrorGuard() { ::SetLastError(error_); }
+
+        template <typename Function, typename... Args>
+        auto call(Function function, Args... args) noexcept -> decltype(function(args...))
+        {
+            ::SetLastError(error_);
+            auto result = function(args...);
+            error_ = ::GetLastError();
+            return result;
+        }
+
+        void call(FreeFn function, void *pointer) noexcept
+        {
+            ::SetLastError(error_);
+            function(pointer);
+            error_ = ::GetLastError();
+        }
+
+        AllocatorLastErrorGuard(const AllocatorLastErrorGuard &) = delete;
+        AllocatorLastErrorGuard &operator=(const AllocatorLastErrorGuard &) = delete;
+
+    private:
+        DWORD error_;
     };
 
     class RecursionGuard {
@@ -386,6 +423,9 @@ struct AllocationSampler::Impl {
 
         ~RecursionGuard()
         {
+#ifdef SPARK_ALLOCATION_LAST_ERROR_TESTING
+            ::SetLastError(0xBADC0DE);
+#endif
             if (count_only_owner_) {
                 mCountOnlyInsideHook = false;
                 return;
@@ -546,7 +586,7 @@ struct AllocationSampler::Impl {
     std::array<ThreadSamplingState, KMaxThreadStates> thread_states{};
 
     std::thread aggregator_thread;
-#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+#ifdef SPARK_ALLOCATION_LIFECYCLE_TESTING
     test::StartFailureGate *start_failure_gate_for_testing = nullptr;
     test::AllocationEventProcessingGate *event_processing_gate_for_testing = nullptr;
     bool force_process_event_failure_for_testing = false;
@@ -730,7 +770,7 @@ struct AllocationSampler::Impl {
 
     ThreadSamplingState *currentThreadState() noexcept
     {
-#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+#ifdef SPARK_ALLOCATION_LIFECYCLE_TESTING
         if (fixture_no_hooks_for_testing && fixture_no_worker_for_testing && fixture_thread_state_active_for_testing) {
             if (static_cast<std::uint64_t>(::GetCurrentThreadId()) != fixture_thread_owner_for_testing) {
                 return nullptr;
@@ -968,18 +1008,19 @@ struct AllocationSampler::Impl {
 
     void handleFree(FreeFn function, void *pointer) noexcept
     {
+        AllocatorLastErrorGuard last_error;
         if (!shouldTrackCurrentThread()) {
-            function(pointer);
+            last_error.call(function, pointer);
             return;
         }
         TrackingCallGuard tracking_call(*this);
         RecursionGuard recursion(*this);
         if (!tracking_call || !recursion.owner()) {
-            function(pointer);
+            last_error.call(function, pointer);
             return;
         }
         LiveAllocation *allocation = detachAllocation(pointer);
-        function(pointer);
+        last_error.call(function, pointer);
         if (allocation != nullptr) {
             retireAllocation(allocation, monotonicMs());
         }
@@ -987,16 +1028,17 @@ struct AllocationSampler::Impl {
 
     BOOL handleHeapFree(HeapFreeFn function, HANDLE heap, DWORD flags, void *pointer) noexcept
     {
+        AllocatorLastErrorGuard last_error;
         if (!shouldTrackCurrentThread()) {
-            return function(heap, flags, pointer);
+            return last_error.call(function, heap, flags, pointer);
         }
         TrackingCallGuard tracking_call(*this);
         RecursionGuard recursion(*this);
         if (!tracking_call || !recursion.owner()) {
-            return function(heap, flags, pointer);
+            return last_error.call(function, heap, flags, pointer);
         }
         LiveAllocation *allocation = detachAllocation(pointer);
-        const BOOL result = function(heap, flags, pointer);
+        const BOOL result = last_error.call(function, heap, flags, pointer);
         if (result != FALSE) {
             if (allocation != nullptr) {
                 retireAllocation(allocation, monotonicMs());
@@ -1010,18 +1052,19 @@ struct AllocationSampler::Impl {
 
     void *handleMalloc(MallocFn function, std::size_t requested_size) noexcept
     {
+        AllocatorLastErrorGuard last_error;
         if (!shouldTrackCurrentThread()) {
-            return function(requested_size);
+            return last_error.call(function, requested_size);
         }
         TrackingCallGuard tracking_call(*this);
         if (!tracking_call) {
-            return function(requested_size);
+            return last_error.call(function, requested_size);
         }
         RecursionGuard recursion(*this);
         if (!recursion.owner()) {
-            return function(requested_size);
+            return last_error.call(function, requested_size);
         }
-        void *pointer = function(requested_size);
+        void *pointer = last_error.call(function, requested_size);
         if (pointer != nullptr) {
             recordAllocation(pointer, static_cast<std::uint64_t>(requested_size));
         }
@@ -1030,18 +1073,19 @@ struct AllocationSampler::Impl {
 
     void *handleCalloc(CallocFn function, std::size_t count, std::size_t requested_size) noexcept
     {
+        AllocatorLastErrorGuard last_error;
         if (!shouldTrackCurrentThread()) {
-            return function(count, requested_size);
+            return last_error.call(function, count, requested_size);
         }
         TrackingCallGuard tracking_call(*this);
         if (!tracking_call) {
-            return function(count, requested_size);
+            return last_error.call(function, count, requested_size);
         }
         RecursionGuard recursion(*this);
         if (!recursion.owner()) {
-            return function(count, requested_size);
+            return last_error.call(function, count, requested_size);
         }
-        void *pointer = function(count, requested_size);
+        void *pointer = last_error.call(function, count, requested_size);
         if (pointer != nullptr) {
             std::uint64_t bytes = 0;
             if (checkedMultiply(count, requested_size, bytes)) {
@@ -1053,19 +1097,20 @@ struct AllocationSampler::Impl {
 
     void *handleRealloc(ReallocFn function, void *pointer, std::size_t requested_size) noexcept
     {
+        AllocatorLastErrorGuard last_error;
         if (!shouldTrackCurrentThread()) {
-            return function(pointer, requested_size);
+            return last_error.call(function, pointer, requested_size);
         }
         TrackingCallGuard tracking_call(*this);
         if (!tracking_call) {
-            return function(pointer, requested_size);
+            return last_error.call(function, pointer, requested_size);
         }
         RecursionGuard recursion(*this);
         if (!recursion.owner()) {
-            return function(pointer, requested_size);
+            return last_error.call(function, pointer, requested_size);
         }
         LiveAllocation *previous = detachAllocation(pointer);
-        void *new_pointer = function(pointer, requested_size);
+        void *new_pointer = last_error.call(function, pointer, requested_size);
         const bool replaced = new_pointer != nullptr || (pointer != nullptr && requested_size == 0);
         if (replaced) {
             if (previous != nullptr) {
@@ -1084,21 +1129,22 @@ struct AllocationSampler::Impl {
 
     void *handleRecalloc(RecallocFn function, void *pointer, std::size_t count, std::size_t requested_size) noexcept
     {
+        AllocatorLastErrorGuard last_error;
         if (!shouldTrackCurrentThread()) {
-            return function(pointer, count, requested_size);
+            return last_error.call(function, pointer, count, requested_size);
         }
         TrackingCallGuard tracking_call(*this);
         if (!tracking_call) {
-            return function(pointer, count, requested_size);
+            return last_error.call(function, pointer, count, requested_size);
         }
         RecursionGuard recursion(*this);
         if (!recursion.owner()) {
-            return function(pointer, count, requested_size);
+            return last_error.call(function, pointer, count, requested_size);
         }
         std::uint64_t bytes = 0;
         const bool valid_size = checkedMultiply(count, requested_size, bytes);
         LiveAllocation *previous = detachAllocation(pointer);
-        void *new_pointer = function(pointer, count, requested_size);
+        void *new_pointer = last_error.call(function, pointer, count, requested_size);
         const bool replaced = new_pointer != nullptr || (pointer != nullptr && valid_size && bytes == 0);
         if (replaced) {
             if (previous != nullptr) {
@@ -1116,18 +1162,19 @@ struct AllocationSampler::Impl {
 
     void *handleAlignedMalloc(AlignedMallocFn function, std::size_t size, std::size_t alignment) noexcept
     {
+        AllocatorLastErrorGuard last_error;
         if (!shouldTrackCurrentThread()) {
-            return function(size, alignment);
+            return last_error.call(function, size, alignment);
         }
         TrackingCallGuard tracking_call(*this);
         if (!tracking_call) {
-            return function(size, alignment);
+            return last_error.call(function, size, alignment);
         }
         RecursionGuard recursion(*this);
         if (!recursion.owner()) {
-            return function(size, alignment);
+            return last_error.call(function, size, alignment);
         }
-        void *pointer = function(size, alignment);
+        void *pointer = last_error.call(function, size, alignment);
         if (pointer != nullptr) {
             recordAllocation(pointer, static_cast<std::uint64_t>(size));
         }
@@ -1137,19 +1184,20 @@ struct AllocationSampler::Impl {
     void *handleAlignedRealloc(AlignedReallocFn function, void *pointer, std::size_t size,
                                std::size_t alignment) noexcept
     {
+        AllocatorLastErrorGuard last_error;
         if (!shouldTrackCurrentThread()) {
-            return function(pointer, size, alignment);
+            return last_error.call(function, pointer, size, alignment);
         }
         TrackingCallGuard tracking_call(*this);
         if (!tracking_call) {
-            return function(pointer, size, alignment);
+            return last_error.call(function, pointer, size, alignment);
         }
         RecursionGuard recursion(*this);
         if (!recursion.owner()) {
-            return function(pointer, size, alignment);
+            return last_error.call(function, pointer, size, alignment);
         }
         LiveAllocation *previous = detachAllocation(pointer);
-        void *new_pointer = function(pointer, size, alignment);
+        void *new_pointer = last_error.call(function, pointer, size, alignment);
         const bool replaced = new_pointer != nullptr || (pointer != nullptr && size == 0);
         if (replaced) {
             if (previous != nullptr) {
@@ -1168,21 +1216,22 @@ struct AllocationSampler::Impl {
     void *handleAlignedRecalloc(AlignedRecallocFn function, void *pointer, std::size_t count, std::size_t size,
                                 std::size_t alignment) noexcept
     {
+        AllocatorLastErrorGuard last_error;
         if (!shouldTrackCurrentThread()) {
-            return function(pointer, count, size, alignment);
+            return last_error.call(function, pointer, count, size, alignment);
         }
         TrackingCallGuard tracking_call(*this);
         if (!tracking_call) {
-            return function(pointer, count, size, alignment);
+            return last_error.call(function, pointer, count, size, alignment);
         }
         RecursionGuard recursion(*this);
         if (!recursion.owner()) {
-            return function(pointer, count, size, alignment);
+            return last_error.call(function, pointer, count, size, alignment);
         }
         std::uint64_t bytes = 0;
         const bool valid_size = checkedMultiply(count, size, bytes);
         LiveAllocation *previous = detachAllocation(pointer);
-        void *new_pointer = function(pointer, count, size, alignment);
+        void *new_pointer = last_error.call(function, pointer, count, size, alignment);
         const bool replaced = new_pointer != nullptr || (pointer != nullptr && valid_size && bytes == 0);
         if (replaced) {
             if (previous != nullptr) {
@@ -1201,18 +1250,19 @@ struct AllocationSampler::Impl {
     void *handleAlignedOffsetMalloc(AlignedOffsetMallocFn function, std::size_t size, std::size_t alignment,
                                     std::size_t offset) noexcept
     {
+        AllocatorLastErrorGuard last_error;
         if (!shouldTrackCurrentThread()) {
-            return function(size, alignment, offset);
+            return last_error.call(function, size, alignment, offset);
         }
         TrackingCallGuard tracking_call(*this);
         if (!tracking_call) {
-            return function(size, alignment, offset);
+            return last_error.call(function, size, alignment, offset);
         }
         RecursionGuard recursion(*this);
         if (!recursion.owner()) {
-            return function(size, alignment, offset);
+            return last_error.call(function, size, alignment, offset);
         }
-        void *pointer = function(size, alignment, offset);
+        void *pointer = last_error.call(function, size, alignment, offset);
         if (pointer != nullptr) {
             recordAllocation(pointer, static_cast<std::uint64_t>(size));
         }
@@ -1222,19 +1272,20 @@ struct AllocationSampler::Impl {
     void *handleAlignedOffsetRealloc(AlignedOffsetReallocFn function, void *pointer, std::size_t size,
                                      std::size_t alignment, std::size_t offset) noexcept
     {
+        AllocatorLastErrorGuard last_error;
         if (!shouldTrackCurrentThread()) {
-            return function(pointer, size, alignment, offset);
+            return last_error.call(function, pointer, size, alignment, offset);
         }
         TrackingCallGuard tracking_call(*this);
         if (!tracking_call) {
-            return function(pointer, size, alignment, offset);
+            return last_error.call(function, pointer, size, alignment, offset);
         }
         RecursionGuard recursion(*this);
         if (!recursion.owner()) {
-            return function(pointer, size, alignment, offset);
+            return last_error.call(function, pointer, size, alignment, offset);
         }
         LiveAllocation *previous = detachAllocation(pointer);
-        void *new_pointer = function(pointer, size, alignment, offset);
+        void *new_pointer = last_error.call(function, pointer, size, alignment, offset);
         const bool replaced = new_pointer != nullptr || (pointer != nullptr && size == 0);
         if (replaced) {
             if (previous != nullptr) {
@@ -1253,21 +1304,22 @@ struct AllocationSampler::Impl {
     void *handleAlignedOffsetRecalloc(AlignedOffsetRecallocFn function, void *pointer, std::size_t count,
                                       std::size_t size, std::size_t alignment, std::size_t offset) noexcept
     {
+        AllocatorLastErrorGuard last_error;
         if (!shouldTrackCurrentThread()) {
-            return function(pointer, count, size, alignment, offset);
+            return last_error.call(function, pointer, count, size, alignment, offset);
         }
         TrackingCallGuard tracking_call(*this);
         if (!tracking_call) {
-            return function(pointer, count, size, alignment, offset);
+            return last_error.call(function, pointer, count, size, alignment, offset);
         }
         RecursionGuard recursion(*this);
         if (!recursion.owner()) {
-            return function(pointer, count, size, alignment, offset);
+            return last_error.call(function, pointer, count, size, alignment, offset);
         }
         std::uint64_t bytes = 0;
         const bool valid_size = checkedMultiply(count, size, bytes);
         LiveAllocation *previous = detachAllocation(pointer);
-        void *new_pointer = function(pointer, count, size, alignment, offset);
+        void *new_pointer = last_error.call(function, pointer, count, size, alignment, offset);
         const bool replaced = new_pointer != nullptr || (pointer != nullptr && valid_size && bytes == 0);
         if (replaced) {
             if (previous != nullptr) {
@@ -1285,18 +1337,19 @@ struct AllocationSampler::Impl {
 
     void *handleHeapAlloc(HeapAllocFn function, HANDLE heap, DWORD flags, SIZE_T requested_size) noexcept
     {
+        AllocatorLastErrorGuard last_error;
         if (!shouldTrackCurrentThread()) {
-            return function(heap, flags, requested_size);
+            return last_error.call(function, heap, flags, requested_size);
         }
         TrackingCallGuard tracking_call(*this);
         if (!tracking_call) {
-            return function(heap, flags, requested_size);
+            return last_error.call(function, heap, flags, requested_size);
         }
         RecursionGuard recursion(*this);
         if (!recursion.owner()) {
-            return function(heap, flags, requested_size);
+            return last_error.call(function, heap, flags, requested_size);
         }
-        void *pointer = function(heap, flags, requested_size);
+        void *pointer = last_error.call(function, heap, flags, requested_size);
         if (pointer != nullptr) {
             recordAllocation(pointer, static_cast<std::uint64_t>(requested_size));
         }
@@ -1306,19 +1359,20 @@ struct AllocationSampler::Impl {
     void *handleHeapReAlloc(HeapReAllocFn function, HANDLE heap, DWORD flags, void *pointer,
                             SIZE_T requested_size) noexcept
     {
+        AllocatorLastErrorGuard last_error;
         if (!shouldTrackCurrentThread()) {
-            return function(heap, flags, pointer, requested_size);
+            return last_error.call(function, heap, flags, pointer, requested_size);
         }
         TrackingCallGuard tracking_call(*this);
         if (!tracking_call) {
-            return function(heap, flags, pointer, requested_size);
+            return last_error.call(function, heap, flags, pointer, requested_size);
         }
         RecursionGuard recursion(*this);
         if (!recursion.owner()) {
-            return function(heap, flags, pointer, requested_size);
+            return last_error.call(function, heap, flags, pointer, requested_size);
         }
         LiveAllocation *previous = detachAllocation(pointer);
-        void *new_pointer = function(heap, flags, pointer, requested_size);
+        void *new_pointer = last_error.call(function, heap, flags, pointer, requested_size);
         if (new_pointer != nullptr) {
             if (previous != nullptr) {
                 retireAllocation(previous, monotonicMs());
@@ -1662,7 +1716,7 @@ struct AllocationSampler::Impl {
 
     bool configureHooks(std::string &error)
     {
-#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+#ifdef SPARK_ALLOCATION_LIFECYCLE_TESTING
         if (fixture_no_hooks_for_testing) {
             return true;
         }
@@ -1752,7 +1806,7 @@ struct AllocationSampler::Impl {
 
     bool installHooks(std::string &error)
     {
-#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+#ifdef SPARK_ALLOCATION_LIFECYCLE_TESTING
         if (fixture_no_hooks_for_testing) {
             return true;
         }
@@ -1883,7 +1937,7 @@ struct AllocationSampler::Impl {
 
     void discoverMainImage() noexcept
     {
-#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+#ifdef SPARK_ALLOCATION_LIFECYCLE_TESTING
         ++main_image_discoveries_for_testing;
         if (force_main_image_discovery_failure_for_testing) {
             return;
@@ -1906,7 +1960,7 @@ struct AllocationSampler::Impl {
         }
         else {
             MEMORY_BASIC_INFORMATION memory{};
-#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+#ifdef SPARK_ALLOCATION_LIFECYCLE_TESTING
             ++fallback_queries_for_testing;
 #endif
             // NOLINTNEXTLINE(performance-no-int-to-ptr)
@@ -2153,7 +2207,7 @@ struct AllocationSampler::Impl {
                 caller_final_drain_allocation_events.fetch_add(1, std::memory_order_relaxed);
             }
         }
-#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+#ifdef SPARK_ALLOCATION_LIFECYCLE_TESTING
         if (force_process_event_failure_for_testing) {
             throw std::runtime_error("injected allocation event processing failure");
         }
@@ -2185,16 +2239,16 @@ struct AllocationSampler::Impl {
         std::uint64_t visited = 0;
         bool walk_truncated = false;
         for (std::size_t i = 0; i < KLiveIndexCapacity; ++i) {
-#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+#ifdef SPARK_ALLOCATION_LIFECYCLE_TESTING
             if (force_retained_walk_budget_for_testing) {
                 retained_walk_visits_for_testing.store(visited, std::memory_order_release);
             }
 #endif
-#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+#ifdef SPARK_ALLOCATION_LIFECYCLE_TESTING
             const std::uint64_t forced_elapsed_ms = visited >= 2 ? KDrainBudgetMs : 0;
 #endif
             const std::uint64_t elapsed_ms =
-#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+#ifdef SPARK_ALLOCATION_LIFECYCLE_TESTING
                 force_retained_walk_budget_for_testing ? forced_elapsed_ms :
 #endif
                                                        monotonicMs() - stopped_ms;
@@ -2209,7 +2263,7 @@ struct AllocationSampler::Impl {
                 continue;
             }
             ++visited;
-#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+#ifdef SPARK_ALLOCATION_LIFECYCLE_TESTING
             if (force_retained_walk_budget_for_testing) {
                 retained_walk_visits_for_testing.store(visited, std::memory_order_release);
             }
@@ -2256,7 +2310,7 @@ struct AllocationSampler::Impl {
             return false;
         }
         const std::uint64_t elapsed_ms =
-#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+#ifdef SPARK_ALLOCATION_LIFECYCLE_TESTING
             force_drain_deadline_for_testing ? KDrainBudgetMs :
 #endif
                                              monotonicMs() - started_ms;
@@ -2328,7 +2382,7 @@ struct AllocationSampler::Impl {
         }
 
         PSLIST_ENTRY list = ::InterlockedFlushSList(&ready_events);
-#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+#ifdef SPARK_ALLOCATION_LIFECYCLE_TESTING
         if (list != nullptr && event_processing_gate_for_testing != nullptr) {
             event_processing_gate_for_testing->entered.store(true, std::memory_order_release);
             const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
@@ -2384,13 +2438,13 @@ struct AllocationSampler::Impl {
         }
     }
 
-#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+#ifdef SPARK_ALLOCATION_LIFECYCLE_TESTING
     bool readThreadCpuTimeNs(HANDLE thread, std::uint64_t &value) const noexcept
 #else
     static bool readThreadCpuTimeNs(HANDLE thread, std::uint64_t &value) noexcept
 #endif
     {
-#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+#ifdef SPARK_ALLOCATION_LIFECYCLE_TESTING
         if (force_aggregator_cpu_read_failure_for_testing) {
             value = 0;
             return false;
@@ -2408,7 +2462,7 @@ struct AllocationSampler::Impl {
         std::uint64_t user_ns = 0;
         if (!fileTimeToNanoseconds(kernel.dwHighDateTime, kernel.dwLowDateTime, kernel_ns) ||
             !fileTimeToNanoseconds(user.dwHighDateTime, user.dwLowDateTime, user_ns) ||
-            kernel_ns > (std::numeric_limits<std::uint64_t>::max)() - user_ns) {
+            kernel_ns > std::numeric_limits<std::uint64_t>::max() - user_ns) {
             value = 0;
             return false;
         }
@@ -2424,7 +2478,7 @@ struct AllocationSampler::Impl {
             aggregator_cpu_read_failure.store(true, std::memory_order_release);
             return;
         }
-#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+#ifdef SPARK_ALLOCATION_LIFECYCLE_TESTING
         if (force_aggregator_cpu_zero_for_testing) {
             finished_cpu_ns = started_cpu_ns;
         }
@@ -2438,7 +2492,7 @@ struct AllocationSampler::Impl {
         aggregator_cpu_valid.store(true, std::memory_order_release);
     }
 
-#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+#ifdef SPARK_ALLOCATION_LIFECYCLE_TESTING
     bool runFixtureCpuWork() const noexcept
     {
         test::AllocationFixtureCpuWorkControl *control = fixture_cpu_work_for_testing;
@@ -2513,7 +2567,7 @@ struct AllocationSampler::Impl {
             bool started_ok;
             ~CpuMeasurementScope() { impl.finishAggregatorCpuMeasurement(started_ns, started_ok); }
         } cpu_measurement{.impl = *this, .started_ns = aggregator_cpu_started_ns, .started_ok = aggregator_cpu_started};
-#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+#ifdef SPARK_ALLOCATION_LIFECYCLE_TESTING
         if (fixture_worker_gate_for_testing != nullptr) {
             fixture_worker_gate_for_testing->entered.store(true, std::memory_order_release);
             if (!waitFixtureWorkerGate(*fixture_worker_gate_for_testing)) {
@@ -2522,7 +2576,7 @@ struct AllocationSampler::Impl {
         }
 #endif
         TrackingSuppressionGuard suppress(*this);
-#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+#ifdef SPARK_ALLOCATION_LIFECYCLE_TESTING
         if (fixture_cpu_work_for_testing != nullptr) {
             if (!runFixtureCpuWork()) {
                 if (!fixture_cpu_work_for_testing->request_cancel.load(std::memory_order_acquire)) {
@@ -2542,7 +2596,7 @@ struct AllocationSampler::Impl {
         while (aggregator_running.load(std::memory_order_acquire)) {
             const std::uint64_t now_ms = monotonicMs();
             if (!drain_abort.load(std::memory_order_acquire) && now_ms >= next_hook_refresh_ms) {
-#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+#ifdef SPARK_ALLOCATION_LIFECYCLE_TESTING
                 if (!fixture_no_hooks_for_testing) {
 #endif
                     std::string refresh_error;
@@ -2551,7 +2605,7 @@ struct AllocationSampler::Impl {
                             std::string("allocation hook refresh failed: ") +
                             (refresh_error.empty() ? "unknown hook refresh failure" : refresh_error));
                     }
-#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+#ifdef SPARK_ALLOCATION_LIFECYCLE_TESTING
                 }
 #endif
                 next_hook_refresh_ms = now_ms + KHookRefreshIntervalMs;
@@ -2683,7 +2737,7 @@ struct AllocationSampler::Impl {
         }
         module_cache.clear();
         main_image_range = {};
-#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+#ifdef SPARK_ALLOCATION_LIFECYCLE_TESTING
         main_image_discoveries_for_testing = 0;
         fallback_queries_for_testing = 0;
 #endif
@@ -2861,7 +2915,7 @@ struct AllocationSampler::Impl {
         running.store(true, std::memory_order_release);
         accounting_state.store(AllocationAccountingState::Active, std::memory_order_release);
         tracking.store(true, std::memory_order_release);
-#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+#ifdef SPARK_ALLOCATION_LIFECYCLE_TESTING
         if (fixture_no_worker_for_testing) {
             aggregator_running.store(false, std::memory_order_release);
             start_attempt.dismiss();
@@ -2870,7 +2924,7 @@ struct AllocationSampler::Impl {
 #endif
         try {
             TrackingSuppressionGuard suppress(*this);
-#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+#ifdef SPARK_ALLOCATION_LIFECYCLE_TESTING
             if (start_failure_gate_for_testing != nullptr) {
                 start_failure_gate_for_testing->before_thread_creation.store(true, std::memory_order_release);
                 while (!start_failure_gate_for_testing->fail_now.load(std::memory_order_acquire)) {
@@ -3050,7 +3104,7 @@ struct AllocationSampler::Impl {
 
 std::atomic<AllocationSampler::Impl *> AllocationSampler::Impl::mActiveInstance{nullptr};
 
-#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+#ifdef SPARK_ALLOCATION_LIFECYCLE_TESTING
 namespace test {
 
 bool AllocationDiagnosticsTestAccess::configureFixture(AllocationSampler &sampler, bool no_hooks, bool no_worker,
@@ -3718,7 +3772,7 @@ bool AllocationDiagnosticsTestAccess::resolveMissingFrame(AllocationSampler &sam
     }
     try {
         std::string path;
-        (void)sampler.impl_->frameKeyForAddress((std::numeric_limits<std::uint64_t>::max)(), path);
+        (void)sampler.impl_->frameKeyForAddress(std::numeric_limits<std::uint64_t>::max(), path);
         return true;
     }
     catch (...) {
@@ -3830,7 +3884,12 @@ bool AllocationDiagnosticsTestAccess::exerciseInsertionProbeExhaustion(Allocatio
 #endif
 std::array<AllocationSampler::Impl::HookCounter, 64> AllocationSampler::Impl::mActiveHookCalls{};
 
-AllocationSampler::AllocationSampler() : impl_(std::make_unique<Impl>()) {}
+AllocationSampler::AllocationSampler() : impl_(std::make_unique<Impl>())
+{
+#ifdef SPARK_ALLOCATION_LAST_ERROR_TESTING
+    test::runWindowsAllocationLastErrorTests(*impl_);
+#endif
+}
 
 AllocationSampler::~AllocationSampler()
 {

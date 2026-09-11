@@ -30,6 +30,7 @@ class PythonRuntime {
 public:
     bool open(const char *path)
     {
+        // NOLINTNEXTLINE(clang-analyzer-optin.taint.GenericTaint) -- Trusted test runtime.
         handle_ = ::dlopen(path, RTLD_NOW | RTLD_GLOBAL);
         if (handle_ == nullptr) {
             std::cerr << "dlopen failed: " << ::dlerror() << '\n';
@@ -43,7 +44,7 @@ public:
 
     void initialize() const { initialize_(); }
     int run(const char *script) const { return run_(script, nullptr); }
-    int finalize() const { return finalize_(); }
+    [[nodiscard]] int finalize() const { return finalize_(); }
 
     ~PythonRuntime()
     {
@@ -66,8 +67,18 @@ private:
 
 }  // namespace
 
-int main()
+int main(int argc, char **argv)
 {
+    std::string_view expected_mode;
+    for (int index = 1; index < argc; ++index) {
+        const std::string_view argument = argv[index];
+        if ((argument != "--expect-mode=monitoring" && argument != "--expect-mode=fallback") ||
+            (!expected_mode.empty() && expected_mode != argument)) {
+            std::cerr << "unknown or conflicting expected mode argument: " << argument << '\n';
+            return 2;
+        }
+        expected_mode = argument;
+    }
 #ifdef _WIN32
     return 0;
 #else
@@ -87,13 +98,20 @@ int main()
     std::string diagnostic;
     bool ok = expect(bridge.start(diagnostic), "bridge start failed");
     const PythonAttributionExport initial = bridge.exportState();
+    if (!expected_mode.empty() &&
+        !expect(initial.diagnostics.supported == (expected_mode == "--expect-mode=monitoring"),
+                "runtime support does not match expected mode")) {
+        bridge.stop();
+        expect(runtime.finalize() == 0, "Py_FinalizeEx failed after mode mismatch");
+        return 1;
+    }
     if (!initial.diagnostics.supported) {
         bridge.stop();
         ok &= expect(runtime.finalize() == 0, "Py_FinalizeEx failed for fallback runtime");
         return ok ? 0 : 1;
     }
 
-    static constexpr char kScript[] = R"PY(
+    static constexpr char script[] = R"PY(
 import gc
 _source = 'def reload_identity_target():\n    return 7\n'
 _first = {}
@@ -113,7 +131,7 @@ del _first_code, _second_code, _first, _second
 gc.collect()
 )PY";
 
-    ok &= expect(runtime.run(kScript) == 0, "reload identity Python workload failed");
+    ok &= expect(runtime.run(script) == 0, "reload identity Python workload failed");
     const PythonAttributionExport state = bridge.exportState();
     const auto reload_codes = static_cast<std::size_t>(std::ranges::count_if(
         state.codes, [](const auto &metadata) { return metadata.qualname == "reload_identity_target"; }));

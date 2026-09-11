@@ -40,7 +40,7 @@ struct ProfilerServiceTestAccess {
 
     static bool timeoutPending(const ProfilerService &service)
     {
-        return service.timeout_completion_pending_.load(std::memory_order_acquire);
+        return service.timeout_completion_pending_.load(std::memory_order_acquire) != 0;
     }
 
     static void cancel(ProfilerService &service)

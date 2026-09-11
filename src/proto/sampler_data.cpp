@@ -14,6 +14,52 @@ namespace spark {
 
 namespace {
 
+bool frozenModuleName(std::string_view name)
+{
+    bool first = true;
+    for (const char ch : name) {
+        if (ch == '.') {
+            if (first) {
+                return false;
+            }
+            first = true;
+            continue;
+        }
+        if (ch != '_' && !(ch >= 'a' && ch <= 'z') && !(ch >= 'A' && ch <= 'Z') && (first || ch < '0' || ch > '9')) {
+            return false;
+        }
+        first = false;
+    }
+    return !first;
+}
+
+std::string pythonFilenameDescriptor(std::string_view filename, PythonCodeId code_id)
+{
+    std::string_view leaf = filename;
+    if (filename.starts_with('<') && filename.ends_with('>')) {
+        const bool known = filename == "<string>" || filename == "<stdin>" || filename == "<unknown>";
+        const bool frozen =
+            filename.starts_with("<frozen ") && frozenModuleName(filename.substr(8, filename.size() - 9));
+        if (!known && !frozen) {
+            leaf = "<virtual>";
+        }
+    }
+    else {
+        if (leaf.size() >= 2 && leaf[1] == ':' &&
+            ((leaf[0] >= 'a' && leaf[0] <= 'z') || (leaf[0] >= 'A' && leaf[0] <= 'Z'))) {
+            leaf.remove_prefix(2);
+        }
+        const std::size_t separator = leaf.find_last_of("/\\");
+        if (separator != std::string_view::npos) {
+            leaf.remove_prefix(separator + 1);
+        }
+        if (leaf.empty() || leaf == "." || leaf == "..") {
+            leaf = "<unknown>";
+        }
+    }
+    return std::string(leaf) + " [CodeId " + std::to_string(code_id) + "]";
+}
+
 std::uint64_t nodeTotal(const CallTree::Node &n)
 {
     std::uint64_t total = 0;
@@ -78,9 +124,7 @@ int emitNode(const CallTree::Node *node, const std::vector<std::int32_t> &window
             if (code.first_line >= 0) {
                 w.int32(6, code.first_line);
             }
-            if (!code.filename.empty()) {
-                w.string(7, code.filename);
-            }
+            w.string(7, pythonFilenameDescriptor(code.filename, node->key.rva));
         }
         else {
             if (PythonStackProvider *provider = globalPythonStackProvider(); provider != nullptr) {

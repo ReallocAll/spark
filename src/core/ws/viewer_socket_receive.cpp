@@ -55,7 +55,7 @@ bool ViewerSocket::tick()
 
         if (incoming_overflow_.exchange(false, std::memory_order_acq_rel)) {
             setCloseState(CloseReason::ReceiveError, "Live viewer closed: incoming message queue exceeded its limit");
-            close();
+            requestStop();
             return false;
         }
 
@@ -135,7 +135,7 @@ bool ViewerSocket::tick()
         auto time = nowMs();
         if ((time - open_time_ms_) > kInitialTimeoutMs && (time - last_ping_ms_.load()) > kEstablishedTimeoutMs) {
             setCloseState(CloseReason::ClientPingTimeout, "Live viewer closed: client ping timeout");
-            close();
+            requestStop();
             return false;
         }
 
@@ -143,7 +143,7 @@ bool ViewerSocket::tick()
     }
     catch (...) {
         setDeferredSendError();
-        close();
+        requestStop();
         return false;
     }
 }

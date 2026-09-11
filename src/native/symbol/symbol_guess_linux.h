@@ -8,7 +8,12 @@
 #include <functional>
 #include <optional>
 #include <span>
+#include <string>
+#include <unordered_map>
 #include <vector>
+
+#include "native/symbol/symbol_guess_dwarf.h"
+#include "native/symbol/symbol_guess_evidence.h"
 
 namespace spark::symbol_guess::linux {
 
@@ -73,6 +78,26 @@ std::optional<std::uint64_t> followStrictThunkChain(
     std::size_t max_depth = 2);
 
 BuildStats currentModuleStats();
+
+TypedLabel decodeCodePattern(std::span<const std::uint8_t> code, std::uint64_t function_rva,
+                             std::size_t *decoded_instructions = nullptr, bool reverse_worklist = false);
+
+struct LambdaWrapper {
+    std::uint64_t root = 0;
+    std::string owner;
+    std::vector<std::uint64_t> targets;
+};
+
+struct LambdaBodyIndex {
+    bool complete = false;
+    std::vector<LambdaWrapper> wrappers;
+    std::unordered_map<std::uint64_t, TypedLabel> labels;
+};
+
+LambdaBodyIndex collectLambdaBodyIndex(const dwarf::ImageView &image, const std::vector<dwarf::FunctionRange> &ranges,
+                                       const std::unordered_map<std::uint64_t, TypedLabel> &labels,
+                                       std::size_t *decoded_instructions = nullptr);
+TypedLabel projectLambdaBodyLabel(const LambdaBodyIndex &index, std::uint64_t root, const TypedLabel &earlier = {});
 
 }  // namespace spark::symbol_guess::linux
 

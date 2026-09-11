@@ -82,12 +82,13 @@ bool RecoveryWriter::start()
         }
         const std::string name = entry.path().filename().string();
         const bool is_segment = name.size() > 12 && name.starts_with("segment-") && name.ends_with(".jnl");
+        const bool is_staged_segment = name.size() > 16 && name.starts_with("segment-") && name.ends_with(".jnl.tmp");
         const bool is_snapshot = name == "metadata.snapshot" || name == "metadata.snapshot.tmp";
-        if (!is_segment && !is_snapshot) {
+        if (!is_segment && !is_staged_segment && !is_snapshot) {
             continue;
         }
-        if (is_segment) {
-            const std::string_view number(name.data() + 8, name.size() - 12);
+        if (is_segment || is_staged_segment) {
+            const std::string_view number(name.data() + 8, name.size() - (is_staged_segment ? 16 : 12));
             std::uint32_t parsed = 0;
             const auto [end, error] = std::from_chars(number.data(), number.data() + number.size(), parsed);
             if (error != std::errc{} || end != number.data() + number.size()) {
@@ -315,7 +316,11 @@ void RecoveryWriter::cacheThreadDef(std::uint64_t thread_id, std::uint64_t os_th
 
 void RecoveryWriter::requestFlush()
 {
-    flush_requested_.store(true, std::memory_order_release);
+    allowIo(IoOperation::FlushRequestBeforeLock);
+    {
+        std::scoped_lock lock(mutex_);
+        flush_requested_.store(true, std::memory_order_release);
+    }
     cv_.notify_one();
 }
 
@@ -337,18 +342,38 @@ bool RecoveryWriter::writeFile(std::FILE *file, const void *data, std::size_t si
     if (!allowIo(IoOperation::Write)) {
         return false;
     }
-    return std::fwrite(data, 1, size, file) == size;
+    if (!allowIo(IoOperation::PartialWrite)) {
+        std::fwrite(data, 1, size / 2, file);
+        allowIo(IoOperation::PartialWriteComplete);
+        return false;
+    }
+    if (std::fwrite(data, 1, size, file) != size) {
+        return false;
+    }
+    allowIo(IoOperation::WriteComplete);
+    return true;
 }
 
 bool RecoveryWriter::syncFile(std::FILE *file)
 {
-    return allowIo(IoOperation::Sync) && syncFileImpl(file);
+    if (!allowIo(IoOperation::Flush) || std::fflush(file) != 0) {
+        return false;
+    }
+    allowIo(IoOperation::FlushComplete);
+    if (!allowIo(IoOperation::Sync) || !syncFileImpl(file)) {
+        return false;
+    }
+    allowIo(IoOperation::SyncComplete);
+    return true;
 }
 
 bool RecoveryWriter::closeFile(std::FILE *file)
 {
     const bool allowed = allowIo(IoOperation::Close);
     const bool closed = std::fclose(file) == 0;
+    if (allowed && closed) {
+        allowIo(IoOperation::CloseComplete);
+    }
     return allowed && closed;
 }
 
@@ -359,24 +384,38 @@ bool RecoveryWriter::renameFile(const std::filesystem::path &from, const std::fi
         return false;
     }
     std::filesystem::rename(from, to, ec);
+    if (!ec) {
+        allowIo(IoOperation::RenameComplete);
+    }
     return !ec;
 }
 
 bool RecoveryWriter::openSegment(std::uint32_t segment_number)
 {
-    segment_path_ = config_.directory / ("segment-" + std::to_string(segment_number) + ".jnl");
-    file_ = std::fopen(segment_path_.string().c_str(), "wb");
+    const auto path = config_.directory / ("segment-" + std::to_string(segment_number) + ".jnl");
+    const auto tmp_path = config_.directory / ("segment-" + std::to_string(segment_number) + ".jnl.tmp");
+    const auto path_string = path.string();
+    const auto tmp_string = tmp_path.string();
+    auto header = serializeFileHeader(config_.session_id, monotonicNowNs(), segment_number);
+    std::FILE *staged = std::fopen(tmp_string.c_str(), "wb");
+    if (!staged) {
+        return false;
+    }
+    const bool synced = writeFile(staged, header.data(), header.size()) && syncFile(staged);
+    const bool closed = closeFile(staged);
+    std::error_code ec;
+    if (!synced || !closed || !renameFile(tmp_path, path, ec)) {
+        std::filesystem::remove(tmp_path, ec);
+        return false;
+    }
+    if (!allowIo(IoOperation::Reopen)) {
+        return false;
+    }
+    file_ = std::fopen(path_string.c_str(), "ab");
     if (!file_) {
         return false;
     }
-
-    auto header = serializeFileHeader(config_.session_id, monotonicNowNs(), segment_number);
-    if (!writeFile(file_, header.data(), header.size())) {
-        closeFile(file_);
-        file_ = nullptr;
-        return false;
-    }
-
+    segment_path_ = path;
     segment_number_ = segment_number;
     segment_bytes_ = header.size();
     total_bytes_ += header.size();
@@ -403,6 +442,7 @@ bool RecoveryWriter::syncFile()
         return false;
     }
     last_sync_ = std::chrono::steady_clock::now();
+    dirty_ = false;
     return true;
 }
 
@@ -491,8 +531,9 @@ void RecoveryWriter::markWorkerExited() noexcept
 
 void RecoveryWriter::writerLoop()
 {
-    const auto flush_interval = std::chrono::milliseconds(config_.flush_interval_ms);
-    const auto sync_interval = std::chrono::milliseconds(config_.sync_interval_ms);
+    const auto flush_interval = std::chrono::milliseconds(std::max(config_.flush_interval_ms, 1));
+    const auto sync_interval = std::chrono::milliseconds(std::max(config_.sync_interval_ms, 1));
+    bool pending_flush = false;
     std::vector<std::uint8_t> record;
 
     const auto drain_record = [this, &record]() -> bool {
@@ -503,6 +544,7 @@ void RecoveryWriter::writerLoop()
         if (!file_) {
             return true;
         }
+        dirty_ = true;
         if (!writeFile(file_, record.data(), record.size())) {
             enabled_.store(false, std::memory_order_release);
             return true;
@@ -530,30 +572,45 @@ void RecoveryWriter::writerLoop()
 
     while (running_.load(std::memory_order_acquire)) {
         {
+            auto deadline = std::chrono::steady_clock::now() + flush_interval;
+            if (dirty_) {
+                deadline = std::min(deadline, last_sync_ + sync_interval);
+            }
             std::unique_lock<std::mutex> lock(mutex_);
-            cv_.wait_for(lock, flush_interval, [this] {
-                return !running_.load(std::memory_order_acquire) || flush_requested_.load(std::memory_order_acquire) ||
-                       queue_size_.load(std::memory_order_relaxed) != 0;
+            cv_.wait_until(lock, deadline, [this] {
+                const bool ready = !running_.load(std::memory_order_acquire) ||
+                                   flush_requested_.load(std::memory_order_acquire) ||
+                                   queue_size_.load(std::memory_order_relaxed) != 0;
+                if (!ready) {
+                    allowIo(IoOperation::WaitBeforePark);
+                }
+                return ready;
             });
         }
-        flush_requested_.store(false, std::memory_order_release);
+        pending_flush = flush_requested_.exchange(false, std::memory_order_acq_rel) || pending_flush;
 
         if (!enabled_.load(std::memory_order_acquire)) {
             break;
         }
 
-        bool wrote_any = false;
-        while (queue_size_.load(std::memory_order_relaxed) != 0 && drain_record()) {
-            wrote_any = true;
+        std::size_t drained = 0;
+        while (drained < 256 && queue_size_.load(std::memory_order_relaxed) != 0 && drain_record()) {
+            ++drained;
             if (!enabled_.load(std::memory_order_acquire)) {
                 break;
             }
+            if (dirty_ && std::chrono::steady_clock::now() - last_sync_ >= sync_interval) {
+                break;
+            }
         }
+        allowIo(IoOperation::DrainComplete);
 
-        if (wrote_any && enabled_.load(std::memory_order_acquire)) {
-            auto now = std::chrono::steady_clock::now();
-            if (now - last_sync_ >= sync_interval) {
+        if (enabled_.load(std::memory_order_acquire)) {
+            if (dirty_ && (pending_flush || std::chrono::steady_clock::now() - last_sync_ >= sync_interval)) {
                 syncFile();
+            }
+            if (!dirty_ && queue_size_.load(std::memory_order_acquire) == 0) {
+                pending_flush = false;
             }
         }
     }

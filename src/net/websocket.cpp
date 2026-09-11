@@ -93,7 +93,9 @@ WebSocketClient::WebSocketClient() = default;
 
 WebSocketClient::~WebSocketClient()
 {
-    close();
+    if (!closeWithin(std::chrono::seconds(2))) {
+        std::terminate();
+    }
 }
 
 std::size_t WebSocketClient::writeCallback(char *ptr, std::size_t size, std::size_t nmemb, void *userdata) noexcept
@@ -167,7 +169,7 @@ std::string WebSocketClient::createChannel(const std::string &host, const std::s
 std::string WebSocketClient::connect(const std::string &host, const std::string &user_agent,
                                      CancellationToken cancellation)
 {
-    if (thread_.joinable() && !closeWithin(std::chrono::seconds(2))) {
+    if (!thread_.reapUntil(std::chrono::steady_clock::now())) {
         return {};
     }
     {
@@ -191,6 +193,7 @@ std::string WebSocketClient::connect(const std::string &host, const std::string 
     }
 
     local_close_requested_.store(false);
+    local_close_attempted_ = false;
     running_.store(true);
     if (!startReceiveWorker()) {
         running_.store(false);
@@ -216,20 +219,22 @@ bool WebSocketClient::startReceiveWorker()
         worker_exited_ = false;
     }
     try {
-        thread_ = std::thread([this] {
-            try {
-                runReceiveLoop();
-            }
-            catch (const std::exception &error) {
-                recordTermination(TerminationKind::WorkerFailure, error.what());
-            }
-            catch (...) {
-                recordTermination(TerminationKind::WorkerFailure, "unknown exception");
-            }
-            running_.store(false);
-            notifyTermination();
-            signalWorkerExit();
-        });
+        if (!thread_.start([this] {
+                try {
+                    runReceiveLoop();
+                }
+                catch (const std::exception &error) {
+                    recordTermination(TerminationKind::WorkerFailure, error.what());
+                }
+                catch (...) {
+                    recordTermination(TerminationKind::WorkerFailure, "unknown exception");
+                }
+                running_.store(false);
+                notifyTermination();
+                signalWorkerExit();
+            })) {
+            throw std::runtime_error("transport worker failed to start");
+        }
     }
     catch (...) {
         running_.store(false);
@@ -265,7 +270,7 @@ void WebSocketClient::send(const std::string &message) noexcept
 
 bool WebSocketClient::sendDeferred(DeferredEncoder encoder, std::size_t accounted_input_bytes) noexcept
 {
-    if (!running_.load()) {
+    if (!running_.load() || cancellation_.stopRequested()) {
         return false;
     }
     if (!encoder) {
@@ -283,14 +288,14 @@ bool WebSocketClient::sendDeferred(DeferredEncoder encoder, std::size_t accounte
 
 bool WebSocketClient::enqueueSendJob(SendJob job) noexcept
 {
-    if (!running_.load()) {
+    if (!running_.load() || cancellation_.stopRequested()) {
         return false;
     }
     bool rejected = false;
     bool allocation_failure = false;
     try {
         std::scoped_lock lock(send_mutex_);
-        if (!running_.load()) {
+        if (!running_.load() || cancellation_.stopRequested()) {
             return false;
         }
         if ((!job.encoder && job.message.size() > kMaxOutgoingMessageBytes) ||
@@ -362,39 +367,27 @@ void WebSocketClient::requestStop() noexcept
 
 bool WebSocketClient::closeWithin(std::chrono::milliseconds timeout) noexcept
 {
+    return closeUntil(std::chrono::steady_clock::now() + std::max(timeout, std::chrono::milliseconds::zero()));
+}
+
+bool WebSocketClient::closeUntil(std::chrono::steady_clock::time_point deadline) noexcept
+{
     requestStop();
-    if (!thread_.joinable()) {
-        return true;
-    }
-    if (thread_.get_id() == std::this_thread::get_id()) {
+    return thread_.reapUntil(deadline);
+}
+
+bool WebSocketClient::setLocalCloseMessage(std::string message) noexcept
+{
+    if (thread_.joinable() || message.size() > kMaxOutgoingMessageBytes) {
         return false;
     }
-    {
-        std::unique_lock lock(worker_exit_mutex_);
-        if (!worker_exit_cv_.wait_for(lock, timeout, [this] { return worker_exited_; })) {
-            return false;
-        }
-    }
-    try {
-        thread_.join();
-    }
-    catch (...) {
-        return false;
-    }
+    local_close_message_ = std::move(message);
     return true;
 }
 
 void WebSocketClient::close() noexcept
 {
-    requestStop();
-    if (thread_.joinable() && thread_.get_id() != std::this_thread::get_id()) {
-        try {
-            thread_.join();
-        }
-        catch (...) {
-            running_.store(false);
-        }
-    }
+    static_cast<void>(closeWithin(std::chrono::seconds(2)));
 }
 
 WebSocketClient::Termination WebSocketClient::termination() const
@@ -486,11 +479,19 @@ WebSocketClient::SendStep WebSocketClient::processNextSend(const SendFunction &s
 
 bool WebSocketClient::drainLocalClose(const SendFunction &send_function)
 {
-    if (!local_close_requested_.exchange(false)) {
+    if (local_close_attempted_ || (!local_close_requested_.load() && !cancellation_.stopRequested())) {
         return false;
     }
-    for (std::size_t attempt = 0; attempt <= kMaxQueuedSends; ++attempt) {
-        const SendStep send_step = processNextSend(send_function);
+    local_close_attempted_ = true;
+    running_.store(false);
+    for (std::size_t attempt = 0; attempt < kMaxQueuedSends + 2; ++attempt) {
+        SendStep send_step = processNextSend(send_function);
+        if (send_step == SendStep::Idle && !local_close_message_.empty()) {
+            pending_send_ = std::move(local_close_message_);
+            local_close_message_.clear();
+            pending_send_offset_ = 0;
+            send_step = processNextSend(send_function);
+        }
         if (send_step == SendStep::Idle || send_step == SendStep::Fatal || send_step == SendStep::Retry) {
             break;
         }
@@ -540,14 +541,17 @@ void WebSocketClient::runReceiveLoop()
         message_cb_(incoming_message_for_testing_);
     }
 
-    const CURLcode rc = curl_easy_perform(curl.get());
+    const CURLcode rc =
+        handshake_for_testing_ ? static_cast<CURLcode>(handshake_for_testing_()) : curl_easy_perform(curl.get());
     if (rc != CURLE_OK) {
         handleReceiveFailure(rc);
         return;
     }
+    if (after_handshake_for_testing_) {
+        after_handshake_for_testing_();
+    }
     if (cancellation_.stopRequested()) {
         recordTermination(TerminationKind::LocalClose);
-        return;
     }
 
     // Poll loop: receive messages and send queued messages.
@@ -614,7 +618,10 @@ void WebSocketClient::runReceiveLoop()
         recordTermination(TerminationKind::LocalClose);
     }
 
-    const SendFunction send_function = [&curl](const char *data, std::size_t size) {
+    const SendFunction send_function = [this, &curl](const char *data, std::size_t size) {
+        if (send_for_testing_) {
+            return send_for_testing_(data, size);
+        }
         std::size_t sent = 0;
         const CURLcode code = curl_ws_send(curl.get(), data, size, &sent, 0, CURLWS_TEXT);
         return SendAttempt{.code = code, .sent = sent};

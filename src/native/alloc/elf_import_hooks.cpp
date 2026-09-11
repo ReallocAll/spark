@@ -1,5 +1,7 @@
 #include "native/alloc/elf_import_hooks.h"
 
+#include "native/alloc/linux_loader_handle.h"
+
 #if !defined(__linux__) || !defined(__x86_64__)
 #error "elf_import_hooks.cpp requires Linux x86-64"
 #endif
@@ -120,21 +122,26 @@ int refreshImage(dl_phdr_info *info, std::size_t, void *opaque)
 
 bool pinImage(Image &image, PinSet &pins)
 {
-    void *handle =
-        image.main_executable ? ::dlopen(nullptr, RTLD_NOW) : ::dlopen(image.name.c_str(), RTLD_NOW | RTLD_NOLOAD);
-    if (handle == nullptr) {
+    gateway::LoaderHandle handle(image.main_executable ? ::dlopen(nullptr, RTLD_NOW)
+                                                       : ::dlopen(image.name.c_str(), RTLD_NOW | RTLD_NOLOAD));
+    gateway::loaderFault(50);
+    if (!handle) {
         return false;
     }
     link_map *map = nullptr;
-    if (::dlinfo(handle, RTLD_DI_LINKMAP, static_cast<void *>(&map)) != 0 || map == nullptr ||
+    if (::dlinfo(handle.get(), RTLD_DI_LINKMAP, static_cast<void *>(&map)) != 0 || map == nullptr ||
         static_cast<std::uintptr_t>(map->l_addr) != image.base) {
-        ::dlclose(handle);
         return false;
     }
-    pins.handles.push_back(handle);
     RefreshContext context{.image = &image, .found = false};
     ::dl_iterate_phdr(refreshImage, &context);
-    return context.found;
+    if (!context.found) {
+        return false;
+    }
+    gateway::loaderFault(51);
+    pins.handles.push_back(handle.get());
+    handle.release();
+    return true;
 }
 
 bool contains(const Image &image, std::uintptr_t address, std::size_t bytes = 1) noexcept
@@ -153,19 +160,12 @@ bool supportedRelocation(unsigned type) noexcept
     return type == R_X86_64_JUMP_SLOT || type == R_X86_64_GLOB_DAT || type == R_X86_64_64;
 }
 
-std::string basename(std::string_view path)
-{
-    const std::size_t separator = path.find_last_of('/');
-    return std::string(separator == std::string_view::npos ? path : path.substr(separator + 1));
-}
-
 bool isSparkImage(const Image &image, std::uintptr_t replacement_base)
 {
-    if (image.base != replacement_base) {
-        return false;
-    }
-    const std::string name = basename(image.name);
-    return name.find("endstone_spark") != std::string::npos || name == "spark.so" || name == "libspark.so";
+    Dl_info self{};
+    ::dladdr(reinterpret_cast<void *>(&isSparkImage), &self);
+    return !image.main_executable &&
+           (image.base == replacement_base || image.base == reinterpret_cast<std::uintptr_t>(self.dli_fbase));
 }
 
 bool isLoaderImage(std::string_view path)
@@ -229,8 +229,19 @@ bool sameModule(const Image &image, std::uintptr_t base, const std::string &name
 bool ElfImportHooks::prepare(std::span<const ElfImportHookSpec> specs, std::string &error)
 {
     error.clear();
-    if (prepared_) {
+    const bool same_specs =
+        prepared_ && specs.size() == specs_.size() &&
+        std::equal(specs.begin(), specs.end(), specs_.begin(), [](const auto &left, const auto &right) {
+            return left.replacement == right.replacement && left.name != nullptr && right.name != nullptr &&
+                   std::strcmp(left.name, right.name) == 0 &&
+                   (left.original == nullptr || left.original == right.original);
+        });
+    if (same_specs) {
         return rescan(error);
+    }
+    if (installed_) {
+        error = "cannot replace installed ELF import specifications";
+        return false;
     }
     if (specs.empty()) {
         error = "no ELF import hooks were requested";
@@ -238,6 +249,15 @@ bool ElfImportHooks::prepare(std::span<const ElfImportHookSpec> specs, std::stri
     }
 
     specs_.assign(specs.begin(), specs.end());
+    for (auto &spec : specs_) {
+        if (spec.original == nullptr && spec.name != nullptr) {
+            spec.original = ::dlsym(RTLD_DEFAULT, spec.name);
+        }
+        if (spec.original == nullptr || spec.replacement == nullptr) {
+            error = "ELF import hook requires a resolved original and replacement";
+            return false;
+        }
+    }
     targets_.clear();
     pages_.clear();
     capabilities_.clear();
@@ -299,7 +319,7 @@ bool ElfImportHooks::scan(std::string &error)
         if (spec.name == nullptr) {
             continue;
         }
-        void *address = ::dlsym(RTLD_DEFAULT, spec.name);
+        void *address = spec.original;
         Dl_info owner{};
         if (address != nullptr && ::dladdr(address, &owner) != 0) {
             allocator_bases.push_back(reinterpret_cast<std::uintptr_t>(owner.dli_fbase));
@@ -506,10 +526,11 @@ bool ElfImportHooks::scan(std::string &error)
                             original = previous->original;
                         }
                     }
-                    const bool lazy_plt =
-                        type == R_X86_64_JUMP_SLOT && contains(image, reinterpret_cast<std::uintptr_t>(original));
-                    next_targets.push_back({slot, original, spec.replacement, spec_index, image.base, image.name,
-                                            image.main_executable, lazy_plt});
+                    if (original != spec.original) {
+                        continue;
+                    }
+                    next_targets.push_back(
+                        {slot, original, spec.replacement, spec_index, image.base, image.name, image.main_executable});
                 }
             }
         };
@@ -606,7 +627,7 @@ bool ElfImportHooks::scan(std::string &error)
             next_targets.begin(), next_targets.end(), [i](const Target &target) { return target.spec_index == i; }));
         capability.available = capability.slots != 0;
         if (!capability.available) {
-            capability.detail = "import not found in supported loaded modules";
+            capability.detail = "no resolved import matches the selected allocator provider";
             if (specs_[i].required && required_error.empty()) {
                 required_error = "required Linux allocator import not found: " + capability.name;
             }
@@ -687,19 +708,8 @@ bool ElfImportHooks::patch(bool replacements, std::string &error)
                 continue;
             }
             if (current != target.original) {
-                const bool lazy_resolved = target.lazy_plt &&
-                                           contains(*image, reinterpret_cast<std::uintptr_t>(target.original)) &&
-                                           !contains(*image, reinterpret_cast<std::uintptr_t>(current));
-                if (!lazy_resolved) {
-                    error = "ELF import slot changed while applying hooks: " + target.module_name;
-                    return false;
-                }
-                // A JUMP_SLOT captured before lazy binding may legitimately transition from the importing
-                // module's PLT resolver stub to its final external function while the module stays pinned.
-                // Preserve that resolved value so uninstall restores the loader-selected target rather than
-                // the stale PLT trampoline. Any later unexpected change remains fail-closed.
-                target.original = current;
-                target.lazy_plt = false;
+                error = "ELF import slot changed while applying hooks: " + target.module_name;
+                return false;
             }
         }
         else {
@@ -752,8 +762,18 @@ bool ElfImportHooks::patch(bool replacements, std::string &error)
         changed_pages.push_back(&page);
     }
 
+    bool exchanged = true;
     for (const Target *target : updates) {
-        __atomic_store_n(target->slot, replacements ? target->replacement : target->original, __ATOMIC_RELEASE);
+        if (before_write_gate_ != nullptr) {
+            before_write_gate_(target->slot, replacements);
+        }
+        void *expected = replacements ? target->original : target->replacement;
+        if (!__atomic_compare_exchange_n(target->slot, &expected, replacements ? target->replacement : target->original,
+                                         false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE) &&
+            replacements && expected != target->replacement) {
+            exchanged = false;
+            error = "ELF import slot changed immediately before patch: " + target->module_name;
+        }
     }
 
     bool restored = true;
@@ -765,7 +785,7 @@ bool ElfImportHooks::patch(bool replacements, std::string &error)
             restored = false;
         }
     }
-    return restored;
+    return restored && exchanged;
 }
 
 bool ElfImportHooks::install(std::string &error)

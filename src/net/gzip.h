@@ -3,10 +3,13 @@
 
 #include <string>
 
+#include "net/cancellation.h"
+
 namespace spark {
 
 // gzip-compress a buffer (zlib). Throws std::runtime_error on failure.
 std::string gzipCompress(const std::string &input);
+std::string gzipCompress(const std::string &input, const CancellationToken &cancellation);
 
 }  // namespace spark
 

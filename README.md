@@ -69,13 +69,22 @@ retain the RVA and name their evidence source: `rtti` is a verified runtime type
 `vtable` is a class and virtual-table slot, `str` is a referenced semantic string,
 and `thunk` is a verified jump wrapper. A `?` after the source, such as `str?:`
 or `vtable?:`, means the evidence is useful but cannot identify an exact member.
-Conflicting or unsafe evidence is omitted rather than displayed as tentative.
+Conflicting or unsafe evidence, including ambiguous lambda ownership, is omitted
+rather than displayed as tentative. Instruction-based guesses use validated
+instruction boundaries.
 
 Profiles may contain one root per selected native thread. Execution-profile
 weights are elapsed sampled microseconds; allocation-profile weights are sampled
 requested bytes. The metadata pages report the available BDS hash and version, loaded
 plugins, configured interval and filters, TPS/MSPT/CPU windows, and any sampling,
 queue, unwind, or allocation-hook drops that make a profile incomplete.
+With `--not-combined`, threads retain independent complete call trees even when
+they have the same name.
+
+On CPython 3.12+, sampled Python plugin frames include the filename leaf and
+CodeId without exporting server-owner directory paths. Native frame identities
+and available line data are retained. If Python code registration fails, Spark
+stops admitting new Python symbols for the rest of that profiling session.
 
 ### `/spark tps` and `/spark health`
 
@@ -137,6 +146,12 @@ The viewer stays live until the profiler is stopped, cancelled, or times out.
 Relay connection, compression, and uploads run asynchronously; command
 completion and failures are reported back on the server thread without waiting
 for a network timeout.
+Viewer uploads support cancellation and compression runs in bounded steps. Before
+any new profiling session starts, the previous timer thread must exit and the
+previous viewer must retire within a shared 500 ms budget. If either is still
+stopping, the command reports an error asking you to retry. An ordinary viewer
+close timeout does not terminate the server; destruction or plugin unload still
+fails fast if cleanup cannot complete safely.
 
 When the automatic background profiler is enabled, a valid foreground start
 pauses it. An invalid start leaves it running. Explicitly stopping and exporting
@@ -281,10 +296,25 @@ repeated profiles are needed to distinguish growth from legitimate long-lived
 state.
 
 Linux atomically redirects supported allocator relocations in the main executable
-and loaded ELF modules, including Endstone, native plugins, and Python when they
-import the effective libc allocator. Loaded modules are rescanned at session start
+and loaded ELF modules, including Endstone, native plugins, and Python. Allocator
+providers must be provably part of the main executable's startup `DT_NEEDED`
+dependency closure; dynamically loaded custom providers outside that closure are
+unsupported. Preloading a provider alone does not make it eligible.
+Loaded modules are rescanned at session start
 and every five seconds while profiling; unloaded modules are recognized before
 restoration so stale slots are never written.
+
+Linux allocation gateways live in a minimal process-resident helper, independently
+of Spark plugin unload. The helper adds no permanent pin on Spark itself; external
+loader references may still keep the plugin loaded. Missing, unsupported, or
+mismatched helpers prevent allocation-hook admission instead of permitting unsafe
+unload. These restrictions do not disable execution profiling.
+
+The helper has a limit of 256 gateway groups over the server process lifetime,
+not 256 simultaneous profiling sessions. Published groups are never reused after
+retirement. Exhausting this capacity, or encountering an old resident helper whose
+code identity differs from the installed helper, requires a server process restart.
+Reloading the plugin does not refresh the resident helper.
 
 On Windows x64, Spark redirects supported UCRT and heap allocation imports through
 Spark-owned Permanent-IAT gateways. Shutdown first closes gateway admission, drains
@@ -321,6 +351,9 @@ During each session, the sampler aggregation thread writes compact records
 segmented journal file under `plugins/spark/profiles/recovery/`. The journal
 uses CRC32-validated records (via zlib) so that a truncated tail from an
 unclean shutdown is recoverable up to the last complete record.
+Journal flushes, segment rotation, and explicit flush requests use durable writes.
+Recovery remains limited to records persisted before the interruption; sampling
+and queue losses are still reported as incomplete data.
 
 On the next plugin startup, spark replays an unclean supported session into a
 call tree, runs normal symbolization, and saves a `.sparkprofile` file under
@@ -395,6 +428,10 @@ cmake -S . -B build -G Ninja "-DCMAKE_TOOLCHAIN_FILE=build/RelWithDebInfo/genera
 cmake --build build
 ```
 
+For full Linux CTest coverage, including production-sampler, unload, and legacy
+tests, also pass `-DENDSTONE_SPARK_GATEWAY_SAMPLER_TESTS=ON` to the CMake configure
+command above. This option defaults to `OFF`.
+
 With self-test tools enabled, Linux `spark_selftest --allocation-only` exercises exact,
 regex, multiple, dynamic, and no-match allocation thread selection, cross-thread
 free/realloc and live-only lifecycles, session reuse, thread overflow, and bounded
@@ -414,9 +451,26 @@ requires cpptrace's async-signal-safe unwinding path. Windows does not use
 libunwind; cpptrace uses its native Windows backend while spark captures stacks
 with StackWalk64.
 
-The plugin is emitted as `build/endstone_spark.so` (Linux) /
-`build/endstone_spark.dll` (Windows). Drop it in your server's `plugins/`
+On Windows, copy `build/endstone_spark.dll` into your server's `plugins/`
 directory.
+
+On Linux, install `endstone_spark-linux-x86_64.tar.gz` by extracting both files
+into the server's `plugins/` directory, preserving this layout:
+
+```text
+plugins/
+  endstone_spark.so
+  .spark-native/
+    libspark_allocation_gateway_v1.so
+```
+
+The archive contains exactly `endstone_spark.so` and
+`.spark-native/libspark_allocation_gateway_v1.so`. For a local build, copy
+`build/endstone_spark.so` and
+`build/.spark-native/libspark_allocation_gateway_v1.so` into the same layout.
+Do not copy only the plugin or move the helper into the top-level `plugins/`
+directory where it could be discovered as a plugin. Restart the server process
+after updating the helper; a Spark plugin reload keeps the old resident helper.
 
 > **Toolchain / ABI note.** A C++ Endstone plugin must use the runtime ABI expected
 > by the Endstone build it is loaded into. Match its compiler, compiler ABI, C++

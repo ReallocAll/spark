@@ -109,16 +109,16 @@ GroupedThreads groupThreads(std::vector<std::pair<std::uint64_t, std::pair<std::
 {
     ThreadGrouper grouper(mode);
     // std::map for deterministic group ordering.
-    std::map<std::string, std::vector<const CallTree *>> groups;
+    std::map<ThreadGrouper::GroupKey, std::vector<const CallTree *>> groups;
     for (const auto &[tid, p] : input) {
-        std::string g = grouper.group(tid, p.first);
+        auto g = grouper.groupKey(tid, p.first);
         groups[g].push_back(p.second);
     }
 
     GroupedThreads result;
     for (const auto &[g, trees] : groups) {
         if (mode == ThreadGrouperMode::ByName || trees.size() == 1) {
-            result.owned_labels.push_back(grouper.label(g));
+            result.owned_labels.push_back(grouper.label(g.first));
             result.views.push_back({.name = result.owned_labels.back(), .tree = trees.front()});
         }
         else {
@@ -126,7 +126,7 @@ GroupedThreads groupThreads(std::vector<std::pair<std::uint64_t, std::pair<std::
             for (const CallTree *tree : trees) {
                 mergeCallTree(*merged, *tree);
             }
-            result.owned_labels.push_back(grouper.label(g));
+            result.owned_labels.push_back(grouper.label(g.first));
             result.views.push_back({.name = result.owned_labels.back(), .tree = merged.get()});
             result.owned_trees.push_back(std::move(merged));
         }

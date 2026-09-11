@@ -30,12 +30,12 @@ namespace {
 
 using FiveArgFn = std::uint64_t(__cdecl *)(std::uint64_t, std::uint64_t, std::uint64_t, std::uint64_t, std::uint64_t);
 
-constexpr std::uint64_t kHandlerBias = 0x100000000ULL;
-constexpr std::uint64_t kDrainTimeoutMs = 5000;
-constexpr std::size_t kStackCapacity = 64;
+constexpr std::uint64_t KHandlerBias = 0x100000000ULL;
+constexpr std::uint64_t KDrainTimeoutMs = 5000;
+constexpr std::size_t KStackCapacity = 64;
 
-std::array<void *, kStackCapacity> g_frames{};
-USHORT g_depth = 0;
+std::array<void *, KStackCapacity> GFrames{};
+USHORT GDepth = 0;
 
 [[nodiscard]] std::uint64_t baseValue(std::uint64_t a, std::uint64_t b, std::uint64_t c, std::uint64_t d,
                                       std::uint64_t e) noexcept
@@ -53,9 +53,9 @@ extern "C"
     __declspec(noinline) std::uint64_t __cdecl capturingHandler(std::uint64_t a, std::uint64_t b, std::uint64_t c,
                                                                 std::uint64_t d, std::uint64_t e) noexcept
 {
-    g_frames.fill(nullptr);
-    g_depth = captureDynamicAwareStackBackTrace(0, static_cast<ULONG>(g_frames.size()), g_frames.data(), nullptr);
-    return baseValue(a, b, c, d, e) + kHandlerBias;
+    GFrames.fill(nullptr);
+    GDepth = captureDynamicAwareStackBackTrace(0, static_cast<ULONG>(GFrames.size()), GFrames.data(), nullptr);
+    return baseValue(a, b, c, d, e) + KHandlerBias;
 }
 
 extern "C" __declspec(noinline) std::uint64_t __cdecl knownCaller(FiveArgFn function) noexcept
@@ -67,10 +67,10 @@ extern "C" __declspec(noinline) std::uint64_t __cdecl knownCaller(FiveArgFn func
 [[noreturn]] void fail(const char *reason)
 {
     std::fprintf(stderr, "stage=permanent-iat-gateway-unwind failure=%s depth=%u\n", reason,
-                 static_cast<unsigned>(g_depth));
-    for (USHORT index = 0; index < g_depth; ++index) {
+                 static_cast<unsigned>(GDepth));
+    for (USHORT index = 0; index < GDepth; ++index) {
         std::fprintf(stderr, "stage=permanent-iat-gateway-unwind frame[%u]=%p\n", static_cast<unsigned>(index),
-                     g_frames[index]);
+                     GFrames[index]);
     }
     std::fflush(stderr);
     std::abort();
@@ -83,7 +83,7 @@ extern "C" __declspec(noinline) std::uint64_t __cdecl knownCaller(FiveArgFn func
     if (entry == nullptr) {
         return false;
     }
-    const DWORD64 address = reinterpret_cast<DWORD64>(frame);
+    const auto address = reinterpret_cast<DWORD64>(frame);
     return address >= image_base + entry->BeginAddress && address < image_base + entry->EndAddress;
 }
 
@@ -97,17 +97,17 @@ int main()
         std::fprintf(stderr, "stage=permanent-iat-gateway-unwind create-failure error=%s\n", error.c_str());
         return 1;
     }
-    if (!bindPermanentIatGateway(handle, reinterpret_cast<void *>(&capturingHandler), kDrainTimeoutMs, error)) {
+    if (!bindPermanentIatGateway(handle, reinterpret_cast<void *>(&capturingHandler), KDrainTimeoutMs, error)) {
         std::fprintf(stderr, "stage=permanent-iat-gateway-unwind bind-failure error=%s\n", error.c_str());
         return 1;
     }
 
     auto gateway = reinterpret_cast<FiveArgFn>(handle.gateway);
-    const std::uint64_t expected = baseValue(10, 20, 30, 40, 50) + kHandlerBias;
+    const std::uint64_t expected = baseValue(10, 20, 30, 40, 50) + KHandlerBias;
     if (knownCaller(gateway) != expected) {
         fail("handler-result");
     }
-    if (g_depth < 2) {
+    if (GDepth < 2) {
         fail("stack-too-shallow");
     }
 
@@ -120,15 +120,15 @@ int main()
 
     bool saw_gateway_frame = false;
     bool saw_known_caller = false;
-    for (USHORT index = 0; index < g_depth; ++index) {
-        const auto address = reinterpret_cast<std::uintptr_t>(g_frames[index]);
+    for (USHORT index = 0; index < GDepth; ++index) {
+        const auto address = reinterpret_cast<std::uintptr_t>(GFrames[index]);
         if (address != 0 && address < 0x10000U) {
             fail("low-garbage-frame");
         }
         if (address >= gateway_begin && address < gateway_end) {
             saw_gateway_frame = true;
         }
-        if (frameInCompiledFunction(g_frames[index], reinterpret_cast<void *>(&knownCaller))) {
+        if (frameInCompiledFunction(GFrames[index], reinterpret_cast<void *>(&knownCaller))) {
             saw_known_caller = true;
         }
     }
@@ -139,11 +139,11 @@ int main()
         fail("caller-frame-missing-after-gateway");
     }
 
-    if (!detachPermanentIatGateway(handle, kDrainTimeoutMs, error)) {
+    if (!detachPermanentIatGateway(handle, KDrainTimeoutMs, error)) {
         std::fprintf(stderr, "stage=permanent-iat-gateway-unwind detach-failure error=%s\n", error.c_str());
         return 1;
     }
 
-    std::fprintf(stderr, "stage=permanent-iat-gateway-unwind pass depth=%u\n", static_cast<unsigned>(g_depth));
+    std::fprintf(stderr, "stage=permanent-iat-gateway-unwind pass depth=%u\n", static_cast<unsigned>(GDepth));
     return 0;
 }

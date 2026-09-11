@@ -16,15 +16,6 @@ std::string exceptionMessage(const std::exception &error)
     return error.what();
 }
 
-std::chrono::milliseconds remainingUntil(std::chrono::steady_clock::time_point deadline)
-{
-    const auto now = std::chrono::steady_clock::now();
-    if (now >= deadline) {
-        return std::chrono::milliseconds::zero();
-    }
-    return std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now);
-}
-
 }  // namespace
 
 void HealthDashboard::requestStop() noexcept
@@ -41,12 +32,12 @@ void HealthDashboard::requestStop() noexcept
                 stopping_ = true;
                 ++generation_;
             }
+            cancellation_source_.requestStop();
             work_.reset();
             open_pending_ = false;
             open_ = false;
             connection = connection_;
         }
-        cancellation_source_.requestStop();
         running_.store(false, std::memory_order_release);
         cv_.notify_all();
         if (connection) {
@@ -55,21 +46,20 @@ void HealthDashboard::requestStop() noexcept
     }
     catch (...) {
         running_.store(false, std::memory_order_release);
-        cancellation_source_.requestStop();
         cv_.notify_all();
     }
 }
 
 bool HealthDashboard::shutdownWithin(std::chrono::milliseconds timeout)
 {
-    const auto deadline = std::chrono::steady_clock::now() + std::max(timeout, std::chrono::milliseconds::zero());
+    return shutdownUntil(std::chrono::steady_clock::now() + std::max(timeout, std::chrono::milliseconds::zero()));
+}
 
-    {
-        std::scoped_lock lifecycle_lock(lifecycle_mutex_);
-        if (worker_.joinable() && worker_id_ == std::this_thread::get_id()) {
-            requestStop();
-            return false;
-        }
+bool HealthDashboard::shutdownUntil(std::chrono::steady_clock::time_point deadline)
+{
+    requestStop();
+    if (worker_.isCurrentThread()) {
+        return false;
     }
 
     std::unique_lock lifecycle_lock(lifecycle_mutex_);
@@ -105,23 +95,9 @@ bool HealthDashboard::shutdownWithin(std::chrono::milliseconds timeout)
     }
     lifecycle_lock.unlock();
 
-    if (worker_.joinable()) {
-        {
-            std::unique_lock exit_lock(worker_exit_mutex_);
-            if (!worker_exit_cv_.wait_until(exit_lock, deadline, [this] { return worker_exited_; })) {
-                finish_lifecycle();
-                return false;
-            }
-        }
-        try {
-            worker_.join();
-        }
-        catch (...) {
-            finish_lifecycle();
-            return false;
-        }
-        std::scoped_lock lock(lifecycle_mutex_);
-        worker_id_ = {};
+    if (!worker_.reapUntil(deadline)) {
+        finish_lifecycle();
+        return false;
     }
 
     std::shared_ptr<HealthDashboardConnection> connection;
@@ -130,8 +106,7 @@ bool HealthDashboard::shutdownWithin(std::chrono::milliseconds timeout)
         connection = connection_;
     }
     if (connection) {
-        const auto remaining = remainingUntil(deadline);
-        if (remaining == std::chrono::milliseconds::zero() || !connection->closeWithin(remaining)) {
+        if (!connection->closeUntil(deadline)) {
             finish_lifecycle();
             return false;
         }
@@ -159,55 +134,52 @@ void HealthDashboard::shutdown()
 
 bool HealthDashboard::startWorker()
 {
-    std::unique_lock lifecycle_lock(lifecycle_mutex_);
-    if (lifecycle_active_) {
-        return false;
+    {
+        std::scoped_lock lock(lifecycle_mutex_);
+        if (lifecycle_active_) {
+            return false;
+        }
+        lifecycle_active_ = true;
     }
+    struct LifecycleGuard {
+        HealthDashboard &dashboard;
+        ~LifecycleGuard()
+        {
+            {
+                std::scoped_lock lock(dashboard.lifecycle_mutex_);
+                dashboard.lifecycle_active_ = false;
+            }
+            dashboard.lifecycle_cv_.notify_all();
+        }
+    } guard{*this};
     {
         std::scoped_lock lock(mutex_);
         if (stopping_ || shutdown_complete_) {
             return false;
         }
-    }
-    if (running_.load(std::memory_order_acquire)) {
-        return true;
-    }
-    if (worker_.joinable()) {
-        bool exited = false;
-        {
-            std::scoped_lock exit_lock(worker_exit_mutex_);
-            exited = worker_exited_;
+        if (running_.load(std::memory_order_acquire)) {
+            return true;
         }
-        if (!exited || worker_id_ == std::this_thread::get_id()) {
-            return false;
-        }
-        try {
-            worker_.join();
-        }
-        catch (...) {
-            return false;
-        }
-        worker_id_ = {};
     }
-
-    {
-        std::scoped_lock exit_lock(worker_exit_mutex_);
-        worker_exited_ = false;
-    }
-    running_.store(true, std::memory_order_release);
-    try {
-        worker_ = std::thread([this] { run(); });
-    }
-    catch (...) {
-        running_.store(false, std::memory_order_release);
-        {
-            std::scoped_lock exit_lock(worker_exit_mutex_);
-            worker_exited_ = true;
-        }
-        worker_exit_cv_.notify_all();
+    if (!worker_.reapUntil(std::chrono::steady_clock::now())) {
         return false;
     }
-    worker_id_ = worker_.get_id();
+    {
+        std::scoped_lock lock(mutex_);
+        if (stopping_) {
+            return false;
+        }
+        running_.store(true, std::memory_order_release);
+    }
+    {
+        std::scoped_lock lock(worker_exit_mutex_);
+        worker_exited_ = false;
+    }
+    if (!worker_.start([this] { run(); })) {
+        running_.store(false, std::memory_order_release);
+        signalWorkerExit();
+        return false;
+    }
     return true;
 }
 
@@ -225,26 +197,19 @@ void HealthDashboard::markFailure(const std::shared_ptr<HealthDashboardConnectio
     failed_.store(true, std::memory_order_release);
     running_.store(false, std::memory_order_release);
     bool current = false;
-    bool stopping = false;
     {
         std::scoped_lock lock(mutex_);
         current = connection_ == connection;
-        stopping = stopping_;
         if (current) {
+            cancellation_source_.requestStop();
+            ++generation_;
             open_ = false;
             open_pending_ = false;
             work_.reset();
-            work_active_ = false;
         }
     }
     if (connection) {
         connection->requestStop();
-        if (!stopping && connection->closeWithin(kBackgroundCloseBudget)) {
-            std::scoped_lock lock(mutex_);
-            if (connection_ == connection) {
-                connection_.reset();
-            }
-        }
     }
     cv_.notify_all();
 }
@@ -259,14 +224,6 @@ void HealthDashboard::completeOpen(OpenResult result, const std::shared_ptr<Heal
         stopping = stopping_;
         current = !stopping_ && result.generation == generation_ && open_pending_ &&
                   (!connection || connection_ == connection);
-        work_active_ = false;
-        if (current) {
-            open_pending_ = false;
-            open_ = result.ok;
-            if (result.ok) {
-                last_update_ms_ = initial_time_ms;
-            }
-        }
     }
     if (connection && (!current || !result.ok)) {
         connection->requestStop();
@@ -278,6 +235,21 @@ void HealthDashboard::completeOpen(OpenResult result, const std::shared_ptr<Heal
         }
     }
     result.completed = true;
+    {
+        std::scoped_lock lock(mutex_);
+        current = !stopping_ && result.generation == generation_ && open_pending_;
+        work_active_ = false;
+        if (current) {
+            open_pending_ = false;
+            open_ = result.ok;
+            if (result.ok) {
+                last_update_ms_ = initial_time_ms;
+            }
+        }
+    }
+    if (!current) {
+        return;
+    }
     CompletionCallback completion;
     {
         std::scoped_lock completion_lock(completion_mutex_);
@@ -288,7 +260,7 @@ void HealthDashboard::completeOpen(OpenResult result, const std::shared_ptr<Heal
     }
     {
         std::scoped_lock lock(mutex_);
-        if (stopping_ || result.generation != generation_) {
+        if (stopping_) {
             return;
         }
     }
@@ -297,7 +269,7 @@ void HealthDashboard::completeOpen(OpenResult result, const std::shared_ptr<Heal
             completion(std::move(result));
         }
         catch (...) {
-            markFailure(connection);
+            failed_.store(true, std::memory_order_release);
         }
     }
 }
@@ -334,10 +306,34 @@ void HealthDashboard::run() noexcept
                 }
 
                 std::shared_ptr<HealthDashboardConnection> connection;
+                {
+                    std::scoped_lock lock(mutex_);
+                    connection = connection_;
+                }
+                if (connection) {
+                    connection->requestStop();
+                    if (!connection->closeWithin(kBackgroundCloseBudget)) {
+                        result.error = "previous health dashboard still closing; retry";
+                        completeOpen(std::move(result), {}, work.data.generated_time_ms);
+                        continue;
+                    }
+                    {
+                        std::scoped_lock lock(mutex_);
+                        connection_.reset();
+                    }
+                    connection.reset();
+                }
+                if (work.cancellation.stopRequested()) {
+                    std::scoped_lock lock(mutex_);
+                    work_active_ = false;
+                    continue;
+                }
                 try {
                     std::unique_ptr<HealthDashboardConnection> created = connection_factory_();
                     if (created) {
                         connection = std::shared_ptr<HealthDashboardConnection>(std::move(created));
+                        std::scoped_lock lock(mutex_);
+                        connection_ = connection;
                     }
                 }
                 catch (const std::exception &error) {
@@ -351,7 +347,6 @@ void HealthDashboard::run() noexcept
                 if (work.cancellation.stopRequested()) {
                     if (connection) {
                         connection->requestStop();
-                        static_cast<void>(connection->closeWithin(kBackgroundCloseBudget));
                     }
                     std::scoped_lock lock(mutex_);
                     work_active_ = false;
@@ -375,14 +370,11 @@ void HealthDashboard::run() noexcept
                     result.error = "health dashboard connection setup failed";
                 }
                 if (!result.error.empty()) {
-                    connection->requestStop();
-                    static_cast<void>(connection->closeWithin(kBackgroundCloseBudget));
-                    completeOpen(std::move(result), {}, work.data.generated_time_ms);
+                    completeOpen(std::move(result), connection, work.data.generated_time_ms);
                     continue;
                 }
                 if (work.cancellation.stopRequested()) {
                     connection->requestStop();
-                    static_cast<void>(connection->closeWithin(kBackgroundCloseBudget));
                     std::scoped_lock lock(mutex_);
                     work_active_ = false;
                     continue;
@@ -391,18 +383,12 @@ void HealthDashboard::run() noexcept
                 bool admitted = false;
                 {
                     std::scoped_lock lock(mutex_);
-                    admitted = !stopping_ && work.generation == generation_ && open_pending_ && !connection_;
-                    if (admitted) {
-                        connection_ = connection;
-                    }
+                    admitted =
+                        !stopping_ && work.generation == generation_ && open_pending_ && connection_ == connection;
                 }
                 if (!admitted || work.cancellation.stopRequested()) {
                     connection->requestStop();
-                    static_cast<void>(connection->closeWithin(kBackgroundCloseBudget));
                     std::scoped_lock lock(mutex_);
-                    if (connection_ == connection) {
-                        connection_.reset();
-                    }
                     work_active_ = false;
                     continue;
                 }

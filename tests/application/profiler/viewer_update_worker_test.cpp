@@ -11,7 +11,26 @@
 #include <utility>
 #include <vector>
 
+#include "../../net/native_exit_gate.h"
 #include "application/profiler/viewer_update_worker.h"
+
+namespace spark::detail {
+struct DeadlineThreadTestAccess {
+    static bool reaping(DeadlineThread &worker)
+    {
+        std::shared_ptr<DeadlineThread::Run> run;
+        {
+            std::scoped_lock lock(worker.mutex_);
+            run = worker.run_;
+        }
+        if (!run) {
+            return false;
+        }
+        std::scoped_lock lock(run->mutex);
+        return run->reaping;
+    }
+};
+}  // namespace spark::detail
 
 namespace {
 
@@ -26,6 +45,7 @@ struct Probe {
     bool execution_entered = false;
     bool release_execution = false;
     bool fail_next = false;
+    spark::CancellationToken cancellation;
 };
 
 template <typename Predicate>
@@ -56,11 +76,76 @@ void resetExecution(Probe &probe, bool block)
 
 int main()
 {
+    {
+        spark::test::NativeExitGate gate;
+        spark::ViewerUpdateWorker worker(
+            [&](const auto &) -> std::string {
+                spark::test::holdNativeThreadExit(gate);
+                throw std::runtime_error("exit gate");
+            },
+            [](const auto &) {});
+        assert(worker.start());
+        assert(worker.enqueueOpen({}, {}, "Exit"));
+        gate.waitEntered();
+        const auto begin = std::chrono::steady_clock::now();
+        assert(!worker.stopUntil(begin + 20ms));
+        assert(std::chrono::steady_clock::now() - begin < 250ms);
+        assert(!worker.start());
+        gate.unblock();
+        assert(worker.stopUntil(std::chrono::steady_clock::now() + 2s));
+        assert(worker.start());
+        worker.stop();
+    }
+    {
+        spark::detail::DeadlineThread worker;
+        spark::test::NativeExitGate gate;
+        std::atomic<bool> self_done{false};
+        struct SelfExit {
+            spark::detail::DeadlineThread &worker;
+            spark::test::NativeExitGate &gate;
+            std::atomic<bool> &done;
+            ~SelfExit()
+            {
+                gate.block();
+                const auto begin = std::chrono::steady_clock::now();
+                assert(worker.isCurrentThread());
+                assert(!worker.reapUntil(begin + 2s));
+                assert(std::chrono::steady_clock::now() - begin < 100ms);
+                done.store(true);
+            }
+        };
+        std::atomic<bool> reaper_ready{false};
+        std::atomic<bool> allow_reap{false};
+        std::thread reaper([&] {
+            reaper_ready.store(true);
+            while (!allow_reap.load()) {
+                std::this_thread::yield();
+            }
+            assert(worker.reapUntil(std::chrono::steady_clock::now() + 2s));
+        });
+        while (!reaper_ready.load()) {
+            std::this_thread::yield();
+        }
+        assert(worker.start([&] { static thread_local SelfExit exit{worker, gate, self_done}; }));
+        gate.waitEntered();
+        allow_reap.store(true);
+        const auto claim_deadline = std::chrono::steady_clock::now() + 2s;
+        while (!spark::detail::DeadlineThreadTestAccess::reaping(worker) &&
+               std::chrono::steady_clock::now() < claim_deadline) {
+            std::this_thread::yield();
+        }
+        assert(spark::detail::DeadlineThreadTestAccess::reaping(worker));
+        gate.unblock();
+        reaper.join();
+        assert(self_done.load());
+        assert(!worker.joinable());
+    }
     auto probe = std::make_shared<Probe>();
     spark::ViewerUpdateWorker worker(
         [probe](const spark::ViewerUpdateWorker::WorkItem &work) {
             std::unique_lock lock(probe->mutex);
             probe->executed.push_back(work.type);
+            probe->cancellation = work.cancellation;
             probe->execution_entered = true;
             probe->cv.notify_all();
             if (probe->block_execution) {
@@ -118,10 +203,18 @@ int main()
     assert(worker.enqueueCombined({}, {}, second_generation));
     assert(waitFor(*probe, [&] { return probe->execution_entered; }));
     worker.invalidate();
+    {
+        std::scoped_lock lock(probe->mutex);
+        assert(probe->cancellation.stopRequested());
+    }
+    const auto stop_begin = std::chrono::steady_clock::now();
+    assert(!worker.stopUntil(stop_begin + 20ms));
+    assert(std::chrono::steady_clock::now() - stop_begin < 250ms);
+    assert(!worker.start());
     const auto invalidated_generation = worker.generation();
     assert(invalidated_generation == second_generation + 1);
     assert(!worker.current(second_generation));
-    assert(worker.current(invalidated_generation));
+    assert(!worker.current(invalidated_generation));
     assert(!worker.completeOpen(second_generation));
     assert(!worker.enqueueCombined({}, {}, second_generation));
     {

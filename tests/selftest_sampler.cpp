@@ -362,10 +362,11 @@ bool verifyAllThreadSampling()
         stop_workers();
         return false;
     }
-    // Hosted Windows runners can spend most of a short observation interval
-    // inside one expensive StackWalk64 attempt.  Poll until at least two
-    // thread trees are captured, with a generous deadline for slow hosts.
-    waitForCondition([&] { return sampler.threadTrees().size() >= 2 && sampler.sampleCount() > 0; }, 10s);
+    const auto observation_start = std::chrono::steady_clock::now();
+    // Atomic progress allows extra capture time on slow hosts; inspect trees only after stop().
+    waitForCondition(
+        [&] { return std::chrono::steady_clock::now() - observation_start >= 200ms && sampler.sampleCount() >= 2; },
+        10s);
     sampler.stop();
     stop_workers();
 

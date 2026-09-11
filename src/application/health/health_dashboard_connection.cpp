@@ -27,6 +27,10 @@ public:
     bool hasClient() const override { return socket_.hasClient(); }
     void requestStop() noexcept override { socket_.requestStop(); }
     bool closeWithin(std::chrono::milliseconds timeout) noexcept override { return socket_.closeWithin(timeout); }
+    bool closeUntil(std::chrono::steady_clock::time_point deadline) noexcept override
+    {
+        return socket_.closeUntil(deadline);
+    }
     void close() override { socket_.close(); }
     SocketChannelInfo channelInfo() const override { return socket_.channelInfo(); }
     bool sendStatistics(const std::string &platform, const std::string &system, const std::string &metrics) override

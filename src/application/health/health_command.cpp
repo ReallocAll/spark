@@ -17,19 +17,6 @@
 
 namespace spark {
 
-namespace {
-
-std::chrono::milliseconds remainingUntil(std::chrono::steady_clock::time_point deadline)
-{
-    const auto now = std::chrono::steady_clock::now();
-    if (now >= deadline) {
-        return std::chrono::milliseconds::zero();
-    }
-    return std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now);
-}
-
-}  // namespace
-
 HealthCommand::HealthCommand(StatisticsService &statistics, ProfileMetadataProvider &metadata_provider,
                              std::string bytebin_url, std::string viewer_url, std::string bytesocks_host,
                              TrustedViewersState &trusted_viewers, MainThreadDispatcher &dispatcher,
@@ -77,7 +64,9 @@ HealthCommand::HealthCommand(StatisticsService &statistics, ProfileMetadataProvi
 
 HealthCommand::~HealthCommand()
 {
-    shutdown();
+    if (!shutdownWithin(kDefaultShutdownBudget)) {
+        std::terminate();
+    }
 }
 
 bool HealthCommand::shutdownWithin(std::chrono::milliseconds timeout)
@@ -92,28 +81,10 @@ bool HealthCommand::shutdownWithin(std::chrono::milliseconds timeout)
 
     bool dashboard_stopped = true;
     if (dashboard_) {
-        dashboard_stopped = dashboard_->shutdownWithin(remainingUntil(deadline));
+        dashboard_stopped = dashboard_->shutdownUntil(deadline);
     }
 
-    bool upload_stopped = true;
-    if (upload_thread_.joinable()) {
-        if (upload_thread_.get_id() == std::this_thread::get_id()) {
-            upload_stopped = false;
-        }
-        else {
-            std::unique_lock lock(upload_exit_mutex_);
-            upload_stopped = upload_exit_cv_.wait_until(lock, deadline, [this] { return upload_worker_exited_; });
-            lock.unlock();
-            if (upload_stopped) {
-                try {
-                    upload_thread_.join();
-                }
-                catch (...) {
-                    upload_stopped = false;
-                }
-            }
-        }
-    }
+    const bool upload_stopped = upload_thread_.reapUntil(deadline);
     if (upload_stopped) {
         uploading_.store(false, std::memory_order_release);
     }

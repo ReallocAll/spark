@@ -58,7 +58,7 @@ public:
 
     ~EnvironmentGuard()
     {
-#if defined(_WIN32)
+#ifdef _WIN32
         if (had_value_) {
             _putenv_s("ENDSTONE_SPARK_CI_DIAGNOSTICS", previous_value_.c_str());
         }
@@ -77,7 +77,7 @@ public:
 
     static bool set(const char *value)
     {
-#if defined(_WIN32)
+#ifdef _WIN32
         return _putenv_s("ENDSTONE_SPARK_CI_DIAGNOSTICS", value != nullptr ? value : "") == 0;
 #else
         return value != nullptr ? setenv("ENDSTONE_SPARK_CI_DIAGNOSTICS", value, 1) == 0
@@ -304,7 +304,7 @@ bool testMappingOwnershipAndReopen()
         return false;
     }
 
-    retained_region->generation.store((std::numeric_limits<std::uint64_t>::max)(), std::memory_order_seq_cst);
+    retained_region->generation.store(std::numeric_limits<std::uint64_t>::max(), std::memory_order_seq_cst);
     CiDiagnostics wrapped;
     if (!require(wrapped.open(), "mapping lifetime generation wrap failed") ||
         !require(wrapped.regionForTesting()->generation.load(std::memory_order_seq_cst) == 1,
@@ -336,7 +336,7 @@ bool testInvalidContextAndCoherentPublication()
     auto *region = diagnostics.regionForTesting();
     const auto invalid_count = static_cast<CiDiagnosticContext>(CiDiagnosticContext::Count);
     diagnostics.publish(invalid_count, CiDiagnosticPhase::ApplicationCommandEnter, 1, 2);
-    diagnostics.publish(static_cast<CiDiagnosticContext>((std::numeric_limits<std::uint64_t>::max)()),
+    diagnostics.publish(static_cast<CiDiagnosticContext>(std::numeric_limits<std::uint64_t>::max()),
                         CiDiagnosticPhase::ApplicationCommandExit, 3, 4);
     for (const auto &record : region->records) {
         if (!require(record.sequence.load() == 0, "invalid context modified a record")) {

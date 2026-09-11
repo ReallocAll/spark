@@ -10,6 +10,7 @@
 #include <string>
 #include <utility>
 
+#include "../../net/native_exit_gate.h"
 #include "application/health/health_command.h"
 #include "core/command/arguments.h"
 
@@ -80,12 +81,35 @@ public:
 
 class Dispatcher final : public spark::MainThreadDispatcher {
 public:
-    void runOnMainThread(std::function<void()> task) override { task(); }
+    void runOnMainThread(std::function<void()> task) override
+    {
+        if (delayed) {
+            pending.push_back(std::move(task));
+        }
+        else {
+            task();
+        }
+    }
+    void drain()
+    {
+        auto tasks = std::move(pending);
+        pending.clear();
+        for (auto &task : tasks) {
+            task();
+        }
+    }
+    bool delayed = false;
+    std::vector<std::function<void()>> pending;
 };
 
 class ThrowingNotifier final : public spark::ResultNotifier {
 public:
-    void notify(const std::string &, const std::string &) override { throw std::runtime_error("notify failed"); }
+    void notify(const std::string &sender, const std::string &message) override
+    {
+        messages.emplace_back(sender, message);
+        throw std::runtime_error("notify failed");
+    }
+    std::vector<std::pair<std::string, std::string>> messages;
 };
 
 class Sender final : public spark::CommandSender {
@@ -240,10 +264,74 @@ void test_upload_timeout_retains_worker_for_later_reap()
     assert(command.shutdownWithin(std::chrono::seconds(2)));
 }
 
+void testDelayedCommittedResultSurvivesRetryAndExpiredOwner()
+{
+    spark::StatisticsService statistics;
+    Metadata metadata;
+    Dispatcher dispatcher;
+    dispatcher.delayed = true;
+    ThrowingNotifier notifier;
+    spark::TrustedViewersState trusted(std::filesystem::temp_directory_path() / "spark-health-delayed.json");
+    auto command =
+        std::make_unique<spark::HealthCommand>(statistics, metadata, "", "", "", trusted, dispatcher, notifier);
+    spark::HealthDashboard::OpenResult result;
+    result.accepted = true;
+    result.completed = true;
+    result.generation = 1;
+    result.sender_name = "First";
+    spark::HealthCommandTestAccess::complete(*command, result);
+    spark::HealthCommandTestAccess::prepareStaleCompletion(*command);
+    assert(dispatcher.pending.size() == 1);
+    dispatcher.drain();
+    assert(notifier.messages.size() == 1);
+    assert(notifier.messages[0].first == "First");
+    assert(spark::HealthCommandTestAccess::dashboardSender(*command) == "NewSender");
+    result.generation = 2;
+    result.sender_name = "Second";
+    spark::HealthCommandTestAccess::complete(*command, result);
+    assert(dispatcher.pending.size() == 1);
+    assert(command->shutdownWithin(std::chrono::seconds(2)));
+    command.reset();
+    dispatcher.drain();
+    assert(notifier.messages.size() == 1);
+}
+
+void testUploadNativeExitRejectsReplacement()
+{
+    spark::StatisticsService statistics;
+    Metadata metadata;
+    Dispatcher dispatcher;
+    ThrowingNotifier notifier;
+    Sender sender;
+    spark::test::NativeExitGate gate;
+    std::atomic<int> calls{0};
+    spark::TrustedViewersState trusted(std::filesystem::temp_directory_path() / "spark-health-native-exit.json");
+    spark::HealthCommand::UploadFunction upload = [&](const auto &, const auto &, const auto &, const auto &,
+                                                      const auto &) {
+        ++calls;
+        spark::test::holdNativeThreadExit(gate);
+        return spark::UploadResult{.error = "native exit gate"};
+    };
+    spark::HealthCommand command(statistics, metadata, {}, {}, {}, trusted, dispatcher, notifier, {},
+                                 std::move(upload));
+    command.cmdHealth(sender, spark::Arguments({"upload"}, true));
+    gate.waitEntered();
+    assert(!spark::HealthCommandTestAccess::uploading(command));
+    command.cmdHealth(sender, spark::Arguments({"upload"}, true));
+    assert(calls.load() == 1);
+    const auto begin = std::chrono::steady_clock::now();
+    assert(!command.shutdownWithin(std::chrono::milliseconds(20)));
+    assert(std::chrono::steady_clock::now() - begin < std::chrono::milliseconds(250));
+    gate.unblock();
+    assert(command.shutdownWithin(std::chrono::seconds(2)));
+}
+
 }  // namespace
 
 int main()
 {
+    testUploadNativeExitRejectsReplacement();
+    testDelayedCommittedResultSurvivesRetryAndExpiredOwner();
     test_upload_state_clears_before_throwing_notification();
     test_stale_dashboard_completion_is_ignored();
     test_current_failed_completion_clears_state_when_notification_throws();

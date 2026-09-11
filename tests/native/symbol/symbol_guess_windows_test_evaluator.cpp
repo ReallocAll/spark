@@ -33,13 +33,17 @@ int evaluateMappedPe(int argc, char **argv)
     }
     IMAGE_DOS_HEADER dos{};
     std::memcpy(&dos, file.data(), sizeof(dos));
-    if (dos.e_magic != IMAGE_DOS_SIGNATURE || dos.e_lfanew < 0 ||
-        static_cast<std::size_t>(dos.e_lfanew) > file.size() - sizeof(IMAGE_NT_HEADERS64)) {
+    if (dos.e_magic != IMAGE_DOS_SIGNATURE || dos.e_lfanew < 0) {
+        std::fprintf(stderr, "invalid DOS/NT headers\n");
+        return 2;
+    }
+    const auto nt_offset = static_cast<std::size_t>(dos.e_lfanew);
+    if (nt_offset > file.size() || sizeof(IMAGE_NT_HEADERS64) > file.size() - nt_offset) {
         std::fprintf(stderr, "invalid DOS/NT headers\n");
         return 2;
     }
     IMAGE_NT_HEADERS64 nt{};
-    std::memcpy(&nt, file.data() + dos.e_lfanew, sizeof(nt));
+    std::memcpy(&nt, file.data() + nt_offset, sizeof(nt));
     if (nt.Signature != IMAGE_NT_SIGNATURE || nt.OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC ||
         nt.OptionalHeader.SizeOfImage == 0 || nt.OptionalHeader.SizeOfImage > 1U << 30) {
         std::fprintf(stderr, "unsupported PE\n");

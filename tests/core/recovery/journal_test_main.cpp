@@ -18,6 +18,7 @@ int main()
     testUnsupportedAndMixedVersionsRejected();
     testV3GlobalWindowsAndClippedStats();
     testRecoveryPlayerReplay();
+    testRecoveryGrouping();
     testRecoveryPlayerEmptyJournal();
     testCleanEndDetected();
     testNoCleanEndRecovered();

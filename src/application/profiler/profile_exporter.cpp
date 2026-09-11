@@ -38,6 +38,9 @@ ProfileExporter::Result ProfileExporter::exportProfile(Profiler &profiler, const
         return result;
     };
     try {
+        if (cancellation.stopRequested()) {
+            return cancelled();
+        }
         std::string body = profiler.exportData(ctx);
         // Serialization has copied the completed allocation tree. Persistent
         // count-only may now safely reset/reuse the native allocation sampler
@@ -47,7 +50,7 @@ ProfileExporter::Result ProfileExporter::exportProfile(Profiler &profiler, const
         if (cancellation.stopRequested()) {
             return cancelled();
         }
-        std::string compressed = gzipCompress(body);
+        std::string compressed = gzipCompress(body, cancellation);
         if (cancellation.stopRequested()) {
             return cancelled();
         }
@@ -56,7 +59,7 @@ ProfileExporter::Result ProfileExporter::exportProfile(Profiler &profiler, const
                 return cancelled();
             }
             ProfileFileResult saved =
-#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+#ifdef SPARK_ALLOCATION_LIFECYCLE_TESTING
                 save_function_ ? save_function_(storage_dir_, body, nowMs())
                                : saveProfileToDirectory(storage_dir_, body, nowMs());
 #else
@@ -79,7 +82,7 @@ ProfileExporter::Result ProfileExporter::exportProfile(Profiler &profiler, const
                 return cancelled();
             }
             UploadResult upload_result =
-#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+#ifdef SPARK_ALLOCATION_LIFECYCLE_TESTING
                 upload_function_ ? upload_function_(compressed, bytebin_url_, kSamplerContentType,
                                                     std::string("endstone-spark/") + kVersion, cancellation)
                                  : uploadToBytebin(compressed, bytebin_url_, kSamplerContentType,
@@ -101,7 +104,7 @@ ProfileExporter::Result ProfileExporter::exportProfile(Profiler &profiler, const
                     return cancelled();
                 }
                 ProfileFileResult saved =
-#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+#ifdef SPARK_ALLOCATION_LIFECYCLE_TESTING
                     save_function_ ? save_function_(storage_dir_, body, nowMs())
                                    : saveProfileToDirectory(storage_dir_, body, nowMs());
 #else

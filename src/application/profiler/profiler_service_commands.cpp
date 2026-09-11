@@ -22,6 +22,10 @@ std::int64_t nowMs()
 
 void ProfilerService::cmdStart(CommandSender &sender, const Arguments &args)
 {
+    if (stopping_.load(std::memory_order_acquire)) {
+        sender.sendErrorMessage("The profiler service is stopping.");
+        return;
+    }
     if (exporting_.load()) {
         sender.sendMessage("The profiler has stopped; results are still being finalized.");
         return;
@@ -62,6 +66,14 @@ void ProfilerService::cmdStart(CommandSender &sender, const Arguments &args)
         background_started_ = false;
     }
 
+    const auto replacement_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+    const bool timer_stopped = resetProfilerTimeoutUntil(replacement_deadline);
+    const bool viewer_stopped = !viewer_open_ || viewer_open_->retireUntil(replacement_deadline);
+    if (!timer_stopped || !viewer_stopped) {
+        sender.sendErrorMessage(!timer_stopped ? "previous profiler timer still stopping; retry"
+                                               : "previous live viewer still closing; retry");
+        return;
+    }
     resetProfilerTimeout();
     std::vector<NativePluginSource> native_plugin_sources;
     try {
@@ -375,6 +387,10 @@ void ProfilerService::cmdCancel(CommandSender &sender)
 
 void ProfilerService::cmdOpen(CommandSender &sender, const Arguments &args)
 {
+    if (stopping_.load(std::memory_order_acquire)) {
+        sender.sendErrorMessage("The profiler service is stopping.");
+        return;
+    }
     if (viewer_open_) {
         viewer_open_->cmdOpen(sender, args);
     }

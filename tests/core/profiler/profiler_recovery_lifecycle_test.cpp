@@ -2,6 +2,7 @@
 #include <cassert>
 #include <chrono>
 #include <condition_variable>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -36,6 +37,21 @@ struct ProfilerLifecycleTestAccess {
     }
 
     static AllocationSampler &allocationSampler(Profiler &profiler) { return profiler.allocation_sampler_; }
+
+    static bool allocationExportPending(const Profiler &profiler)
+    {
+        return profiler.allocation_export_pending_.load(std::memory_order_acquire);
+    }
+
+    static bool persistentCountingActive(const Profiler &profiler)
+    {
+        return profiler.persistent_allocation_counting_active_.load(std::memory_order_acquire);
+    }
+
+    static std::uint64_t persistentBytesBase(const Profiler &profiler)
+    {
+        return profiler.persistent_allocation_bytes_base_.load(std::memory_order_acquire);
+    }
 
     static bool recoveryRetained(const Profiler &profiler)
     {
@@ -337,6 +353,158 @@ void testBackendPendingBlocksBothModesAndPreservesState()
     assert(profiler.shutdown(error));
 }
 
+void testFailedAllocationCancelResumesCounting()
+{
+    spark::Profiler profiler;
+    std::string error;
+    const auto thread_id = spark::currentNativeThreadId();
+    assert(profiler.setPersistentAllocationCountingEnabled(true, thread_id, error));
+    spark::ProfilerOptions options;
+    options.alloc = true;
+    options.fail_allocation_aggregator_for_testing = true;
+    assert(profiler.start(options, thread_id, error));
+    const auto base = spark::ProfilerLifecycleTestAccess::persistentBytesBase(profiler);
+    assert(waitFor([&] { return profiler.backendFailure(error); }, 2s));
+    assert(!profiler.stopSampling(error));
+    assert(error.find("injected allocation aggregator failure") != std::string::npos);
+    auto &sampler = spark::ProfilerLifecycleTestAccess::allocationSampler(profiler);
+    assert(!sampler.running());
+    assert(!sampler.backendCleanupPending());
+    assert(!sampler.aggregatorMayBeAlive());
+    assert(sampler.allocationDiagnostics().accounting_state == spark::AllocationAccountingState::Failed);
+    assert(profiler.backendFailure(error));
+    assert(spark::ProfilerLifecycleTestAccess::allocationExportPending(profiler));
+    const auto expected_base = base + sampler.observedBytes();
+    assert(spark::ProfilerLifecycleTestAccess::persistentBytesBase(profiler) == expected_base);
+    assert(profiler.cancel(error));
+    assert(error.empty());
+    assert(!profiler.running());
+    assert(!spark::ProfilerLifecycleTestAccess::allocationExportPending(profiler));
+    assert(spark::ProfilerLifecycleTestAccess::persistentCountingActive(profiler));
+    assert(sampler.running());
+    assert(!profiler.backendFailure(error));
+    assert(spark::ProfilerLifecycleTestAccess::persistentBytesBase(profiler) == expected_base);
+    assert(profiler.resumePersistentAllocationCounting(error));
+    assert(spark::ProfilerLifecycleTestAccess::persistentBytesBase(profiler) == expected_base);
+    assert(profiler.shutdown(error));
+}
+
+void testAllocationCancelRetainsPendingOwnership()
+{
+    spark::Profiler profiler;
+    std::string error;
+    const auto thread_id = spark::currentNativeThreadId();
+    assert(profiler.setPersistentAllocationCountingEnabled(true, thread_id, error));
+    spark::ProfilerOptions options;
+    options.alloc = true;
+    assert(profiler.start(options, thread_id, error));
+    const auto base = spark::ProfilerLifecycleTestAccess::persistentBytesBase(profiler);
+    auto &sampler = spark::ProfilerLifecycleTestAccess::allocationSampler(profiler);
+    void *probe = std::malloc(4096);
+    assert(probe != nullptr);
+    static_cast<volatile unsigned char *>(probe)[0] = 1;
+    std::free(probe);
+    assert(sampler.observedBytes() >= 4096);
+    spark::test::TrackingGate tracking_gate;
+    std::thread holder(
+        [&] { (void)spark::test::AllocationLifecycleTestAccess::holdTrackingCall(sampler, tracking_gate); });
+    assert(waitFor([&] { return tracking_gate.entered.load(std::memory_order_acquire); }, 2s));
+    assert(!profiler.cancel(error));
+    assert(!error.empty());
+    assert(!profiler.running());
+    assert(sampler.backendCleanupPending());
+    assert(spark::ProfilerLifecycleTestAccess::allocationExportPending(profiler));
+    assert(!spark::ProfilerLifecycleTestAccess::persistentCountingActive(profiler));
+    assert(spark::ProfilerLifecycleTestAccess::persistentBytesBase(profiler) == base);
+    assert(!profiler.start(options, thread_id, error));
+    assert(!profiler.start({}, thread_id, error));
+    tracking_gate.release.store(true, std::memory_order_release);
+    holder.join();
+    assert(tracking_gate.exited.load(std::memory_order_acquire));
+    const auto expected_base = base + sampler.observedBytes();
+    assert(profiler.cancel(error));
+    assert(!sampler.backendCleanupPending());
+    assert(!spark::ProfilerLifecycleTestAccess::allocationExportPending(profiler));
+    assert(spark::ProfilerLifecycleTestAccess::persistentCountingActive(profiler));
+    assert(spark::ProfilerLifecycleTestAccess::persistentBytesBase(profiler) == expected_base);
+    assert(profiler.resumePersistentAllocationCounting(error));
+    assert(spark::ProfilerLifecycleTestAccess::persistentBytesBase(profiler) == expected_base);
+    assert(profiler.start(options, thread_id, error));
+    assert(profiler.cancel(error));
+    assert(profiler.shutdown(error));
+}
+
+#ifdef __linux__
+std::atomic<bool> SnapshotConsumerEntered{false};
+std::atomic<bool> ReleaseSnapshotConsumer{false};
+
+void holdSnapshotConsumer() noexcept
+{
+    SnapshotConsumerEntered.store(true, std::memory_order_release);
+    while (!ReleaseSnapshotConsumer.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+    }
+}
+
+void testFailedCountingStartPreservesRetiredBytes()
+{
+    spark::test::LinuxAllocationTestControl control;
+    spark::Profiler profiler;
+    std::string error;
+    const auto thread_id = spark::currentNativeThreadId();
+    assert(profiler.setPersistentAllocationCountingEnabled(true, thread_id, error));
+    spark::ProfilerOptions options;
+    options.alloc = true;
+    assert(profiler.start(options, thread_id, error));
+    const auto base = spark::ProfilerLifecycleTestAccess::persistentBytesBase(profiler);
+    void *probe = std::malloc(4096);
+    assert(probe != nullptr);
+    static_cast<volatile unsigned char *>(probe)[0] = 1;
+    std::free(probe);
+    assert(profiler.stopSampling(error));
+    auto &sampler = spark::ProfilerLifecycleTestAccess::allocationSampler(profiler);
+    const auto retired_bytes = sampler.observedBytes();
+    assert(retired_bytes >= 4096);
+    const auto expected_base = base + retired_bytes;
+    assert(spark::ProfilerLifecycleTestAccess::persistentBytesBase(profiler) == expected_base);
+    assert(!sampler.running());
+    assert(!sampler.backendCleanupPending());
+    assert(!sampler.aggregatorMayBeAlive());
+
+    SnapshotConsumerEntered.store(false, std::memory_order_release);
+    ReleaseSnapshotConsumer.store(false, std::memory_order_release);
+    control.snapshot_admitted = holdSnapshotConsumer;
+    assert(spark::test::AllocationLifecycleTestAccess::configureLinux(sampler, &control));
+    bool snapshot_succeeded = true;
+    std::thread consumer([&] {
+        spark::AllocationSnapshot snapshot;
+        std::string snapshot_error;
+        snapshot_succeeded = sampler.snapshot(snapshot, snapshot_error);
+    });
+    assert(waitFor([&] { return SnapshotConsumerEntered.load(std::memory_order_acquire); }, 2s));
+    assert(!profiler.resumePersistentAllocationCounting(error));
+    assert(!error.empty());
+    assert(sampler.backendCleanupPending());
+    assert(!spark::ProfilerLifecycleTestAccess::persistentCountingActive(profiler));
+    assert(sampler.observedBytes() == retired_bytes);
+    assert(spark::ProfilerLifecycleTestAccess::persistentBytesBase(profiler) == expected_base);
+    assert(!profiler.resumePersistentAllocationCounting(error));
+    assert(spark::ProfilerLifecycleTestAccess::persistentBytesBase(profiler) == expected_base);
+    ReleaseSnapshotConsumer.store(true, std::memory_order_release);
+    consumer.join();
+    assert(!snapshot_succeeded);
+    assert(sampler.observedBytes() == retired_bytes);
+    assert(spark::ProfilerLifecycleTestAccess::persistentBytesBase(profiler) == expected_base);
+    assert(profiler.resumePersistentAllocationCounting(error));
+    assert(!sampler.backendCleanupPending());
+    assert(spark::ProfilerLifecycleTestAccess::persistentCountingActive(profiler));
+    assert(spark::ProfilerLifecycleTestAccess::persistentBytesBase(profiler) == expected_base);
+    assert(profiler.resumePersistentAllocationCounting(error));
+    assert(spark::ProfilerLifecycleTestAccess::persistentBytesBase(profiler) == expected_base);
+    assert(profiler.shutdown(error));
+}
+#endif
+
 }  // namespace
 
 int main()
@@ -346,6 +514,11 @@ int main()
     testRetainedShutdownReapsWriterBeforeSuccess();
     testPositiveRecoveryReplayAndCleanup();
     testBackendPendingBlocksBothModesAndPreservesState();
+    testFailedAllocationCancelResumesCounting();
+    testAllocationCancelRetainsPendingOwnership();
+#ifdef __linux__
+    testFailedCountingStartPreservesRetiredBytes();
+#endif
     std::cout << "Profiler recovery lifecycle tests passed.\n";
     return 0;
 }

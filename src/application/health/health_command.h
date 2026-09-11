@@ -19,6 +19,7 @@
 #include "core/stats/network_monitor.h"
 #include "core/stats/ping_statistics.h"
 #include "core/stats/statistics_service.h"
+#include "core/util/deadline_thread.h"
 #include "net/bytebin.h"
 #include "net/cancellation.h"
 #include "proto/sampler_data.h"
@@ -102,7 +103,7 @@ private:
     std::string dashboard_sender_unique_id_;
     std::int64_t dashboard_open_time_ms_ = 0;
     std::uint64_t accepted_dashboard_generation_ = 0;
-    std::thread upload_thread_;
+    detail::DeadlineThread upload_thread_;
     std::atomic<bool> uploading_{false};
     std::atomic<bool> stopping_{false};
     CancellationSource upload_cancellation_;

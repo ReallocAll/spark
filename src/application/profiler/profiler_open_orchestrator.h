@@ -41,6 +41,9 @@ public:
     void onTick(const std::string &fallback_sender_name);
     void close();
     void shutdown();
+    void requestStop();
+    bool shutdownUntil(std::chrono::steady_clock::time_point deadline);
+    bool retireUntil(std::chrono::steady_clock::time_point deadline);
 
     void setNativePluginSourcesProvider(std::function<std::vector<NativePluginSource>()> provider)
     {
@@ -55,7 +58,10 @@ public:
         network_snapshot_provider_ = std::move(provider);
     }
 
-    std::shared_ptr<ViewerSocket> viewerSocket() const { return viewer_socket_; }
+    std::shared_ptr<ViewerSocket> viewerSocket() const
+    {
+        return socket_state_ == SocketState::Open ? viewer_socket_ : nullptr;
+    }
 
 private:
     friend class ProfilerService;
@@ -76,14 +82,15 @@ private:
     ExportContext captureLiveStatisticsContext(std::int64_t now_ms);
     std::string buildLiveSamplerData(const ExportContext &context);
     std::string buildLiveSamplerData(std::int64_t now_ms) { return buildLiveSamplerData(captureLiveContext(now_ms)); }
-    std::string uploadSamplerData(const ExportContext &context);
+    std::string uploadSamplerData(const ExportContext &context, const CancellationToken &cancellation = {});
     void notifyBestEffort(const std::string &sender_name, const std::string &message) noexcept;
     bool viewerGenerationCurrent(std::uint64_t generation) const;
     bool startViewerWorker();
     void stopViewerWorker();
     std::string executeViewerWork(const ViewerUpdateWorker::WorkItem &work);
-    void completeViewerWork(ViewerUpdateWorker::Completion completion) noexcept;
-    void completeViewerOpen(ViewerUpdateWorker::Completion completion);
+    void drainCompletions();
+    bool reapUntil(std::chrono::steady_clock::time_point deadline);
+    void completeViewerOpen(const ViewerUpdateWorker::Completion &completion);
 
     Profiler &profiler_;
     StatisticsService &statistics_;
@@ -101,6 +108,18 @@ private:
     std::function<std::map<std::string, NetworkInterfaceSnapshot>()> network_snapshot_provider_;
 
     std::shared_ptr<ViewerSocket> viewer_socket_;
+    enum class SocketState {
+        Empty,
+        Opening,
+        Open,
+        Retiring
+    };
+    SocketState socket_state_ = SocketState::Empty;
+    struct Mailbox {
+        std::mutex mutex;
+        std::optional<ViewerUpdateWorker::Completion> result;
+    };
+    std::shared_ptr<Mailbox> mailbox_ = std::make_shared<Mailbox>();
     LiveViewerSchedule viewer_schedule_;
     std::string viewer_sender_name_;
     std::string open_comment_;

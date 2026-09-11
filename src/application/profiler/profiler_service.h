@@ -26,6 +26,7 @@
 #include "core/profiler/profiler.h"
 #include "core/stats/network_monitor.h"
 #include "core/stats/statistics_service.h"
+#include "core/util/deadline_thread.h"
 #include "core/ws/viewer_socket.h"
 #include "net/cancellation.h"
 
@@ -163,12 +164,15 @@ private:
     void ensureExportWorker();
     void exportWorkerLoop() noexcept;
     bool waitForExportWorker(std::chrono::milliseconds timeout);
+    bool waitForExportWorkerUntil(std::chrono::steady_clock::time_point deadline);
     bool consumeFinishedExport(bool notify) noexcept;
     void announceResult() noexcept;
     void announceResult(ExportResult result) noexcept;
     bool startBackgroundSession() noexcept;
     void closeViewerSocket();
     void resetProfilerTimeout() noexcept;
+    void requestProfilerTimeoutStop() noexcept;
+    bool resetProfilerTimeoutUntil(std::chrono::steady_clock::time_point deadline) noexcept;
     bool armProfilerTimeout(std::int64_t timeout_seconds) noexcept;
     ExportContext captureLiveContext(std::int64_t now_ms);
     std::string buildLiveSamplerData(const ExportContext &context);
@@ -212,7 +216,9 @@ private:
     bool export_worker_exited_ = true;
     bool preserve_recovery_journal_on_shutdown_ = false;
     ProfilerTimeout profiler_timeout_;
-    std::atomic<bool> timeout_completion_pending_{false};
+    std::atomic<std::uint64_t> timeout_completion_pending_{0};
+    std::atomic<std::uint64_t> timeout_generation_{1};
+    std::atomic<bool> stopping_{false};
     SessionType session_type_ = SessionType::None;
     bool restart_background_after_export_ = false;
     bool background_enabled_ = true;
@@ -225,7 +231,7 @@ private:
     bool start_sender_is_player_ = false;
     std::string start_sender_unique_id_;
     std::vector<NativePluginSource> session_native_plugin_sources_;
-    std::thread export_thread_;
+    detail::DeadlineThread export_thread_;
 
     // Legacy test seam; production jobs/results are owned by export_mutex_.
     std::string pending_sender_ = "CONSOLE";
@@ -256,6 +262,8 @@ private:
     std::function<void()> export_post_publication_hook_;
     std::function<void()> export_job_preparation_hook_;
     std::chrono::milliseconds export_shutdown_timeout_{5000};
+    std::function<void()> timeout_publication_hook_;
+    std::thread::id export_worker_id_for_testing_;
 #endif
 };
 

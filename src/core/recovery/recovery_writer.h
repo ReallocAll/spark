@@ -31,7 +31,19 @@ public:
         Write,
         Sync,
         Close,
-        Rename
+        Rename,
+        Flush,
+        PartialWrite,
+        PartialWriteComplete,
+        WriteComplete,
+        FlushComplete,
+        SyncComplete,
+        CloseComplete,
+        RenameComplete,
+        Reopen,
+        FlushRequestBeforeLock,
+        WaitBeforePark,
+        DrainComplete
     };
 
     struct Config {
@@ -141,6 +153,7 @@ private:
     std::uint32_t first_retained_segment_ = 0;
     std::size_t segment_bytes_ = 0;
     std::size_t total_bytes_ = 0;
+    bool dirty_ = false;
     std::chrono::steady_clock::time_point last_sync_;
 
     // Metadata cache (protected by metadata_mutex_). Updated by producers when they

@@ -17,6 +17,10 @@ namespace spark {
 
 struct HealthCommandTestAccess {
     static void onTickAt(HealthCommand &command, std::int64_t now_ms) { command.onTickAt(now_ms); }
+    static bool reapUploadUntil(HealthCommand &command, std::chrono::steady_clock::time_point deadline)
+    {
+        return command.upload_thread_.reapUntil(deadline);
+    }
 };
 
 namespace {
@@ -52,6 +56,12 @@ public:
     {
         std::unique_lock lock(mutex);
         return cv.wait_for(lock, std::chrono::seconds(2), [&] { return messages.size() >= count; });
+    }
+
+    bool waitForMessageCountUntil(std::size_t count, std::chrono::steady_clock::time_point deadline)
+    {
+        std::unique_lock lock(mutex);
+        return cv.wait_until(lock, deadline, [&] { return messages.size() >= count; });
     }
 
     std::mutex mutex;
@@ -229,8 +239,11 @@ int main()
         health.cmdHealth(sender, Arguments({"show"}, true));
         assert(uploads == 0);
         assert(sender.errors.empty());
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
         health.cmdHealth(sender, Arguments({"upload"}, true));
-        assert(fixture.notifier.waitForMessageCount(1));
+        assert(fixture.notifier.waitForMessageCountUntil(1, deadline));
+        assert(HealthCommandTestAccess::reapUploadUntil(health, deadline));
+        assert(uploads == 1);
         health.cmdHealth(sender, Arguments({"health", "--upload"}, true));
         assert(fixture.notifier.waitForMessageCount(2));
     }

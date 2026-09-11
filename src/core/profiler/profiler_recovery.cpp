@@ -76,7 +76,7 @@ RecoveryDiscardResult Profiler::discardRecoveryJournal()
     }
 
     std::error_code ec;
-#if defined(SPARK_ALLOCATION_LIFECYCLE_TESTING)
+#ifdef SPARK_ALLOCATION_LIFECYCLE_TESTING
     if (recovery_remove_function_) {
         recovery_remove_function_(recovery_dir_, ec);
     }

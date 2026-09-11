@@ -56,6 +56,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING**: Distribute Linux builds as `endstone_spark-linux-x86_64.tar.gz`
+  containing `endstone_spark.so` and `.spark-native/libspark_allocation_gateway_v1.so`.
+  Extract both into `plugins/`, preserving the helper subdirectory. Restart the
+  server process after helper updates; plugin reload does not replace resident code.
+- **BREAKING**: Limit Linux allocation providers to those provably in the main
+  executable's startup `DT_NEEDED` dependency closure. Dynamically loaded custom
+  providers outside that closure are unsupported.
 - Reduce Windows allocation-consumer overhead when resolving frames in the server executable.
 - Reduce allocation-profiler hot-path contention with sharded lifecycle/statistics
   state and bounded retries while preserving fail-closed drop reporting.
@@ -64,6 +71,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Keep Linux allocation gateways in an independent process-resident helper without
+  adding a permanent pin on Spark. Reject missing, unsupported, or mismatched
+  helpers. A helper identity mismatch or exhaustion of its 256 lifetime gateway
+  groups requires a server process restart; retired published groups are not reused.
+- Export Python filename leaves and CodeIds without server-owner directory paths,
+  retaining native identities and available line data. Stop admitting new Python
+  symbols for the session after a code-registration failure.
+- Make recovery journal flushes and segment rotation durable while continuing to
+  report incomplete data and losses.
+- Preserve independent complete call trees for separate threads with the same name.
+- Correct Windows stack unwinding from function bodies and interior epilogues, and
+  safely retire Linux captures whose handlers complete after a timeout.
+- Reject ambiguous lambda ownership and use conservative instruction-based evidence
+  for native symbol guesses.
+- Preserve Windows `LastError` across allocation hooks.
+- Cancel viewer uploads and bound compression steps. Before any new profiling
+  session starts, give the previous timer thread and viewer a shared 500 ms budget
+  to finish stopping, then report a retry error if either remains active.
+- Complete health-dashboard retry requests exactly once.
 - Include players in aggregate world entity gauges while continuing to report the
   player count separately.
 - Exclude native allocation-hook instrumentation branches from execution profiles

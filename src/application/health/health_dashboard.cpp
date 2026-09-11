@@ -16,7 +16,9 @@ HealthDashboard::HealthDashboard(ConnectionFactory connection_factory, InitialUp
 
 HealthDashboard::~HealthDashboard()
 {
-    shutdown();
+    if (!shutdownWithin(kDefaultShutdownBudget)) {
+        std::terminate();
+    }
 }
 
 HealthDashboard::OpenResult HealthDashboard::open(HealthData initial, const std::string &sender_name)

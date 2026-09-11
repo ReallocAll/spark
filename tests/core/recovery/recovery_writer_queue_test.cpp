@@ -323,7 +323,7 @@ void testRepeatedStopIsIdempotent()
     assert(writer.stop(1s));
     assert(writer.stop(20ms));
     assert(writer.tryReap());
-    assert(close_count.load(std::memory_order_relaxed) == 1);
+    assert(close_count.load(std::memory_order_relaxed) == 2);
     std::cout << "testRepeatedStopIsIdempotent: PASS\n";
 }
 

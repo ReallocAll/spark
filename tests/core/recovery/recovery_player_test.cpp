@@ -18,6 +18,53 @@
 using namespace spark;                // NOLINT(google-build-using-namespace)
 using namespace spark::journal_test;  // NOLINT(google-build-using-namespace)
 
+void testRecoveryGrouping()
+{
+    for (const bool allocation : {false, true}) {
+        for (const auto grouping : {ThreadGrouperMode::ByName, ThreadGrouperMode::ByPool, ThreadGrouperMode::AsOne}) {
+            for (const bool reverse : {false, true}) {
+                const auto dir = makeTempDir();
+                std::vector<RecordSpec> records{{.type = RecordType::SessionConfig,
+                                                 .sequence = 0,
+                                                 .payload = buildSessionConfigPayload(
+                                                     4000, 0, true, false, false, static_cast<std::uint8_t>(grouping),
+                                                     allocation ? 1 : 0, false, "Console", false, {}, {}, 0)},
+                                                {.type = RecordType::ModuleDef,
+                                                 .sequence = 1,
+                                                 .payload = buildModuleDefPayload(0, "grouping-fixture")}};
+                for (const std::uint64_t tid :
+                     (reverse ? std::vector<std::uint64_t>{20, 10} : std::vector<std::uint64_t>{10, 20})) {
+                    std::string name = "Worker";
+                    if (grouping == ThreadGrouperMode::ByPool) {
+                        name = tid == 10 ? "Worker-1" : "Worker-2";
+                    }
+                    records.push_back({.type = RecordType::ThreadDef,
+                                       .sequence = static_cast<std::uint32_t>(records.size()),
+                                       .payload = buildThreadDefPayload(tid, tid, name)});
+                    for (const std::int32_t window : {0, 1}) {
+                        Sample sample;
+                        sample.thread_id = tid;
+                        sample.window = window;
+                        sample.weight = window == 0 ? 2000 : 3000;
+                        if (tid == 20) {
+                            sample.weight = window == 0 ? 5000 : 7000;
+                        }
+                        sample.frames.push_back({.module = 0, .rva = tid == 10 ? 0x1110ULL : 0x2220ULL});
+                        records.push_back({.type = RecordType::Sample,
+                                           .sequence = static_cast<std::uint32_t>(records.size()),
+                                           .payload = buildSamplePayload(sample)});
+                    }
+                }
+                writeSegmentMulti(dir / "segment-0.jnl", 1000, 0, records);
+                const auto result = RecoveryPlayer::replay(dir);
+                assert(result.valid);
+                assert(verifyGroupedProfile(result.serialized_proto, grouping, allocation));
+            }
+        }
+    }
+    std::cout << "testRecoveryGrouping: PASS\n";
+}
+
 void testLegacyV2Replay()
 {
     auto dir = makeTempDir() / "legacy-v2";

@@ -30,9 +30,9 @@ namespace {
 
 using TargetFn = std::uint64_t(__cdecl *)(std::uint64_t, std::uint64_t, std::uint64_t, std::uint64_t, std::uint64_t);
 
-constexpr std::size_t kReloads = 1000;
-constexpr std::uint64_t kTimeoutMs = 5000;
-constexpr std::uint64_t kBias = 0x100000000ULL;
+constexpr std::size_t KReloads = 1000;
+constexpr std::uint64_t KTimeoutMs = 5000;
+constexpr std::uint64_t KBias = 0x100000000ULL;
 
 [[nodiscard]] std::uint64_t baseValue(std::uint64_t a, std::uint64_t b, std::uint64_t c, std::uint64_t d,
                                       std::uint64_t e) noexcept
@@ -49,7 +49,7 @@ extern "C" __declspec(noinline) std::uint64_t __cdecl originalFive(std::uint64_t
 extern "C" __declspec(noinline) std::uint64_t __cdecl handlerFive(std::uint64_t a, std::uint64_t b, std::uint64_t c,
                                                                   std::uint64_t d, std::uint64_t e) noexcept
 {
-    return baseValue(a, b, c, d, e) + kBias;
+    return baseValue(a, b, c, d, e) + KBias;
 }
 
 [[nodiscard]] TargetFn functionAt(void *address) noexcept
@@ -68,7 +68,7 @@ extern "C" __declspec(noinline) std::uint64_t __cdecl handlerFive(std::uint64_t 
 
 int main()
 {
-    std::fprintf(stderr, "stage=permanent-iat-gateway-registry begin reloads=%zu\n", kReloads);
+    std::fprintf(stderr, "stage=permanent-iat-gateway-registry begin reloads=%zu\n", KReloads);
 
     void *stable_gateway = nullptr;
     void *stable_state = nullptr;
@@ -77,7 +77,7 @@ int main()
     const std::uint64_t base = baseValue(1, 2, 3, 4, 5);
     std::string error;
 
-    for (std::size_t cycle = 0; cycle < kReloads; ++cycle) {
+    for (std::size_t cycle = 0; cycle < KReloads; ++cycle) {
         // Treat every iteration as a freshly loaded Spark image: there is no
         // retained handle/gateway pointer from the previous iteration. The only
         // stable identity supplied to acquisition is the allocator original.
@@ -105,15 +105,15 @@ int main()
         if (gateway(1, 2, 3, 4, 5) != base) {
             fail("detached-pass-through", cycle);
         }
-        if (!bindPermanentIatGateway(handle, reinterpret_cast<void *>(&handlerFive), kTimeoutMs, error)) {
+        if (!bindPermanentIatGateway(handle, reinterpret_cast<void *>(&handlerFive), KTimeoutMs, error)) {
             std::fprintf(stderr, "stage=permanent-iat-gateway-registry bind-failure cycle=%zu error=%s\n", cycle,
                          error.c_str());
             return 3;
         }
-        if (gateway(1, 2, 3, 4, 5) != base + kBias) {
+        if (gateway(1, 2, 3, 4, 5) != base + KBias) {
             fail("bound-handler-result", cycle);
         }
-        if (!detachPermanentIatGateway(handle, kTimeoutMs, error)) {
+        if (!detachPermanentIatGateway(handle, KTimeoutMs, error)) {
             std::fprintf(stderr, "stage=permanent-iat-gateway-registry detach-failure cycle=%zu error=%s\n", cycle,
                          error.c_str());
             return 4;
@@ -134,7 +134,7 @@ int main()
             std::fprintf(stderr,
                          "stage=permanent-iat-gateway-registry progress=%zu/%zu gateway=%p state=%p generation=%llu "
                          "active=%llu rx=%zu rw=%zu\n",
-                         cycle + 1, kReloads, observed.gateway, observed.state,
+                         cycle + 1, KReloads, observed.gateway, observed.state,
                          static_cast<unsigned long long>(permanentIatGatewayGeneration(observed)),
                          static_cast<unsigned long long>(permanentIatGatewayActive(observed)),
                          observed.permanent_rx_bytes, observed.permanent_rw_bytes);
@@ -149,13 +149,13 @@ int main()
     if (final_handle.gateway != stable_gateway || final_handle.state != stable_state ||
         permanentIatGatewayAdmissionOpen(final_handle) || permanentIatGatewayHandler(final_handle) != nullptr ||
         permanentIatGatewayActive(final_handle) != 0) {
-        fail("final-state", kReloads);
+        fail("final-state", KReloads);
     }
 
     std::fprintf(stderr,
                  "stage=permanent-iat-gateway-registry pass reloads=%zu gateway=%p state=%p generation=%llu "
                  "permanent_rx_bytes=%zu permanent_rw_bytes=%zu\n",
-                 kReloads, final_handle.gateway, final_handle.state,
+                 KReloads, final_handle.gateway, final_handle.state,
                  static_cast<unsigned long long>(permanentIatGatewayGeneration(final_handle)),
                  final_handle.permanent_rx_bytes, final_handle.permanent_rw_bytes);
     return 0;

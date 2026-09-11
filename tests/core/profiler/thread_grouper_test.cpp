@@ -13,6 +13,13 @@ static void test_by_name()  // NOLINT(misc-use-anonymous-namespace)
     assert(g.group(2, "Worker-1") == "Worker-1");
     assert(g.label("Server thread") == "Server thread");
     assert(g.label("Worker-1") == "Worker-1");
+    const auto first = g.groupKey(10, "Worker");
+    const auto second = g.groupKey(20, "Worker");
+    assert(first != second);
+    assert(first < second);
+    assert(g.groupKey(100, "A") < first);
+    assert(g.label(first.first) == "Worker");
+    assert(g.label(second.first) == "Worker");
     std::printf("  by_name: OK\n");
 }
 
@@ -24,6 +31,7 @@ static void test_by_pool()  // NOLINT(misc-use-anonymous-namespace)
     assert(g.group(1, "Worker-1") == "Worker");
     assert(g.group(2, "Worker-2") == "Worker");
     assert(g.group(3, "Worker-3") == "Worker");
+    assert(g.groupKey(1, "Worker-1") == g.groupKey(2, "Worker-2"));
 
     // Thread without numeric suffix stays as-is.
     assert(g.group(4, "Server thread") == "Server thread");
@@ -60,6 +68,7 @@ static void test_as_one()  // NOLINT(misc-use-anonymous-namespace)
     assert(g.group(1, "Server thread") == "root");
     assert(g.group(2, "Worker-1") == "root");
     assert(g.group(3, "Worker-2") == "root");
+    assert(g.groupKey(1, "Server thread") == g.groupKey(2, "Worker-1"));
 
     // Label shows total thread count.
     assert(g.label("root") == "All (x3)");

@@ -262,8 +262,8 @@ static_assert(std::atomic<void *>::is_always_lock_free);
     const std::array<std::uint8_t, KGatewayUnwindInfoSize> unwind_bytes{0x01, 0x04, 0x01, 0x00, 0x04, 0x42, 0x00, 0x00};
     std::memcpy(image.data() + unwind_info, unwind_bytes.data(), unwind_bytes.size());
 
-    if (call_stub > (std::numeric_limits<DWORD>::max)() || code_size > (std::numeric_limits<DWORD>::max)() ||
-        unwind_info > (std::numeric_limits<DWORD>::max)()) {
+    if (call_stub > std::numeric_limits<DWORD>::max() || code_size > std::numeric_limits<DWORD>::max() ||
+        unwind_info > std::numeric_limits<DWORD>::max()) {
         error = "permanent IAT gateway unwind RVA exceeds x64 runtime-function range";
         return false;
     }
@@ -562,7 +562,7 @@ bool bindPermanentIatGateway(PermanentIatGatewayHandle &handle, void *handler, s
     }
 
     const std::uint64_t current = state->generation.load(std::memory_order_acquire);
-    if (current >= (std::numeric_limits<std::uint64_t>::max)() - 1) {
+    if (current >= std::numeric_limits<std::uint64_t>::max() - 1) {
         error = "permanent IAT gateway generation exhausted; admission remains closed";
         return false;
     }
@@ -586,7 +586,7 @@ bool detachPermanentIatGateway(PermanentIatGatewayHandle &handle, std::uint64_t 
 
     state->gate.store(KGateClosed, std::memory_order_seq_cst);
     const std::uint64_t current = state->generation.load(std::memory_order_acquire);
-    if (current == (std::numeric_limits<std::uint64_t>::max)()) {
+    if (current == std::numeric_limits<std::uint64_t>::max()) {
         error = "permanent IAT gateway generation exhausted after admission close";
         return false;
     }

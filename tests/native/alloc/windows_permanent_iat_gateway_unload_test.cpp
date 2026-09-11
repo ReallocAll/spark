@@ -13,6 +13,7 @@
 #include <windows.h>
 
 #include <atomic>
+#include <bit>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -38,16 +39,16 @@ using SetHoldFn = void(__cdecl *)(int);
 using ResetEnteredFn = void(__cdecl *)();
 using EnteredFn = int(__cdecl *)();
 
-constexpr std::size_t kWorkers = 4;
-constexpr std::size_t kUnloadCycles = 1000;
-constexpr std::uint64_t kTimeoutMs = 5000;
-constexpr int kHeldValue = 0x60000000;
-constexpr wchar_t kHandlerName[] = L"windows_iat_gateway_test_handler.dll";
+constexpr std::size_t KWorkers = 4;
+constexpr std::size_t KUnloadCycles = 1000;
+constexpr std::uint64_t KTimeoutMs = 5000;
+constexpr int KHeldValue = 0x60000000;
+constexpr wchar_t KHandlerName[] = L"windows_iat_gateway_test_handler.dll";
 
-std::atomic<std::size_t> g_cycle{0};
-std::atomic<unsigned> g_phase{0};
-std::atomic<void *> g_gateway{nullptr};
-std::atomic<std::uintptr_t> g_slot{0};
+std::atomic<std::size_t> GCycle{0};
+std::atomic<unsigned> GPhase{0};
+std::atomic<void *> GGateway{nullptr};
+std::atomic<std::uintptr_t> GSlot{0};
 
 extern "C" __declspec(noinline) int __cdecl originalTarget(int value) noexcept
 {
@@ -61,16 +62,16 @@ extern "C" __declspec(noinline) int __cdecl originalTarget(int value) noexcept
 
 [[nodiscard]] TargetFn functionAt(std::uintptr_t address) noexcept
 {
-    return reinterpret_cast<TargetFn>(address);
+    return std::bit_cast<TargetFn>(address);
 }
 
 [[noreturn]] void fail(const char *reason)
 {
     std::fprintf(stderr,
                  "stage=permanent-iat-gateway-dll-unload failure=%s cycle=%zu phase=%u slot=0x%llx gateway=%p\n",
-                 reason, g_cycle.load(std::memory_order_relaxed), g_phase.load(std::memory_order_relaxed),
-                 static_cast<unsigned long long>(g_slot.load(std::memory_order_relaxed)),
-                 g_gateway.load(std::memory_order_relaxed));
+                 reason, GCycle.load(std::memory_order_relaxed), GPhase.load(std::memory_order_relaxed),
+                 static_cast<unsigned long long>(GSlot.load(std::memory_order_relaxed)),
+                 GGateway.load(std::memory_order_relaxed));
     std::fflush(stderr);
     std::abort();
 }
@@ -81,7 +82,7 @@ LONG WINAPI unhandledExceptionFilter(EXCEPTION_POINTERS *exception) noexcept
     const DWORD code = record != nullptr ? record->ExceptionCode : 0;
     const void *address = record != nullptr ? record->ExceptionAddress : nullptr;
     std::uintptr_t rip = 0;
-#if defined(_M_X64)
+#ifdef _M_X64
     if (exception != nullptr && exception->ContextRecord != nullptr) {
         rip = static_cast<std::uintptr_t>(exception->ContextRecord->Rip);
     }
@@ -90,9 +91,9 @@ LONG WINAPI unhandledExceptionFilter(EXCEPTION_POINTERS *exception) noexcept
                  "stage=permanent-iat-gateway-dll-unload exception=0x%08lx address=%p rip=0x%llx cycle=%zu phase=%u "
                  "slot=0x%llx gateway=%p\n",
                  static_cast<unsigned long>(code), address, static_cast<unsigned long long>(rip),
-                 g_cycle.load(std::memory_order_relaxed), g_phase.load(std::memory_order_relaxed),
-                 static_cast<unsigned long long>(g_slot.load(std::memory_order_relaxed)),
-                 g_gateway.load(std::memory_order_relaxed));
+                 GCycle.load(std::memory_order_relaxed), GPhase.load(std::memory_order_relaxed),
+                 static_cast<unsigned long long>(GSlot.load(std::memory_order_relaxed)),
+                 GGateway.load(std::memory_order_relaxed));
     std::fflush(stderr);
     return EXCEPTION_CONTINUE_SEARCH;
 }
@@ -110,7 +111,7 @@ LONG WINAPI unhandledExceptionFilter(EXCEPTION_POINTERS *exception) noexcept
         fail("handler-path");
     }
     path.resize(slash + 1);
-    path.append(kHandlerName);
+    path.append(KHandlerName);
     return path;
 }
 
@@ -136,8 +137,8 @@ void requireKnownResult(int result, int value)
 int main()
 {
     ::SetUnhandledExceptionFilter(&unhandledExceptionFilter);
-    std::fprintf(stderr, "stage=permanent-iat-gateway-dll-unload begin cycles=%zu workers=%zu\n", kUnloadCycles,
-                 kWorkers);
+    std::fprintf(stderr, "stage=permanent-iat-gateway-dll-unload begin cycles=%zu workers=%zu\n", KUnloadCycles,
+                 KWorkers);
 
     PermanentIatGatewayHandle gateway;
     std::string error;
@@ -145,7 +146,7 @@ int main()
         std::fprintf(stderr, "stage=permanent-iat-gateway-dll-unload create-failure error=%s\n", error.c_str());
         return 2;
     }
-    g_gateway.store(gateway.gateway, std::memory_order_release);
+    GGateway.store(gateway.gateway, std::memory_order_release);
 
     alignas(std::uintptr_t) std::uintptr_t slot_storage = addressOf(&originalTarget);
     std::atomic_ref<std::uintptr_t> slot(slot_storage);
@@ -157,8 +158,8 @@ int main()
                                       std::memory_order_acq_rel, std::memory_order_acquire)) {
         fail("initial-slot-publication");
     }
-    g_slot.store(slot.load(std::memory_order_acquire), std::memory_order_release);
-    const TargetFn cached_gateway = functionAt(reinterpret_cast<std::uintptr_t>(gateway.gateway));
+    GSlot.store(slot.load(std::memory_order_acquire), std::memory_order_release);
+    const auto cached_gateway = functionAt(reinterpret_cast<std::uintptr_t>(gateway.gateway));
     if (cached_gateway(41) != 42) {
         fail("initial-pass-through");
     }
@@ -171,8 +172,8 @@ int main()
     std::atomic<bool> stop{false};
     std::atomic<std::uint64_t> worker_calls{0};
     std::vector<std::thread> workers;
-    workers.reserve(kWorkers);
-    for (std::size_t worker = 0; worker < kWorkers; ++worker) {
+    workers.reserve(KWorkers);
+    for (std::size_t worker = 0; worker < KWorkers; ++worker) {
         workers.emplace_back([&, worker] {
             int value = static_cast<int>(worker + 1);
             while (!stop.load(std::memory_order_acquire)) {
@@ -184,9 +185,9 @@ int main()
         });
     }
 
-    for (std::size_t cycle = 0; cycle < kUnloadCycles; ++cycle) {
-        g_cycle.store(cycle, std::memory_order_release);
-        g_phase.store(1, std::memory_order_release);
+    for (std::size_t cycle = 0; cycle < KUnloadCycles; ++cycle) {
+        GCycle.store(cycle, std::memory_order_release);
+        GPhase.store(1, std::memory_order_release);
         HMODULE module = ::LoadLibraryW(dll_path.c_str());
         if (module == nullptr) {
             std::fprintf(stderr, "stage=permanent-iat-gateway-dll-unload LoadLibrary-failure cycle=%zu error=%lu\n",
@@ -194,14 +195,13 @@ int main()
             std::abort();
         }
 
-        TargetFn handler = requiredExport<TargetFn>(module, "windowsGatewayTestHandler");
-        SetHoldFn set_hold = requiredExport<SetHoldFn>(module, "windowsGatewayTestSetHold");
-        ResetEnteredFn reset_special_entered =
-            requiredExport<ResetEnteredFn>(module, "windowsGatewayTestResetSpecialEntered");
-        EnteredFn special_entered = requiredExport<EnteredFn>(module, "windowsGatewayTestSpecialEntered");
+        auto handler = requiredExport<TargetFn>(module, "windowsGatewayTestHandler");
+        auto set_hold = requiredExport<SetHoldFn>(module, "windowsGatewayTestSetHold");
+        auto reset_special_entered = requiredExport<ResetEnteredFn>(module, "windowsGatewayTestResetSpecialEntered");
+        auto special_entered = requiredExport<EnteredFn>(module, "windowsGatewayTestSpecialEntered");
 
-        g_phase.store(2, std::memory_order_release);
-        if (!bindPermanentIatGateway(gateway, reinterpret_cast<void *>(handler), kTimeoutMs, error)) {
+        GPhase.store(2, std::memory_order_release);
+        if (!bindPermanentIatGateway(gateway, reinterpret_cast<void *>(handler), KTimeoutMs, error)) {
             std::fprintf(stderr, "stage=permanent-iat-gateway-dll-unload bind-failure cycle=%zu error=%s\n", cycle,
                          error.c_str());
             std::abort();
@@ -216,12 +216,12 @@ int main()
         reset_special_entered();
         set_hold(1);
         std::thread held_call([&] {
-            const int result = cached_gateway(kHeldValue);
-            if (result != kHeldValue + 1000) {
+            const int result = cached_gateway(KHeldValue);
+            if (result != KHeldValue + 1000) {
                 fail("held-handler-result");
             }
         });
-        const std::uint64_t entry_deadline = ::GetTickCount64() + kTimeoutMs;
+        const std::uint64_t entry_deadline = ::GetTickCount64() + KTimeoutMs;
         while (special_entered() == 0 || permanentIatGatewayActive(gateway) == 0) {
             if (::GetTickCount64() >= entry_deadline) {
                 fail("handler-entry-timeout");
@@ -229,12 +229,12 @@ int main()
             std::this_thread::yield();
         }
 
-        g_phase.store(3, std::memory_order_release);
+        GPhase.store(3, std::memory_order_release);
         std::atomic<bool> detach_finished{false};
         bool detach_ok = false;
         std::string detach_error;
         std::thread detacher([&] {
-            detach_ok = detachPermanentIatGateway(gateway, kTimeoutMs, detach_error);
+            detach_ok = detachPermanentIatGateway(gateway, KTimeoutMs, detach_error);
             detach_finished.store(true, std::memory_order_release);
         });
 
@@ -254,11 +254,11 @@ int main()
             fail("detached-state-invariant");
         }
 
-        g_phase.store(4, std::memory_order_release);
+        GPhase.store(4, std::memory_order_release);
         if (::FreeLibrary(module) == FALSE) {
             fail("FreeLibrary");
         }
-        if (::GetModuleHandleW(kHandlerName) != nullptr) {
+        if (::GetModuleHandleW(KHandlerName) != nullptr) {
             fail("handler-dll-remained-loaded");
         }
 
@@ -272,7 +272,7 @@ int main()
             }
         }
 
-        g_phase.store(5, std::memory_order_release);
+        GPhase.store(5, std::memory_order_release);
         PermanentIatGatewayHandle discovered;
         if (!discoverPermanentIatGateway(gateway.gateway, discovered, error)) {
             std::fprintf(stderr, "stage=permanent-iat-gateway-dll-unload rediscovery-failure cycle=%zu error=%s\n",
@@ -290,7 +290,7 @@ int main()
             std::fprintf(stderr,
                          "stage=permanent-iat-gateway-dll-unload progress=%zu/%zu worker_calls=%llu generation=%llu "
                          "active=%llu rx=%zu rw=%zu\n",
-                         cycle + 1, kUnloadCycles,
+                         cycle + 1, KUnloadCycles,
                          static_cast<unsigned long long>(worker_calls.load(std::memory_order_relaxed)),
                          static_cast<unsigned long long>(permanentIatGatewayGeneration(gateway)),
                          static_cast<unsigned long long>(permanentIatGatewayActive(gateway)),
@@ -304,7 +304,7 @@ int main()
         worker.join();
     }
 
-    const std::uint64_t settle_deadline = ::GetTickCount64() + kTimeoutMs;
+    const std::uint64_t settle_deadline = ::GetTickCount64() + KTimeoutMs;
     while (permanentIatGatewayActive(gateway) != 0 && ::GetTickCount64() < settle_deadline) {
         std::this_thread::yield();
     }
@@ -316,7 +316,7 @@ int main()
     std::fprintf(stderr,
                  "stage=permanent-iat-gateway-dll-unload pass cycles=%zu worker_calls=%llu generation=%llu "
                  "permanent_rx_bytes=%zu permanent_rw_bytes=%zu\n",
-                 kUnloadCycles, static_cast<unsigned long long>(worker_calls.load(std::memory_order_relaxed)),
+                 KUnloadCycles, static_cast<unsigned long long>(worker_calls.load(std::memory_order_relaxed)),
                  static_cast<unsigned long long>(permanentIatGatewayGeneration(gateway)), gateway.permanent_rx_bytes,
                  gateway.permanent_rw_bytes);
     return 0;

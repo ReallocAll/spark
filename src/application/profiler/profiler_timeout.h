@@ -2,11 +2,9 @@
 #define SPARK_APPLICATION_PROFILER_PROFILER_TIMEOUT_H
 
 #include <chrono>
-#include <condition_variable>
 #include <functional>
 #include <memory>
 #include <mutex>
-#include <thread>
 
 namespace spark {
 
@@ -20,17 +18,14 @@ public:
 
     bool arm(std::chrono::milliseconds delay, std::function<void()> callback) noexcept;
     void cancel() noexcept;
+    void requestStop() noexcept;
+    bool cancelUntil(std::chrono::steady_clock::time_point deadline) noexcept;
+    bool reapUntil(std::chrono::steady_clock::time_point deadline) noexcept;
 
 private:
-    struct State {
-        std::condition_variable cv;
-        std::mutex mutex;
-        bool cancelled = false;
-    };
-
+    struct Run;
     std::mutex lifecycle_mutex_;
-    std::thread worker_;
-    std::shared_ptr<State> state_;
+    std::shared_ptr<Run> run_;
 };
 
 }  // namespace spark

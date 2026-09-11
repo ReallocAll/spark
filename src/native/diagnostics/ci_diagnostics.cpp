@@ -220,7 +220,7 @@ bool CiDiagnostics::openMapping() noexcept
         const auto pid = static_cast<std::uint64_t>(::GetCurrentProcessId());
         mapping_name_ = mappingNameForPid(pid);
         const std::wstring wide_name(mapping_name_.begin(), mapping_name_.end());
-        static_assert(sizeof(CiDiagnosticsRegion) <= (std::numeric_limits<DWORD>::max)());
+        static_assert(sizeof(CiDiagnosticsRegion) <= std::numeric_limits<DWORD>::max());
         ::SetLastError(ERROR_SUCCESS);
         handle = ::CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0,
                                       static_cast<DWORD>(sizeof(CiDiagnosticsRegion)), wide_name.c_str());
@@ -257,7 +257,7 @@ bool CiDiagnostics::openMapping() noexcept
             }
             const std::uint64_t prior_generation = mapped->generation.load(std::memory_order_seq_cst);
             const std::uint64_t next_generation =
-                prior_generation == (std::numeric_limits<std::uint64_t>::max)() ? 1 : prior_generation + 1;
+                prior_generation == std::numeric_limits<std::uint64_t>::max() ? 1 : prior_generation + 1;
             for (auto &entry : mapped->records) {
                 invalidateRecord(entry);
             }

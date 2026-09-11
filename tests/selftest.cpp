@@ -176,9 +176,9 @@ int main(int argc, char **argv)
         !verify("viewer shutdown", spark::selftest::verifyViewerShutdownDuringLiveExport(worker_tid.load())) ||
         !verify("viewer disconnect", spark::selftest::verifyViewerDisconnectKeepsProfilerRunning(worker_tid.load())) ||
 #ifdef __linux__
-        !spark::selftest::verifyAllocationViewerLifecycle(worker_tid.load()) ||
+        !verify("allocation viewer lifecycle", spark::selftest::verifyAllocationViewerLifecycle(worker_tid.load())) ||
 #endif
-        !spark::selftest::verifyWorkerExceptionBoundaries(worker_tid.load()) ||
+        !verify("worker exception boundaries", spark::selftest::verifyWorkerExceptionBoundaries(worker_tid.load())) ||
         !spark::selftest::verifyAsyncNetworkCommands(worker_tid.load()) ||
         !spark::selftest::verifyBackgroundCommandValidation(worker_tid.load()) ||
         !spark::selftest::verifyRecoveryWriterLifetime(worker_tid.load()) || !spark::selftest::verifyUploadFailure() ||

@@ -1,11 +1,103 @@
 #include <cassert>
 #include <chrono>
 
+#include "../../net/native_exit_gate.h"
 #include "health_dashboard_test_support.h"
 
 using namespace spark::health_dashboard_test;  // NOLINT(google-build-using-namespace)
 
 namespace {
+
+void testNativeExitRetainsDashboard()
+{
+    Probe probe;
+    spark::test::NativeExitGate gate;
+    spark::HealthDashboard *owner = nullptr;
+    auto dashboard = makeDashboard(probe, [&](const auto &) {
+        spark::test::holdNativeThreadExit(gate);
+        owner->requestStop();
+    });
+    owner = dashboard.get();
+    assert(dashboard->open(dataAt(0), "NativeExit").accepted);
+    gate.waitEntered();
+    const auto begin = std::chrono::steady_clock::now();
+    assert(!dashboard->shutdownWithin(std::chrono::milliseconds(20)));
+    assert(std::chrono::steady_clock::now() - begin < std::chrono::milliseconds(250));
+    assert(probe.destroyed_count.load() == 0);
+    assert(!dashboard->open(dataAt(1), "Replacement").accepted);
+    assert(probe.factory_count.load() == 1);
+    gate.unblock();
+    assert(dashboard->shutdownWithin(std::chrono::seconds(2)));
+    assert(probe.destroyed_count.load() == 1);
+}
+
+void testRetainedConnectionRetryCompletesOnce()
+{
+    Probe probe;
+    probe.next_open_success = false;
+    probe.allow_close.store(false);
+    auto dashboard = makeDashboard(probe);
+    assert(dashboard->open(dataAt(0), "First").accepted);
+    assert(waitFor(probe, [&] { return probe.completions.size() == 1; }));
+    assert(!probe.completions[0].ok);
+    assert(probe.factory_count.load() == 1);
+    assert(probe.destroyed_count.load() == 0);
+
+    assert(dashboard->open(dataAt(1), "Second").accepted);
+    assert(waitFor(probe, [&] { return probe.completions.size() == 2; }));
+    assert(!probe.completions[1].ok);
+    assert(probe.completions[1].completed);
+    assert(probe.completions[1].error == "previous health dashboard still closing; retry");
+    assert(!dashboard->openPending());
+    assert(spark::HealthDashboardTestAccess::idle(*dashboard));
+    assert(probe.factory_count.load() == 1);
+    assert(probe.destroyed_count.load() == 0);
+
+    probe.allow_close.store(true);
+    {
+        std::scoped_lock lock(probe.mutex);
+        probe.next_open_success = true;
+    }
+    assert(dashboard->open(dataAt(2), "Third").accepted);
+    assert(waitFor(probe, [&] { return probe.completions.size() == 3; }));
+    assert(probe.completions[2].ok);
+    assert(probe.factory_count.load() == 2);
+    assert(probe.destroyed_count.load() == 1);
+    assert(dashboard->shutdownWithin(std::chrono::seconds(2)));
+    assert(probe.destroyed_count.load() == 2);
+}
+
+void testCompletionCanAdmitRetryWithoutLosingResult()
+{
+    Probe probe;
+    probe.next_open_success = false;
+    spark::HealthDashboard *dashboard_ptr = nullptr;
+    auto dashboard = makeDashboard(probe, [&](spark::HealthDashboard::OpenResult result) {
+        const bool retry = result.sender_name == "First";
+        if (retry) {
+            {
+                std::scoped_lock lock(probe.mutex);
+                probe.next_open_success = true;
+            }
+            assert(dashboard_ptr->open(dataAt(1), "Retry").accepted);
+        }
+        {
+            std::scoped_lock lock(probe.mutex);
+            probe.completions.push_back(std::move(result));
+        }
+        probe.cv.notify_all();
+        if (retry) {
+            throw std::runtime_error("notifier failed after retry admission");
+        }
+    });
+    dashboard_ptr = dashboard.get();
+    assert(dashboard->open(dataAt(0), "First").accepted);
+    assert(waitFor(probe, [&] { return probe.completions.size() == 2; }));
+    assert(!probe.completions[0].ok);
+    assert(probe.completions[1].ok);
+    assert(!dashboard->openPending());
+    assert(dashboard->shutdownWithin(std::chrono::seconds(2)));
+}
 
 void testBlockedConnectionFactoryIsBoundedAndReapable()
 {
@@ -106,6 +198,9 @@ void testPostShutdownOperationsAreRejected()
 
 int main()
 {
+    testNativeExitRetainsDashboard();
+    testRetainedConnectionRetryCompletesOnce();
+    testCompletionCanAdmitRetryWithoutLosingResult();
     testBlockedConnectionFactoryIsBoundedAndReapable();
     testBlockedWebSocketOpenCancels();
     testBlockedBytebinUploadCancels();

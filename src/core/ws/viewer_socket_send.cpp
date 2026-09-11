@@ -41,7 +41,7 @@ void ViewerSocket::processWindowRotate(const UploadCallback &upload)
     auto time = nowMs();
     if ((time - open_time_ms_) > kInitialTimeoutMs && (time - last_ping_ms_.load()) > kEstablishedTimeoutMs) {
         setCloseState(CloseReason::ClientPingTimeout, "Live viewer closed: client ping timeout");
-        close();
+        requestStop();
         return;
     }
 

@@ -1,0 +1,4 @@
+{
+    global: spark_allocation_gateway_v1;
+    local: *;
+};

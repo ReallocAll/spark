@@ -22,13 +22,13 @@ using AllocFn = void *(__cdecl *)(std::size_t);
 using ConsumerAllocFn = void *(__cdecl *)(std::size_t);
 using ConsumerFreeFn = void(__cdecl *)(void *);
 
-AllocFn gOriginalAlloc = nullptr;
-std::atomic<std::uint64_t> gHookCalls{0};
+AllocFn GOriginalAlloc = nullptr;
+std::atomic<std::uint64_t> GHookCalls{0};
 
 void *__cdecl hookProviderAlloc(std::size_t size) noexcept
 {
-    gHookCalls.fetch_add(1, std::memory_order_relaxed);
-    return gOriginalAlloc(size);
+    GHookCalls.fetch_add(1, std::memory_order_relaxed);
+    return GOriginalAlloc(size);
 }
 
 bool require(bool condition, const char *message)
@@ -58,19 +58,19 @@ Function function(HMODULE module, const char *name)
 
 bool exerciseConsumer(HMODULE consumer, std::uint64_t expected_increment)
 {
-    ConsumerAllocFn allocate = function<ConsumerAllocFn>(consumer, "sparkIatConsumerAlloc");
-    ConsumerFreeFn release = function<ConsumerFreeFn>(consumer, "sparkIatConsumerFree");
+    auto allocate = function<ConsumerAllocFn>(consumer, "sparkIatConsumerAlloc");
+    auto release = function<ConsumerFreeFn>(consumer, "sparkIatConsumerFree");
     if (!require(allocate != nullptr && release != nullptr, "consumer exports are unavailable")) {
         return false;
     }
 
-    const std::uint64_t before = gHookCalls.load(std::memory_order_relaxed);
+    const std::uint64_t before = GHookCalls.load(std::memory_order_relaxed);
     void *memory = allocate(64);
     if (!require(memory != nullptr, "consumer allocation failed")) {
         return false;
     }
     release(memory);
-    const std::uint64_t after = gHookCalls.load(std::memory_order_relaxed);
+    const std::uint64_t after = GHookCalls.load(std::memory_order_relaxed);
     return require(after == before + expected_increment, "unexpected hook invocation count");
 }
 
@@ -158,16 +158,16 @@ bool outOfRangeImportDirectoryRefresh(spark::WindowsIatHooks &hooks, HMODULE pro
 
 bool unalignedIatModuleRefresh(spark::WindowsIatHooks &hooks, HMODULE consumer, std::string &error)
 {
-    constexpr wchar_t KCopyName[] = L".\\windows_iat_consumer_unaligned.dll";
-    (void)::DeleteFileW(KCopyName);
-    if (!require(::CopyFileW(L".\\windows_iat_consumer.dll", KCopyName, FALSE) != FALSE,
+    constexpr wchar_t k_copy_name[] = L".\\windows_iat_consumer_unaligned.dll";
+    (void)::DeleteFileW(k_copy_name);
+    if (!require(::CopyFileW(L".\\windows_iat_consumer.dll", k_copy_name, FALSE) != FALSE,
                  "CopyFileW failed for unaligned consumer fixture")) {
         return false;
     }
 
-    HMODULE malformed = load(KCopyName);
+    HMODULE malformed = load(k_copy_name);
     if (malformed == nullptr) {
-        (void)::DeleteFileW(KCopyName);
+        (void)::DeleteFileW(k_copy_name);
         return false;
     }
 
@@ -219,18 +219,18 @@ bool unalignedIatModuleRefresh(spark::WindowsIatHooks &hooks, HMODULE consumer, 
     }
 
     const bool unloaded = ::FreeLibrary(malformed) != FALSE;
-    const bool deleted = ::DeleteFileW(KCopyName) != FALSE;
+    const bool deleted = ::DeleteFileW(k_copy_name) != FALSE;
     return require(unloaded, "unaligned consumer FreeLibrary failed") &&
            require(deleted, "unaligned consumer fixture cleanup failed") && ok;
 }
 
 bool concurrentInstallUninstallStress(spark::WindowsIatHooks &hooks, HMODULE consumer, std::string &error)
 {
-    constexpr int KWorkers = 8;
-    constexpr int KCycles = 1000;
+    constexpr int k_workers = 8;
+    constexpr int k_cycles = 1000;
 
-    ConsumerAllocFn allocate = function<ConsumerAllocFn>(consumer, "sparkIatConsumerAlloc");
-    ConsumerFreeFn release = function<ConsumerFreeFn>(consumer, "sparkIatConsumerFree");
+    auto allocate = function<ConsumerAllocFn>(consumer, "sparkIatConsumerAlloc");
+    auto release = function<ConsumerFreeFn>(consumer, "sparkIatConsumerFree");
     if (!require(allocate != nullptr && release != nullptr, "stress consumer exports are unavailable")) {
         return false;
     }
@@ -239,8 +239,8 @@ bool concurrentInstallUninstallStress(spark::WindowsIatHooks &hooks, HMODULE con
     std::atomic<std::uint64_t> successful_allocations{0};
     std::atomic<std::uint64_t> failed_allocations{0};
     std::vector<std::thread> workers;
-    workers.reserve(KWorkers);
-    for (int index = 0; index < KWorkers; ++index) {
+    workers.reserve(k_workers);
+    for (int index = 0; index < k_workers; ++index) {
         workers.emplace_back([&, index] {
             while (running.load(std::memory_order_acquire)) {
                 void *memory = allocate(32 + static_cast<std::size_t>(index));
@@ -255,7 +255,7 @@ bool concurrentInstallUninstallStress(spark::WindowsIatHooks &hooks, HMODULE con
     }
 
     bool ok = true;
-    for (int cycle = 0; cycle < KCycles; ++cycle) {
+    for (int cycle = 0; cycle < k_cycles; ++cycle) {
         if (!hooks.uninstall(error) || hooks.installed() || hooks.unsafeState()) {
             ok = false;
             break;
@@ -280,8 +280,8 @@ bool concurrentInstallUninstallStress(spark::WindowsIatHooks &hooks, HMODULE con
 
 bool moduleReloadStress(spark::WindowsIatHooks &hooks, HMODULE &consumer, std::string &error)
 {
-    constexpr int KCycles = 500;
-    for (int cycle = 0; cycle < KCycles; ++cycle) {
+    constexpr int k_cycles = 500;
+    for (int cycle = 0; cycle < k_cycles; ++cycle) {
         if (!require(::FreeLibrary(consumer) != FALSE, "consumer FreeLibrary failed during reload stress")) {
             consumer = nullptr;
             return false;
@@ -313,8 +313,8 @@ int main()
         return 1;
     }
 
-    gOriginalAlloc = function<AllocFn>(provider, "sparkIatProviderAlloc");
-    if (!require(gOriginalAlloc != nullptr, "provider allocation export is unavailable")) {
+    GOriginalAlloc = function<AllocFn>(provider, "sparkIatProviderAlloc");
+    if (!require(GOriginalAlloc != nullptr, "provider allocation export is unavailable")) {
         ::FreeLibrary(consumer);
         ::FreeLibrary(provider);
         return 1;
@@ -324,7 +324,7 @@ int main()
     spark::WindowsIatHookTarget target;
     target.import_name = "sparkIatProviderAlloc";
     target.import_modules = {"windows_iat_provider.dll"};
-    target.original = reinterpret_cast<void *>(gOriginalAlloc);
+    target.original = reinterpret_cast<void *>(GOriginalAlloc);
     target.replacement = reinterpret_cast<void *>(&hookProviderAlloc);
     target.required = true;
 

@@ -442,9 +442,9 @@ RecoveredProfile RecoveryPlayer::replay(const std::filesystem::path &directory)
 
     // Group threads (matching the normal export path).
     ThreadGrouper grouper(meta.thread_grouper);
-    std::map<std::string, std::vector<const CallTree *>> groups;
+    std::map<ThreadGrouper::GroupKey, std::vector<const CallTree *>> groups;
     for (const auto &[tid, p] : input) {
-        std::string g = grouper.group(tid, p.first);
+        auto g = grouper.groupKey(tid, p.first);
         groups[g].push_back(p.second);
     }
 
@@ -453,7 +453,7 @@ RecoveredProfile RecoveryPlayer::replay(const std::filesystem::path &directory)
     std::deque<std::string> owned_labels;
     for (const auto &[g, trees] : groups) {
         if (meta.thread_grouper == ThreadGrouperMode::ByName || trees.size() == 1) {
-            owned_labels.push_back(grouper.label(g));
+            owned_labels.push_back(grouper.label(g.first));
             views.push_back({.name = owned_labels.back(), .tree = trees.front()});
         }
         else {
@@ -461,7 +461,7 @@ RecoveredProfile RecoveryPlayer::replay(const std::filesystem::path &directory)
             for (const CallTree *tree : trees) {
                 mergeCallTree(*merged, *tree);
             }
-            owned_labels.push_back(grouper.label(g));
+            owned_labels.push_back(grouper.label(g.first));
             views.push_back({.name = owned_labels.back(), .tree = merged.get()});
             owned_trees.push_back(std::move(merged));
         }

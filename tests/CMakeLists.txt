@@ -101,6 +101,10 @@ if (WIN32 OR (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATC
         target_link_libraries(spark_native_lifecycle_test PUBLIC dbghelp psapi advapi32 distorm)
     else ()
         target_compile_definitions(spark_native_lifecycle_test PRIVATE _GNU_SOURCE)
+        target_include_directories(spark_native_lifecycle_test PRIVATE "${CMAKE_BINARY_DIR}/generated")
+        if (TARGET spark_allocation_gateway_v1)
+            add_dependencies(spark_native_lifecycle_test spark_allocation_gateway_v1)
+        endif ()
         target_compile_options(spark_native_lifecycle_test PRIVATE -fvisibility=hidden -fvisibility-inlines-hidden)
         target_link_libraries(spark_native_lifecycle_test PUBLIC distorm ${CMAKE_DL_LIBS})
     endif ()
@@ -285,6 +289,12 @@ target_link_libraries(spark_profiler_timeout_test PRIVATE spark_application)
 set_target_properties(spark_profiler_timeout_test PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME spark_profiler_timeout_test COMMAND spark_profiler_timeout_test)
+add_test(NAME spark_profiler_timeout_subprocess_test
+        COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_SOURCE_DIR}/tests/application/profiler/profiler_timeout_subprocess.py
+        $<TARGET_FILE:spark_profiler_timeout_test>)
+set_tests_properties(spark_profiler_timeout_subprocess_test PROPERTIES
+        TIMEOUT 15 WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
 
 add_executable(spark_profiler_timeout_integration_test application/profiler/profiler_timeout_integration_test.cpp)
 target_link_libraries(spark_profiler_timeout_integration_test PRIVATE spark_application)
@@ -549,7 +559,94 @@ set_target_properties(spark_symbol_guess_dwarf_test PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME spark_symbol_guess_dwarf_test COMMAND spark_symbol_guess_dwarf_test)
 
+add_executable(spark_recovery_writer_durability_test core/recovery/recovery_writer_durability_test.cpp)
+target_link_libraries(spark_recovery_writer_durability_test PRIVATE spark_core)
+set_target_properties(spark_recovery_writer_durability_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME spark_recovery_writer_durability_test COMMAND spark_recovery_writer_durability_test --durability)
+add_test(NAME spark_recovery_writer_flush_test COMMAND spark_recovery_writer_durability_test --flush)
+set_tests_properties(spark_recovery_writer_durability_test spark_recovery_writer_flush_test PROPERTIES TIMEOUT 60)
+
+add_executable(spark_python_shadow_stack_test native/python/python_shadow_stack_test.cpp)
+target_link_libraries(spark_python_shadow_stack_test PRIVATE spark_core Threads::Threads)
+set_target_properties(spark_python_shadow_stack_test PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME spark_python_shadow_stack_test COMMAND spark_python_shadow_stack_test)
+
+set(SPARK_TEST_LIBPYTHON "$ENV{SPARK_TEST_LIBPYTHON}" CACHE FILEPATH "Python >= 3.12 shared runtime for native tests")
+set(SPARK_TEST_LIBPYTHON_311 "" CACHE FILEPATH "Optional Python 3.11 shared runtime for fallback tests")
+foreach (runtime SPARK_TEST_LIBPYTHON SPARK_TEST_LIBPYTHON_311)
+    if (${runtime})
+        execute_process(COMMAND "${Python3_EXECUTABLE}" -c
+                "import ctypes,sys; lib=ctypes.CDLL(sys.argv[1]); lib.Py_GetVersion.restype=ctypes.c_char_p; print(lib.Py_GetVersion().decode().split()[0])"
+                "${${runtime}}" OUTPUT_VARIABLE runtime_version OUTPUT_STRIP_TRAILING_WHITESPACE
+                RESULT_VARIABLE runtime_result)
+        if (NOT runtime_result EQUAL 0 OR
+                (runtime STREQUAL "SPARK_TEST_LIBPYTHON" AND runtime_version VERSION_LESS "3.12") OR
+                (runtime STREQUAL "SPARK_TEST_LIBPYTHON_311" AND NOT runtime_version MATCHES "^3\\.11\\."))
+            message(FATAL_ERROR "${runtime} does not name the required Python runtime: ${runtime_version}")
+        endif ()
+    endif ()
+endforeach ()
+set(SPARK_PYTHON_RUNTIME_TESTS python_admission_privacy_test)
+if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    list(APPEND SPARK_PYTHON_RUNTIME_TESTS python_reload_identity_test python_attribution_runtime_test)
+endif ()
+foreach (fixture IN LISTS SPARK_PYTHON_RUNTIME_TESTS)
+    add_executable(spark_${fixture} native/python/${fixture}.cpp)
+    target_link_libraries(spark_${fixture} PRIVATE spark_core ${CMAKE_DL_LIBS})
+    set_target_properties(spark_${fixture} PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+    if (fixture STREQUAL "python_admission_privacy_test")
+        add_test(NAME spark_${fixture} COMMAND spark_${fixture})
+    else ()
+        add_test(NAME spark_${fixture} COMMAND spark_${fixture} --expect-mode=monitoring)
+    endif ()
+    set_tests_properties(spark_${fixture} PROPERTIES TIMEOUT 180
+            ENVIRONMENT "SPARK_TEST_LIBPYTHON=${SPARK_TEST_LIBPYTHON}" LABELS "python-monitoring")
+endforeach ()
+if (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND SPARK_TEST_LIBPYTHON_311)
+    add_test(NAME spark_python_attribution_fallback_test
+            COMMAND spark_python_attribution_runtime_test --expect-mode=fallback)
+    set_tests_properties(spark_python_attribution_fallback_test PROPERTIES TIMEOUT 180
+            ENVIRONMENT "SPARK_TEST_LIBPYTHON=${SPARK_TEST_LIBPYTHON_311}" LABELS "python-3.11-fallback")
+endif ()
+
+add_executable(spark_windows_iat_hooks_test native/alloc/windows_iat_hooks_test.cpp)
 if (WIN32)
+    target_link_libraries(spark_windows_iat_hooks_test PRIVATE spark_core)
+else ()
+    target_sources(spark_windows_iat_hooks_test PRIVATE "${CMAKE_SOURCE_DIR}/src/native/alloc/windows_iat_hooks.cpp")
+    target_include_directories(spark_windows_iat_hooks_test PRIVATE "${CMAKE_SOURCE_DIR}/src")
+endif ()
+set_target_properties(spark_windows_iat_hooks_test PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_test(NAME spark_windows_iat_hooks_test COMMAND spark_windows_iat_hooks_test)
+
+if (WIN32)
+    foreach (fixture windows_iat_provider windows_iat_consumer windows_permanent_iat_backend_client
+            windows_permanent_iat_backend_plugin)
+        add_library(${fixture} SHARED native/alloc/${fixture}.cpp)
+        set_target_properties(${fixture} PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+    endforeach ()
+    target_link_libraries(windows_iat_consumer PRIVATE windows_iat_provider)
+    target_link_libraries(windows_permanent_iat_backend_plugin PRIVATE spark_core)
+    add_library(windows_iat_gateway_test_handler SHARED native/alloc/windows_gateway_test_handler.cpp)
+    set_target_properties(windows_iat_gateway_test_handler PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+
+    foreach (fixture windows_iat_native_test windows_permanent_iat_backend_reload_test
+            windows_permanent_iat_gateway_registry_test windows_permanent_iat_gateway_test
+            windows_permanent_iat_gateway_unload_test windows_permanent_iat_gateway_unwind_test)
+        add_executable(spark_${fixture} native/alloc/${fixture}.cpp)
+        target_link_libraries(spark_${fixture} PRIVATE spark_core Threads::Threads)
+        set_target_properties(spark_${fixture} PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+        add_test(NAME spark_${fixture} COMMAND spark_${fixture})
+        set_tests_properties(spark_${fixture} PROPERTIES TIMEOUT 180
+                WORKING_DIRECTORY "$<TARGET_FILE_DIR:spark_${fixture}>")
+    endforeach ()
+    add_dependencies(spark_windows_iat_native_test windows_iat_consumer windows_iat_provider)
+    add_dependencies(spark_windows_permanent_iat_backend_reload_test
+            windows_permanent_iat_backend_client windows_permanent_iat_backend_plugin)
+    add_dependencies(spark_windows_permanent_iat_gateway_unload_test windows_iat_gateway_test_handler)
+
     add_executable(spark_symbol_guess_windows_test
             native/symbol/symbol_guess_windows_test.cpp
             native/symbol/symbol_guess_windows_test_support.cpp
@@ -562,6 +659,23 @@ if (WIN32)
     set_target_properties(spark_symbol_guess_windows_test PROPERTIES
             RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
     add_test(NAME spark_symbol_guess_windows_test COMMAND spark_symbol_guess_windows_test)
+
+    add_custom_target(spark_windows_pe_evaluator_test DEPENDS spark_symbol_guess_windows_test)
+    add_test(NAME spark_windows_pe_evaluator_test
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/native/symbol/test_windows_pe_evaluator.py
+            --executable $<TARGET_FILE:spark_symbol_guess_windows_test>)
+    set_tests_properties(spark_windows_pe_evaluator_test PROPERTIES WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
+
+    add_executable(spark_windows_allocation_last_error_test
+            native/alloc/windows_allocation_last_error_test.cpp
+            "${CMAKE_SOURCE_DIR}/src/native/alloc/allocation_sampler_windows.cpp")
+    target_compile_definitions(spark_windows_allocation_last_error_test PRIVATE
+            SPARK_ALLOCATION_LAST_ERROR_TESTING=1 NOMINMAX)
+    target_include_directories(spark_windows_allocation_last_error_test PRIVATE "${CMAKE_SOURCE_DIR}/tests")
+    target_link_libraries(spark_windows_allocation_last_error_test PRIVATE spark_native)
+    set_target_properties(spark_windows_allocation_last_error_test PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+    add_test(NAME spark_windows_allocation_last_error_test COMMAND spark_windows_allocation_last_error_test)
 
     add_library(spark_windows_allocation_fixture SHARED native/alloc/windows_allocation_fixture.cpp)
     set_target_properties(spark_windows_allocation_fixture PROPERTIES
@@ -588,6 +702,14 @@ if (WIN32)
             RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
     add_test(NAME spark_capture_windows_lifecycle_test COMMAND spark_capture_windows_lifecycle_test)
 elseif (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+    add_subdirectory(native/alloc/linux_gateway)
+    foreach (fixture spark_allocation_lifecycle_test spark_allocation_diagnostics_test
+            spark_allocation_count_only_test spark_profiler_export_test spark_profiler_recovery_lifecycle_test)
+        target_link_options(${fixture} PRIVATE "LINKER:-z,now")
+    endforeach ()
+    if (TARGET spark_linux_sampler_churn_test)
+        target_link_options(spark_linux_sampler_churn_test PRIVATE "LINKER:-z,now")
+    endif ()
     add_executable(spark_symbol_guess_linux_test native/symbol/symbol_guess_linux_test.cpp)
     target_link_libraries(spark_symbol_guess_linux_test PRIVATE spark_core)
     set_target_properties(spark_symbol_guess_linux_test PROPERTIES
@@ -625,6 +747,38 @@ elseif (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "x
     set_target_properties(spark_capture_linux_lifecycle_test PROPERTIES
             RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
     add_test(NAME spark_capture_linux_lifecycle_test COMMAND spark_capture_linux_lifecycle_test)
+
+    add_library(spark_capture_linux_module_fixture MODULE native/sampler/capture_linux_module_fixture.cpp)
+    target_include_directories(spark_capture_linux_module_fixture PRIVATE "${CMAKE_SOURCE_DIR}/src")
+    target_compile_definitions(spark_capture_linux_module_fixture PRIVATE _GNU_SOURCE)
+    target_link_libraries(spark_capture_linux_module_fixture PRIVATE cpptrace::cpptrace Threads::Threads ${CMAKE_DL_LIBS})
+    target_link_options(spark_capture_linux_module_fixture PRIVATE -Wl,--wrap=dlopen -Wl,--exclude-libs,ALL)
+    set_target_properties(spark_capture_linux_module_fixture PROPERTIES
+            CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON
+            LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+    foreach (kind pie nonpie)
+        set(driver spark_capture_linux_module_${kind}_test)
+        add_executable(${driver} native/sampler/capture_linux_module_test.cpp)
+        target_compile_definitions(${driver} PRIVATE _GNU_SOURCE
+                SPARK_CAPTURE_MODULE_FIXTURE_PATH="$<TARGET_FILE:spark_capture_linux_module_fixture>")
+        target_link_libraries(${driver} PRIVATE spark_native Threads::Threads ${CMAKE_DL_LIBS})
+        add_dependencies(${driver} spark_capture_linux_module_fixture)
+        set_target_properties(${driver} PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+        if (kind STREQUAL "pie")
+            target_compile_options(${driver} PRIVATE -fPIE)
+            target_link_options(${driver} PRIVATE -pie)
+        else ()
+            target_compile_options(${driver} PRIVATE -fno-pie)
+            target_link_options(${driver} PRIVATE -no-pie)
+        endif ()
+        add_test(NAME ${driver} COMMAND ${driver})
+        add_test(NAME ${driver}_relative COMMAND "./$<TARGET_FILE_NAME:${driver}>")
+        set_tests_properties(${driver}_relative PROPERTIES WORKING_DIRECTORY "$<TARGET_FILE_DIR:${driver}>")
+    endforeach ()
+    add_test(NAME spark_capture_linux_module_dso_success_test COMMAND spark_capture_linux_module_pie_test --dso-success)
+    add_test(NAME spark_capture_linux_module_dso_failure_test COMMAND spark_capture_linux_module_pie_test --dso-failure)
+    add_test(NAME spark_selftest_relative COMMAND "./$<TARGET_FILE_NAME:spark_selftest>" --seconds=1)
+    set_tests_properties(spark_selftest_relative PROPERTIES WORKING_DIRECTORY "$<TARGET_FILE_DIR:spark_selftest>")
 endif ()
 
 add_test(NAME spark_selftest COMMAND spark_selftest --seconds=1)
@@ -635,6 +789,10 @@ add_test(NAME spark_architecture_boundaries_test
 
 add_test(NAME spark_release_changelog_test
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/test_release_changelog.py)
+
+add_test(NAME spark_release_workflow_inputs_test
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/test_release_workflow_inputs.py)
+set_tests_properties(spark_release_workflow_inputs_test PROPERTIES WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
 
 add_test(NAME spark_profile_evaluator_test
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/test_profile_evaluator.py)

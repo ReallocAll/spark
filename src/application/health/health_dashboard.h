@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "application/health/health_dashboard_connection.h"
+#include "core/util/deadline_thread.h"
 #include "net/cancellation.h"
 #include "proto/health_data.h"
 
@@ -56,6 +57,7 @@ public:
     void tick();
     void requestStop() noexcept;
     bool shutdownWithin(std::chrono::milliseconds timeout);
+    bool shutdownUntil(std::chrono::steady_clock::time_point deadline);
     void shutdown();
 
     bool isOpen() const;
@@ -98,11 +100,10 @@ private:
     std::condition_variable lifecycle_cv_;
     bool lifecycle_active_ = false;
     std::size_t open_calls_active_ = 0;
-    std::thread::id worker_id_;
     mutable std::mutex mutex_;
     std::condition_variable cv_;
     std::mutex completion_mutex_;
-    std::thread worker_;
+    detail::DeadlineThread worker_;
     std::mutex worker_exit_mutex_;
     std::condition_variable worker_exit_cv_;
     bool worker_exited_ = true;

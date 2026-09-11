@@ -2,6 +2,7 @@
 #define ENDSTONE_SPARK_WEBSOCKET_LIFECYCLE_TEST_SUPPORT_H
 
 #include <atomic>
+#include <cassert>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -25,6 +26,57 @@
 namespace spark {
 
 struct WebSocketClientTestAccess {
+    static std::string localCloseMessage(const WebSocketClient &client) { return client.local_close_message_; }
+    static std::unique_lock<std::mutex> lockSend(WebSocketClient &client)
+    {
+        return std::unique_lock<std::mutex>(client.send_mutex_);
+    }
+    static void prepareIo(WebSocketClient &client, std::function<void()> after_handshake,
+                          std::function<std::pair<int, std::size_t>(std::string_view)> send)
+    {
+        client.create_channel_for_testing_ = [](const auto &) {
+            return std::string("fixture");
+        };
+        client.handshake_for_testing_ = [] {
+            return CURLE_OK;
+        };
+        client.after_handshake_for_testing_ = std::move(after_handshake);
+        client.send_for_testing_ = [send = std::move(send)](const char *data, std::size_t size) {
+            const auto [code, sent] = send(std::string_view(data, size));
+            return WebSocketClient::SendAttempt{.code = code, .sent = sent};
+        };
+    }
+    static void pendingPrefix(WebSocketClient &client, std::string prefix)
+    {
+        client.pending_send_ = std::move(prefix);
+        client.pending_send_offset_ = 0;
+    }
+    static bool drainWith(WebSocketClient &client,
+                          const std::function<std::pair<int, std::size_t>(std::string_view)> &send)
+    {
+        return client.drainLocalClose([&](const char *data, std::size_t size) {
+            const auto [code, sent] = send(std::string_view(data, size));
+            return WebSocketClient::SendAttempt{.code = code, .sent = sent};
+        });
+    }
+    static void setCreateChannel(WebSocketClient &client, std::function<std::string(const CancellationToken &)> fn)
+    {
+        client.create_channel_for_testing_ = std::move(fn);
+    }
+
+    static void startHeldWorker(WebSocketClient &client, std::mutex &mutex, std::condition_variable &cv, bool &release)
+    {
+        client.worker_exited_ = false;
+        client.running_.store(true);
+        const bool started = client.thread_.start([&client, &mutex, &cv, &release] {
+            std::unique_lock lock(mutex);
+            cv.wait(lock, [&release] { return release; });
+            lock.unlock();
+            client.notifyTermination();
+            client.signalWorkerExit();
+        });
+        assert(started);
+    }
     enum class SendStep {
         Idle,
         Progress,
@@ -35,7 +87,7 @@ struct WebSocketClientTestAccess {
     static void startExitedWorker(WebSocketClient &client, std::mutex &mutex, std::condition_variable &cv, bool &exited)
     {
         client.running_.store(true);
-        client.thread_ = std::thread([&client, &mutex, &cv, &exited]() {
+        const bool started = client.thread_.start([&client, &mutex, &cv, &exited]() {
             client.running_.store(false);
             {
                 std::scoped_lock lock(mutex);
@@ -43,6 +95,7 @@ struct WebSocketClientTestAccess {
             }
             cv.notify_one();
         });
+        assert(started);
     }
 
     static bool joinable(const WebSocketClient &client) { return client.thread_.joinable(); }
@@ -68,12 +121,13 @@ struct WebSocketClientTestAccess {
     {
         client.running_.store(true);
         client.local_close_requested_.store(false);
-        client.thread_ = std::thread([&client, &close_attempted] {
+        const bool started = client.thread_.start([&client, &close_attempted] {
             while (client.running_.load()) {
                 std::this_thread::yield();
             }
             close_attempted.store(client.local_close_requested_.exchange(false));
         });
+        assert(started);
     }
 
     static void enqueue(WebSocketClient &client, const std::string &message)
@@ -143,7 +197,7 @@ struct WebSocketClientTestAccess {
 
     static void startCloseDrainWorker(WebSocketClient &client)
     {
-        client.thread_ = std::thread([&client]() {
+        const bool started = client.thread_.start([&client]() {
             while (client.running_.load()) {
                 std::this_thread::yield();
             }
@@ -152,10 +206,37 @@ struct WebSocketClientTestAccess {
             });
             client.running_.store(false);
         });
+        assert(started);
     }
 };
 
 struct ViewerSocketTestAccess {
+    static void age(ViewerSocket &socket)
+    {
+        socket.open_time_ms_ = 0;
+        socket.last_ping_ms_.store(0);
+    }
+    static void overflow(ViewerSocket &socket) { socket.incoming_overflow_.store(true); }
+    static void queueTrustedPacket(ViewerSocket &socket)
+    {
+        WsIncomingPacket packet;
+        packet.type = WsPacketType::ClientConnect;
+        packet.verified = true;
+        packet.public_key = {1};
+        socket.incoming_queue_.push_back(std::move(packet));
+    }
+    static void onTransportCreated(ViewerSocket &socket, std::function<void(WebSocketClient &)> fn)
+    {
+        socket.transport_created_for_testing_ = std::move(fn);
+    }
+
+    static WebSocketClient &transport(ViewerSocket &socket) { return *socket.ws_; }
+    static bool hasTransport(ViewerSocket &socket) { return socket.ws_ != nullptr; }
+
+    static std::unique_lock<std::timed_mutex> lockOpen(ViewerSocket &socket)
+    {
+        return std::unique_lock<std::timed_mutex>(socket.open_mutex_);
+    }
     static std::uint64_t beginOpen(ViewerSocket &socket)
     {
         std::scoped_lock transport_lock(socket.transport_mutex_);
@@ -194,9 +275,9 @@ struct ViewerSocketTestAccess {
         return socket.ws_ == nullptr ? 0 : WebSocketClientTestAccess::queued(*socket.ws_);
     }
 
-    static std::unique_lock<std::mutex> lockTransport(ViewerSocket &socket)
+    static std::unique_lock<std::timed_mutex> lockTransport(ViewerSocket &socket)
     {
-        return std::unique_lock<std::mutex>(socket.transport_mutex_);
+        return std::unique_lock<std::timed_mutex>(socket.transport_mutex_);
     }
 };
 

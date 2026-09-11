@@ -1,11 +1,69 @@
+import re
+import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 class WorkflowTest(unittest.TestCase):
+    def test_linux_jobs_enable_gateway_sampler_tests(self):
+        for filename in ("build.yml", "release.yml"):
+            workflow = (ROOT / ".github" / "workflows" / filename).read_text(encoding="utf-8")
+            jobs = dict(re.findall(r"^  ([\w-]+):\n(.*?)(?=^  [\w-]+:\n|\Z)", workflow, re.M | re.S))
+            expected = ("linux", "clang-tidy-linux") if filename == "build.yml" else ("linux",)
+            for name in expected:
+                with self.subTest(workflow=filename, job=name):
+                    configure = jobs[name].split("      - name: Configure\n", 1)[1].split("\n      - name:", 1)[0]
+                    self.assertIn('"-DENDSTONE_SPARK_GATEWAY_SAMPLER_TESTS=ON"', configure)
+            for name, job in jobs.items():
+                if name not in expected:
+                    self.assertNotIn("ENDSTONE_SPARK_GATEWAY_SAMPLER_TESTS", job)
+
+    def runtime_scripts(self):
+        scripts = []
+        for filename in ("build.yml", "release.yml"):
+            workflow = (ROOT / ".github" / "workflows" / filename).read_text(encoding="utf-8")
+            jobs = dict(re.findall(r"^  ([\w-]+):\n(.*?)(?=^  [\w-]+:\n|\Z)", workflow, re.M | re.S))
+            for platform in ("linux", "windows"):
+                job = jobs[platform]
+                self.assertIn('python-version: "3.12"', job)
+                self.assertIn("ctest --test-dir build/RelWithDebInfo --output-on-failure", job)
+                self.assertLess(job.index("name: Set up Python"), job.index("name: Locate Python test runtime"))
+                self.assertLess(job.index("name: Locate Python test runtime"), job.index("name: Configure"))
+                variable = "$env:SPARK_TEST_LIBPYTHON" if platform == "windows" else "$SPARK_TEST_LIBPYTHON"
+                configure = job.split("      - name: Configure\n", 1)[1].split("\n      - name:", 1)[0]
+                self.assertIn(f'"-DSPARK_TEST_LIBPYTHON:FILEPATH={variable}"', configure)
+                block = job.split("      - name: Locate Python test runtime\n", 1)[1].split("\n      - name:", 1)[0]
+                self.assertIn("shell: python {0}", block)
+                script = "\n".join(line[10:] for line in block.split("        run: |\n", 1)[1].splitlines())
+                compile(script, filename, "exec")
+                scripts.append(script)
+            for name, job in jobs.items():
+                if "ctest --test-dir" in job:
+                    self.assertIn(name, ("linux", "windows"))
+        return scripts
+
+    def test_native_runtime_jobs_pass_selected_python_library(self):
+        scripts = self.runtime_scripts()
+        self.assertEqual(len(scripts), 4)
+        self.assertTrue(all(script == scripts[0] for script in scripts))
+        self.assertIn('sysconfig.get_config_var("LDLIBRARY")', scripts[0])
+        self.assertIn('sysconfig.get_config_var("LIBDIR")', scripts[0])
+        self.assertIn("Path(sys.base_prefix)", scripts[0])
+        self.assertIn("runtime.is_file()", scripts[0])
+        self.assertIn("library.Py_GetVersion()", scripts[0])
+        self.assertIn('version != sys.version.split()[0]', scripts[0])
+        self.assertIn('output.write(f"SPARK_TEST_LIBPYTHON={runtime}\\n")', scripts[0])
+
+    def test_native_runtime_discovery_rejects_old_python(self):
+        for script in self.runtime_scripts():
+            with patch.object(sys, "version_info", (3, 11, 9)):
+                with self.assertRaisesRegex(SystemExit, "Python >= 3.12 is required"):
+                    exec(script, {})
+
     def test_build_enforces_project_quality(self):
         workflow = (ROOT / ".github" / "workflows" / "build.yml").read_text(encoding="utf-8")
         self.assertNotIn("conanfile.txt", workflow)

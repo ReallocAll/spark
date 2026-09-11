@@ -12,6 +12,7 @@
 #include <thread>
 
 #include "core/profiler/profiler.h"
+#include "core/util/deadline_thread.h"
 #include "core/ws/viewer_socket.h"
 
 namespace spark {
@@ -32,13 +33,14 @@ public:
         std::shared_ptr<ViewerSocket> socket;
         std::uint64_t generation = 0;
         std::string sender_name;
+        CancellationToken cancellation;
     };
 
     struct Completion {
         WorkType type = WorkType::Combined;
         std::uint64_t generation = 0;
         std::string url;
-        std::shared_ptr<ViewerSocket> socket;
+        std::weak_ptr<ViewerSocket> socket;
         std::string sender_name;
     };
 
@@ -53,6 +55,9 @@ public:
 
     bool start();
     void stop();
+    void requestStop();
+    bool stopUntil(std::chrono::steady_clock::time_point deadline);
+    bool quiesceUntil(std::chrono::steady_clock::time_point deadline);
 
     std::optional<std::uint64_t> enqueueOpen(ExportContext context, std::shared_ptr<ViewerSocket> socket,
                                              std::string sender_name);
@@ -77,9 +82,12 @@ private:
     ExecuteCallback execute_;
     CompletionCallback completion_;
 
-    std::thread thread_;
+    detail::DeadlineThread thread_;
     mutable std::mutex mutex_;
     std::condition_variable cv_;
+    std::condition_variable exit_cv_;
+    bool exited_ = true;
+    CancellationSource cancellation_;
     std::atomic<bool> running_{false};
     std::atomic<bool> failed_{false};
     std::optional<WorkItem> work_;

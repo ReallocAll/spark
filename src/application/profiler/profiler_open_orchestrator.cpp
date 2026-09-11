@@ -36,21 +36,29 @@ ProfilerOpenOrchestrator::ProfilerOpenOrchestrator(Profiler &profiler, Statistic
       metadata_provider_(metadata_provider), notifier_(notifier),
       viewer_schedule_(profiling_window::windowAdjustmentMs())
 {
-    viewer_open_fn_ = [](ViewerSocket &socket, const ViewerSocket::UploadCallback &upload) {
-        return socket.open(upload);
-    };
     viewer_worker_ = std::make_unique<ViewerUpdateWorker>(
         [this](const ViewerUpdateWorker::WorkItem &work) { return executeViewerWork(work); },
-        [this](ViewerUpdateWorker::Completion completion) { completeViewerWork(std::move(completion)); });
+        [mailbox = mailbox_](ViewerUpdateWorker::Completion completion) {
+            std::scoped_lock lock(mailbox->mutex);
+            mailbox->result = std::move(completion);
+        });
 }
 
 ProfilerOpenOrchestrator::~ProfilerOpenOrchestrator()
 {
-    shutdown();
+    if (!shutdownUntil(std::chrono::steady_clock::now() + std::chrono::seconds(5))) {
+        std::terminate();
+    }
 }
 
 void ProfilerOpenOrchestrator::cmdOpen(CommandSender &sender, const Arguments &args)
 {
+    drainCompletions();
+    reapUntil(std::chrono::steady_clock::now());
+    if (socket_state_ == SocketState::Retiring) {
+        sender.sendErrorMessage("previous live viewer still closing; retry");
+        return;
+    }
     if (viewerOpenPending()) {
         sender.sendMessage("A live viewer is already being opened.");
         return;
@@ -58,6 +66,13 @@ void ProfilerOpenOrchestrator::cmdOpen(CommandSender &sender, const Arguments &a
     if (viewer_socket_ && viewer_socket_->isOpen()) {
         sender.sendMessage("A live viewer is already open.");
         return;
+    }
+    if (viewer_socket_) {
+        close();
+        if (viewer_socket_) {
+            sender.sendErrorMessage("previous live viewer still closing; retry");
+            return;
+        }
     }
     if (!profiler_.running()) {
         sender.sendMessage("The profiler isn't running! Start it first with: {}/spark profiler start", kColorGray);
@@ -94,7 +109,10 @@ void ProfilerOpenOrchestrator::cmdOpen(CommandSender &sender, const Arguments &a
         return;
     }
     open_comment_ = comment;
-    if (!viewer_worker_->enqueueOpen(std::move(context), std::move(socket), sender.getName())) {
+    viewer_socket_ = socket;
+    socket_state_ = SocketState::Opening;
+    if (!viewer_worker_->enqueueOpen(std::move(context), socket, sender.getName())) {
+        close();
         open_comment_.clear();
         sender.sendErrorMessage("Failed to start the live viewer worker.");
         return;
@@ -104,6 +122,8 @@ void ProfilerOpenOrchestrator::cmdOpen(CommandSender &sender, const Arguments &a
 
 void ProfilerOpenOrchestrator::onTick(const std::string &fallback_sender_name)
 {
+    drainCompletions();
+    reapUntil(std::chrono::steady_clock::now());
     if (viewer_worker_ && viewer_worker_->consumeFailure()) {
         notifyBestEffort(viewer_sender_name_.empty() ? fallback_sender_name : viewer_sender_name_,
                          "Live viewer worker failed.");
@@ -113,7 +133,7 @@ void ProfilerOpenOrchestrator::onTick(const std::string &fallback_sender_name)
         return;
     }
 
-    if (viewer_socket_) {
+    if (socket_state_ == SocketState::Open && viewer_socket_) {
         if (!viewer_socket_->tick()) {
             std::string diagnostic = viewer_socket_->takeDiagnostic();
             if (!diagnostic.empty()) {
@@ -163,25 +183,70 @@ void ProfilerOpenOrchestrator::close()
     if (viewer_worker_) {
         viewer_worker_->invalidate();
     }
-    std::shared_ptr<ViewerSocket> socket = std::move(viewer_socket_);
-    if (socket) {
-        socket->close();
+    if (viewer_socket_) {
+        socket_state_ = SocketState::Retiring;
+        viewer_socket_->requestStop();
     }
     viewer_schedule_.disarm();
     viewer_sender_name_.clear();
     open_comment_.clear();
+    reapUntil(std::chrono::steady_clock::now());
 }
 
 void ProfilerOpenOrchestrator::shutdown()
 {
+    static_cast<void>(shutdownUntil(std::chrono::steady_clock::now() + std::chrono::seconds(5)));
+}
+
+void ProfilerOpenOrchestrator::requestStop()
+{
+    if (viewer_worker_) {
+        viewer_worker_->requestStop();
+    }
+    if (viewer_socket_) {
+        socket_state_ = SocketState::Retiring;
+        viewer_socket_->requestStop();
+    }
+    viewer_schedule_.disarm();
+}
+
+bool ProfilerOpenOrchestrator::shutdownUntil(std::chrono::steady_clock::time_point deadline)
+{
+    requestStop();
+    const bool worker_stopped = !viewer_worker_ || viewer_worker_->stopUntil(deadline);
+    drainCompletions();
+    const bool socket_stopped = reapUntil(deadline);
+    return worker_stopped && socket_stopped;
+}
+
+bool ProfilerOpenOrchestrator::retireUntil(std::chrono::steady_clock::time_point deadline)
+{
     close();
-    stopViewerWorker();
-    lifetime_.reset();
+    const bool idle = !viewer_worker_ || viewer_worker_->quiesceUntil(deadline);
+    drainCompletions();
+    return reapUntil(deadline) && idle;
+}
+
+bool ProfilerOpenOrchestrator::reapUntil(std::chrono::steady_clock::time_point deadline)
+{
+    if (socket_state_ != SocketState::Retiring) {
+        return true;
+    }
+    if (viewer_socket_ && !viewer_socket_->closeUntil(deadline)) {
+        return false;
+    }
+    if (viewer_worker_ && !viewer_worker_->quiesceUntil(deadline)) {
+        return false;
+    }
+    viewer_socket_.reset();
+    socket_state_ = SocketState::Empty;
+    return true;
 }
 
 void ProfilerOpenOrchestrator::setViewerSocketForTesting(std::shared_ptr<ViewerSocket> socket)
 {
     viewer_socket_ = std::move(socket);
+    socket_state_ = viewer_socket_ ? SocketState::Open : SocketState::Empty;
     viewer_sender_name_ = "Console";
 }
 
@@ -199,81 +264,72 @@ void ProfilerOpenOrchestrator::stopViewerWorker()
 
 std::string ProfilerOpenOrchestrator::executeViewerWork(const ViewerUpdateWorker::WorkItem &work)
 {
-    if (!viewerGenerationCurrent(work.generation) || !profiler_.running()) {
+    if (work.cancellation.stopRequested() || !viewerGenerationCurrent(work.generation) || !profiler_.running()) {
         return {};
     }
 
     if (work.type == ViewerUpdateWorker::WorkType::Open) {
         ExportContext context = work.context;
-        return viewer_open_fn_(*work.socket,
-                               [this, &context, generation = work.generation](const std::string &channel_info_proto) {
-                                   if (!viewerGenerationCurrent(generation) || !profiler_.running()) {
-                                       return std::string();
-                                   }
-                                   context.socket_channel_info_proto = channel_info_proto;
-                                   return uploadSamplerData(context);
-                               });
+        const ViewerSocket::UploadCallback upload = [this, &context, &work](const std::string &channel_info_proto) {
+            if (work.cancellation.stopRequested() || !viewerGenerationCurrent(work.generation) ||
+                !profiler_.running()) {
+                return std::string();
+            }
+            context.socket_channel_info_proto = channel_info_proto;
+            return uploadSamplerData(context, work.cancellation);
+        };
+        return viewer_open_fn_ ? viewer_open_fn_(*work.socket, upload) : work.socket->open(upload, work.cancellation);
     }
 
     if (work.type == ViewerUpdateWorker::WorkType::Statistics) {
         const LiveStatisticsPayload payload = buildLiveStatisticsPayload(work.context);
-        work.socket->sendStatistics(payload.platform, payload.system, payload.metrics);
+        if (!work.cancellation.stopRequested()) {
+            work.socket->sendStatistics(payload.platform, payload.system, payload.metrics);
+        }
         return {};
     }
 
     if (work.type == ViewerUpdateWorker::WorkType::Combined) {
         const LiveStatisticsPayload payload = buildLiveStatisticsPayload(work.context);
-        work.socket->sendStatistics(payload.platform, payload.system, payload.metrics);
+        if (!work.cancellation.stopRequested()) {
+            work.socket->sendStatistics(payload.platform, payload.system, payload.metrics);
+        }
     }
 
-    std::string bytebin_key = uploadSamplerData(work.context);
-    if (!bytebin_key.empty() && viewerGenerationCurrent(work.generation)) {
+    std::string bytebin_key = uploadSamplerData(work.context, work.cancellation);
+    if (!work.cancellation.stopRequested() && !bytebin_key.empty() && viewerGenerationCurrent(work.generation)) {
         work.socket->sendUpdate(bytebin_key);
     }
     return {};
 }
 
-void ProfilerOpenOrchestrator::completeViewerWork(ViewerUpdateWorker::Completion completion) noexcept
+void ProfilerOpenOrchestrator::drainCompletions()
 {
-    const std::weak_ptr<int> lifetime = lifetime_;
-    if (lifetime.expired()) {
-        return;
+    std::optional<ViewerUpdateWorker::Completion> completion;
+    {
+        std::scoped_lock lock(mailbox_->mutex);
+        completion = std::move(mailbox_->result);
+        mailbox_->result.reset();
     }
-    const std::uint64_t generation = completion.generation;
-    try {
-        dispatcher_.runOnMainThread([this, lifetime, completion = std::move(completion)]() mutable {
-            if (lifetime.expired()) {
-                return;
-            }
-            completeViewerOpen(std::move(completion));
-        });
-    }
-    catch (...) {
-        if (!lifetime.expired() && viewer_worker_) {
-            try {
-                viewer_worker_->completeOpen(generation);
-            }
-            catch (...) {
-                return;
-            }
-        }
+    if (completion) {
+        completeViewerOpen(*completion);
     }
 }
 
-void ProfilerOpenOrchestrator::completeViewerOpen(ViewerUpdateWorker::Completion completion)
+void ProfilerOpenOrchestrator::completeViewerOpen(const ViewerUpdateWorker::Completion &completion)
 {
-    if (!viewer_worker_ || !viewer_worker_->completeOpen(completion.generation)) {
+    const auto socket = completion.socket.lock();
+    if (socket_state_ != SocketState::Opening || socket != viewer_socket_ || !viewer_worker_ ||
+        !viewer_worker_->completeOpen(completion.generation)) {
         return;
     }
-    if (completion.url.empty() || !completion.socket || !completion.socket->isOpen() || !profiler_.running()) {
-        if (completion.socket) {
-            completion.socket->close();
-        }
+    if (completion.url.empty() || !socket || !socket->isOpen() || !profiler_.running()) {
+        close();
         open_comment_.clear();
         notifyBestEffort(completion.sender_name, "Failed to open the live viewer. Check your network connection.");
         return;
     }
-    viewer_socket_ = std::move(completion.socket);
+    socket_state_ = SocketState::Open;
     viewer_sender_name_ = completion.sender_name;
     viewer_schedule_.arm(nowMs());
     notifyBestEffort(completion.sender_name, "Live viewer opened! Open it at: " + completion.url);
@@ -322,23 +378,30 @@ ExportContext ProfilerOpenOrchestrator::captureLiveStatisticsContext(std::int64_
     return context;
 }
 
-std::string ProfilerOpenOrchestrator::uploadSamplerData(const ExportContext &context)
+std::string ProfilerOpenOrchestrator::uploadSamplerData(const ExportContext &context,
+                                                        const CancellationToken &cancellation)
 {
+    if (cancellation.stopRequested()) {
+        return {};
+    }
     const bool tracking_was_suppressed = profiler_.setCurrentThreadAllocationTrackingSuppressed(true);
     try {
         std::string body = buildLiveSamplerData(context);
-        if (body.empty()) {
+        if (body.empty() || cancellation.stopRequested()) {
             profiler_.setCurrentThreadAllocationTrackingSuppressed(tracking_was_suppressed);
             return {};
         }
-        std::string compressed = gzipCompress(body);
-        UploadResult result =
-            uploadToBytebin(compressed, bytebin_url_, kSamplerContentType, std::string("endstone-spark/") + kVersion);
+        std::string compressed = gzipCompress(body, cancellation);
+        UploadResult result = uploadToBytebin(compressed, bytebin_url_, kSamplerContentType,
+                                              std::string("endstone-spark/") + kVersion, cancellation);
         profiler_.setCurrentThreadAllocationTrackingSuppressed(tracking_was_suppressed);
         return result.ok ? result.key : std::string();
     }
     catch (...) {
         profiler_.setCurrentThreadAllocationTrackingSuppressed(tracking_was_suppressed);
+        if (cancellation.stopRequested()) {
+            return {};
+        }
         throw;
     }
 }

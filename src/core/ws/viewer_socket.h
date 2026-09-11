@@ -69,6 +69,7 @@ public:
 
     void requestStop() noexcept;
     bool closeWithin(std::chrono::milliseconds timeout) noexcept;
+    bool closeUntil(std::chrono::steady_clock::time_point deadline) noexcept;
 
     // Close the socket and signal the viewer.
     void close() noexcept;
@@ -117,9 +118,10 @@ private:
 
     Config config_;
     Crypto::KeyPair key_pair_;
-    std::mutex open_mutex_;
-    mutable std::mutex transport_mutex_;
+    std::timed_mutex open_mutex_;
+    mutable std::timed_mutex transport_mutex_;
     std::unique_ptr<WebSocketClient> ws_;
+    std::function<void(WebSocketClient &)> transport_created_for_testing_;
 
     std::atomic<ConnectionState> state_{ConnectionState::Closed};
     std::atomic<std::uint64_t> connection_generation_{0};

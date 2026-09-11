@@ -16,6 +16,7 @@
 #include <malloc.h>
 #endif
 
+#include "../recovery/journal_test_support.h"
 #include "core/profiler/profiler.h"
 #include "native/sampler/thread_info.h"
 #include "proto/proto_reader.h"
@@ -23,6 +24,29 @@
 namespace spark {
 
 struct ProfilerTestAccess {
+    static std::string groupingProfile(ProfileMode mode, ThreadGrouperMode grouping, bool reverse)
+    {
+        Profiler profiler;
+        profiler.mode_ = mode;
+        profiler.options_.thread_grouper = grouping;
+        profiler.start_time_ms_ = 1000;
+        profiler.end_time_ms_ = 121000;
+        AllocationSnapshot snapshot;
+        auto &threads = mode == ProfileMode::Allocation ? snapshot.thread_trees : profiler.sampler_.thread_trees_;
+        for (const std::uint64_t tid :
+             (reverse ? std::vector<std::uint64_t>{20, 10} : std::vector<std::uint64_t>{10, 20})) {
+            auto &thread = threads[tid];
+            thread.thread_name = "Worker";
+            if (grouping == ThreadGrouperMode::ByPool) {
+                thread.thread_name = tid == 10 ? "Worker-1" : "Worker-2";
+            }
+            const FrameKey frame{.module = 0, .rva = tid == 10 ? 0x1110ULL : 0x2220ULL};
+            thread.tree.log({frame}, 0, tid == 10 ? 2000 : 5000);
+            thread.tree.log({frame}, 1, tid == 10 ? 3000 : 7000);
+        }
+        return profiler.exportData({}, mode == ProfileMode::Allocation ? &snapshot : nullptr);
+    }
+
     static void setMode(Profiler &profiler, ProfileMode mode) { profiler.mode_ = mode; }
 
     static bool allocationSnapshot(Profiler &profiler, AllocationSnapshot &snapshot, std::string &error)
@@ -65,6 +89,31 @@ struct ProfilerTestAccess {
     static bool allocationDataIncomplete(const Profiler &profiler)
     {
         return profiler.allocation_sampler_.dataIncomplete();
+    }
+
+    static void reportAllocationTerminalState(const Profiler &profiler)
+    {
+        const auto &sampler = profiler.allocation_sampler_;
+        const auto diagnostics = sampler.allocationDiagnostics();
+        const auto report_unsigned = [](const char *name, std::uint64_t value) {
+            std::fprintf(stderr, "terminal metadata: getter.%s uint64=%llu\n", name,
+                         static_cast<unsigned long long>(value));
+        };
+        report_unsigned("terminal", sampler.terminalInFlightTickSamplesDiscarded());
+        report_unsigned("pending_final", sampler.pendingFinalDrops());
+        report_unsigned("dropped", sampler.droppedSamples());
+        report_unsigned("pending", sampler.pendingSampleDrops());
+        report_unsigned("lifecycle", sampler.lifecycleDropped());
+        report_unsigned("contention", sampler.contentionDropped());
+        report_unsigned("drain", sampler.drainTruncated());
+        report_unsigned("tick", sampler.droppedTickEvents());
+        report_unsigned("thread_state", sampler.threadStateDrops());
+        std::fprintf(stderr, "terminal metadata: getter.incomplete bool=%s\n",
+                     sampler.dataIncomplete() ? "true" : "false");
+        std::fprintf(stderr, "terminal metadata: getter.accounting AllocationAccountingState=%s\n",
+                     allocationAccountingStateName(diagnostics.accounting_state));
+        std::fprintf(stderr, "terminal metadata: getter.stop_timeout bool=%s\n",
+                     sampler.stopWaitTimedOut() ? "true" : "false");
     }
 
     static void seedExecutionTerminalSamples(Profiler &profiler, std::size_t count)
@@ -296,11 +345,28 @@ bool verifyTerminalMetadataExportWithSamples()
         metadataUnsigned(allocation_profile, "Allocation pending samples dropped", 0) &&
         metadataBoolean(allocation_profile, "Allocation data incomplete", false) &&
         metadataString(allocation_profile, "Allocation diagnostics accounting state", "\"Complete\"");
+    if (!valid) {
+        std::fprintf(stderr, "terminal metadata: allocation nonzero values were not serialized correctly\n");
+        std::fprintf(stderr, "terminal metadata: terminal uint64=%llu expected=>0 profile_bytes size_t=%zu\n",
+                     static_cast<unsigned long long>(terminal), allocation_profile.size());
+        const auto report_metadata = [&](const char *key, const char *type, const std::string &expected) {
+            std::string value;
+            const bool found = findExtraMetadataValue(allocation_profile, key, value);
+            std::fprintf(stderr, "terminal metadata: serialized.%s type=%s found=%s actual=%s expected=%s\n", key, type,
+                         found ? "true" : "false", found ? value.c_str() : "<missing-or-invalid>", expected.c_str());
+        };
+        report_metadata("Allocation terminal in-flight tick samples discarded", "uint64", std::to_string(terminal));
+        report_metadata("Allocation pending final drops", "uint64", std::to_string(terminal));
+        report_metadata("Allocation samples dropped", "uint64", "0");
+        report_metadata("Allocation pending samples dropped", "uint64", "0");
+        report_metadata("Allocation data incomplete", "bool", "false");
+        report_metadata("Allocation diagnostics accounting state", "string", "\"Complete\"");
+        spark::ProfilerTestAccess::reportAllocationTerminalState(allocation);
+    }
     for (void *pointer : retained) {
         std::free(pointer);
     }
     if (!valid) {
-        std::fprintf(stderr, "terminal metadata: allocation nonzero values were not serialized correctly\n");
         allocation.shutdown(error);
         return false;
     }
@@ -866,6 +932,20 @@ bool verifyRetainedAllocationLiveExport()
 
 int main()
 {
+    for (const auto mode : {spark::ProfileMode::Execution, spark::ProfileMode::Allocation}) {
+        for (const auto grouping :
+             {spark::ThreadGrouperMode::ByName, spark::ThreadGrouperMode::ByPool, spark::ThreadGrouperMode::AsOne}) {
+            const auto profile = spark::ProfilerTestAccess::groupingProfile(mode, grouping, false);
+            if (!spark::journal_test::verifyGroupedProfile(profile, grouping, mode == spark::ProfileMode::Allocation) ||
+                !spark::journal_test::verifyGroupedProfile(
+                    spark::ProfilerTestAccess::groupingProfile(mode, grouping, true), grouping,
+                    mode == spark::ProfileMode::Allocation)) {
+                std::fprintf(stderr, "grouping export failed: mode=%d grouping=%d\n", static_cast<int>(mode),
+                             static_cast<int>(grouping));
+                return 1;
+            }
+        }
+    }
     if (!verifyTerminalMetadataExport()) {
         return 1;
     }
