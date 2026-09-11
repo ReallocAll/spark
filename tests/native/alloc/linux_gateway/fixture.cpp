@@ -11,7 +11,7 @@ int (*const ParserPointer)() = &parserAnchor;
 
 extern "C" const void *spark_parser_fixture()
 {
-    return &ParserPointer;
+    return static_cast<const void *>(&ParserPointer);
 }
 #else
 #define UNW_LOCAL_ONLY
@@ -20,6 +20,7 @@ extern "C" const void *spark_parser_fixture()
 #include <unwind.h>
 
 #include <array>
+#include <bit>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -50,13 +51,13 @@ _Unwind_Reason_Code unwindFrame(_Unwind_Context *context, void *opaque)
 {
     auto &state = *static_cast<GatewayFixtureState *>(opaque);
     const auto *directory = spark::gateway::permanent::directory();
-    const auto get_ip = reinterpret_cast<decltype(&_Unwind_GetIP)>(directory->host.functions[4]);
+    const auto get_ip = std::bit_cast<decltype(&_Unwind_GetIP)>(directory->host.functions[4]);
     const auto pc = get_ip(context);
     if (pc >= directory->code && pc < directory->code + directory->code_size) {
         state.unwind_mask.fetch_or(1);
     }
     Dl_info info{};
-    if (::dladdr(reinterpret_cast<void *>(pc), &info) != 0 && info.dli_fname != nullptr &&
+    if (::dladdr(std::bit_cast<void *>(pc), &info) != 0 && info.dli_fname != nullptr &&
         std::strstr(info.dli_fname, "spark_linux_gateway_test") != nullptr) {
         state.unwind_mask.fetch_or(2);
     }
@@ -85,14 +86,14 @@ void *mallocCallback(void *context, std::size_t size)
         reinterpret_cast<void (*)(void *)>(entries[3])(nested);
     }
     const auto *directory = spark::gateway::permanent::directory();
-    reinterpret_cast<decltype(&_Unwind_Backtrace)>(directory->host.functions[3])(&unwindFrame, owner.state);
+    std::bit_cast<decltype(&_Unwind_Backtrace)>(directory->host.functions[3])(&unwindFrame, owner.state);
     const auto trace = cpptrace::generate_raw_trace();
     for (auto pc : trace.frames) {
         if (pc >= directory->code && pc < directory->code + directory->code_size) {
             owner.state->unwind_mask.fetch_or(4);
         }
         Dl_info info{};
-        if (::dladdr(reinterpret_cast<void *>(pc), &info) != 0 && info.dli_fname != nullptr &&
+        if (::dladdr(std::bit_cast<void *>(pc), &info) != 0 && info.dli_fname != nullptr &&
             std::strstr(info.dli_fname, "spark_linux_gateway_test") != nullptr) {
             owner.state->unwind_mask.fetch_or(8);
         }
@@ -252,7 +253,7 @@ extern "C" __attribute__((visibility("default"))) int fixture_private_rows()
             if (unw_getcontext(&context) != 0) {
                 return 0;
             }
-            context.uc_mcontext.gregs[REG_RIP] = static_cast<greg_t>(directory->code + api * KCodeStride + offset);
+            context.uc_mcontext.gregs[REG_RIP] = std::bit_cast<greg_t>(directory->code + api * KCodeStride + offset);
             context.uc_mcontext.gregs[REG_RSP] = reinterpret_cast<greg_t>(stack.data() + (pushed ? 0 : 1));
             context.uc_mcontext.gregs[REG_RBP] =
                 framed ? reinterpret_cast<greg_t>(stack.data()) : static_cast<greg_t>(saved_rbp);

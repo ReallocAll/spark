@@ -13,14 +13,16 @@ add_library(spark_linux_gateway_fixture SHARED fixture.cpp)
 target_include_directories(spark_linux_gateway_fixture PRIVATE "${CMAKE_SOURCE_DIR}/src" "${SPARK_LIBUNWIND_INCLUDE_DIR}")
 target_link_libraries(spark_linux_gateway_fixture PRIVATE spark_linux_gateway_test_backend)
 target_link_options(spark_linux_gateway_fixture PRIVATE "-Wl,--exclude-libs,ALL")
-target_compile_options(spark_linux_gateway_fixture PRIVATE -fvisibility=hidden -fvisibility-inlines-hidden)
+target_compile_options(spark_linux_gateway_fixture PRIVATE -fvisibility=hidden -fvisibility-inlines-hidden
+        -fno-optimize-sibling-calls)
 set_target_properties(spark_linux_gateway_fixture PROPERTIES PREFIX "" OUTPUT_NAME endstone_spark
         LIBRARY_OUTPUT_DIRECTORY "${gateway_fixture_root}")
 add_library(spark_linux_gateway_production_fixture SHARED fixture.cpp)
 target_include_directories(spark_linux_gateway_production_fixture PRIVATE "${SPARK_LIBUNWIND_INCLUDE_DIR}")
 target_link_libraries(spark_linux_gateway_production_fixture PRIVATE spark_linux_permanent_gateway cpptrace::cpptrace)
 target_link_options(spark_linux_gateway_production_fixture PRIVATE "-Wl,--exclude-libs,ALL")
-target_compile_options(spark_linux_gateway_production_fixture PRIVATE -fvisibility=hidden -fvisibility-inlines-hidden)
+target_compile_options(spark_linux_gateway_production_fixture PRIVATE -fvisibility=hidden -fvisibility-inlines-hidden
+        -fno-optimize-sibling-calls)
 set_target_properties(spark_linux_gateway_production_fixture PROPERTIES PREFIX "" OUTPUT_NAME endstone_spark
         LIBRARY_OUTPUT_DIRECTORY "${gateway_fixture_root}/production")
 foreach (domain A B)
@@ -38,6 +40,25 @@ target_compile_definitions(spark_linux_gateway_provider_C PRIVATE "PROVIDER_DOMA
 set_target_properties(spark_linux_gateway_provider_C PROPERTIES LIBRARY_OUTPUT_DIRECTORY "${gateway_fixture_root}")
 target_link_libraries(spark_linux_gateway_provider_A PRIVATE "-Wl,--no-as-needed" spark_linux_gateway_provider_C)
 
+add_library(spark_linux_gateway_dependent_provider SHARED provider.cpp provider_dependency.cpp)
+target_compile_definitions(spark_linux_gateway_dependent_provider PRIVATE "PROVIDER_DOMAIN='D'")
+target_link_libraries(spark_linux_gateway_dependent_provider PRIVATE spark_linux_gateway_fixture)
+add_library(spark_linux_gateway_unlinked_provider SHARED provider.cpp provider_unlinked.cpp)
+target_compile_definitions(spark_linux_gateway_unlinked_provider PRIVATE "PROVIDER_DOMAIN='U'")
+add_library(spark_linux_gateway_lookup_provider SHARED provider.cpp provider_lookup.cpp)
+target_compile_options(spark_linux_gateway_lookup_provider PRIVATE -fno-optimize-sibling-calls)
+target_compile_definitions(spark_linux_gateway_lookup_provider PRIVATE "PROVIDER_DOMAIN='L'")
+target_link_libraries(spark_linux_gateway_lookup_provider PRIVATE "-Wl,--no-as-needed"
+        spark_linux_gateway_provider_B ${CMAKE_DL_LIBS})
+foreach (provider dependent unlinked lookup)
+    set_target_properties(spark_linux_gateway_${provider}_provider PROPERTIES LIBRARY_OUTPUT_DIRECTORY "${gateway_fixture_root}")
+endforeach ()
+foreach (provider unlinked lookup)
+    add_test(NAME spark_linux_gateway_${provider}_artifact
+            COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tests/native/alloc/verify_linux_gateway.py" provider
+                    "$<TARGET_FILE:spark_linux_gateway_${provider}_provider>")
+endforeach ()
+
 foreach (host gcc llvm)
     add_executable(spark_linux_gateway_test_${host} permanent_gateway_test.cpp)
     target_include_directories(spark_linux_gateway_test_${host} PRIVATE "${CMAKE_SOURCE_DIR}/src")
@@ -46,6 +67,10 @@ foreach (host gcc llvm)
             SPARK_GATEWAY_PRODUCTION_FIXTURE="$<TARGET_FILE:spark_linux_gateway_production_fixture>"
             SPARK_GATEWAY_FIXTURE="$<TARGET_FILE:spark_linux_gateway_fixture>"
             SPARK_GATEWAY_PROVIDER="$<TARGET_FILE:spark_linux_gateway_provider_A>"
+            SPARK_GATEWAY_TRANSITIVE_PROVIDER="$<TARGET_FILE:spark_linux_gateway_provider_C>"
+            SPARK_GATEWAY_DEPENDENT_PROVIDER="$<TARGET_FILE:spark_linux_gateway_dependent_provider>"
+            SPARK_GATEWAY_UNLINKED_PROVIDER="$<TARGET_FILE:spark_linux_gateway_unlinked_provider>"
+            SPARK_GATEWAY_LOOKUP_PROVIDER="$<TARGET_FILE:spark_linux_gateway_lookup_provider>"
             SPARK_GATEWAY_DYNAMIC_PROVIDER="$<TARGET_FILE:spark_linux_gateway_provider_B>")
     target_link_libraries(spark_linux_gateway_test_${host} PRIVATE "-Wl,--no-as-needed" spark_linux_gateway_provider_A)
     if (host STREQUAL "llvm")
@@ -56,11 +81,18 @@ foreach (host gcc llvm)
     target_link_libraries(spark_linux_gateway_test_${host} PRIVATE ${CMAKE_DL_LIBS} pthread)
     target_link_options(spark_linux_gateway_test_${host} PRIVATE -rdynamic)
     add_dependencies(spark_linux_gateway_test_${host} spark_linux_gateway_fixture spark_linux_gateway_provider_B
-            spark_linux_gateway_production_fixture)
+            spark_linux_gateway_production_fixture spark_linux_gateway_dependent_provider
+            spark_linux_gateway_unlinked_provider spark_linux_gateway_lookup_provider)
     foreach (mode basic gates tls exhaustion provider registry rollback cancellation quarantine)
         add_test(NAME spark_linux_permanent_gateway_${host}_${mode}
                 COMMAND spark_linux_gateway_test_${host} ${mode})
         set_tests_properties(spark_linux_permanent_gateway_${host}_${mode} PROPERTIES TIMEOUT 120)
+    endforeach ()
+    foreach (mode original_null original_anonymous original_spark original_nonexecutable
+            provider_dependent provider_transitive provider_unlinked_now provider_unlinked_lazy
+            provider_lookup_unused provider_lookup_resolved)
+        add_test(NAME spark_linux_permanent_gateway_${host}_${mode} COMMAND spark_linux_gateway_test_${host} ${mode})
+        set_tests_properties(spark_linux_permanent_gateway_${host}_${mode} PROPERTIES TIMEOUT 30)
     endforeach ()
     add_test(NAME spark_linux_gateway_${host}_arena_dump COMMAND spark_linux_gateway_test_${host} arena
             "${CMAKE_BINARY_DIR}/gateway-arena-${host}")
@@ -126,6 +158,11 @@ target_compile_definitions(spark_linux_elf_domain_test PRIVATE _GNU_SOURCE
         SPARK_GATEWAY_CONSUMER_B="$<TARGET_FILE:spark_linux_gateway_consumer_B>")
 add_dependencies(spark_linux_elf_domain_test spark_linux_gateway_consumer_A spark_linux_gateway_consumer_B)
 add_test(NAME spark_linux_elf_domain_test COMMAND spark_linux_elf_domain_test)
+add_library(spark_linux_global_interposer SHARED global_interposer.cpp)
+add_dependencies(spark_linux_elf_domain_test spark_linux_global_interposer)
+add_test(NAME spark_linux_global_interposer_test
+        COMMAND ${CMAKE_COMMAND} -E env "LD_PRELOAD=$<TARGET_FILE:spark_linux_global_interposer>"
+                SPARK_EXPECT_INTERPOSER=1 "$<TARGET_FILE:spark_linux_elf_domain_test>")
 if (ENDSTONE_SPARK_GATEWAY_SAMPLER_TESTS)
     include(sampler_fixture.cmake)
 endif ()

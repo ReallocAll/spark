@@ -1,14 +1,15 @@
 #include <dlfcn.h>
 #include <fcntl.h>
 #include <pthread.h>
-#include <signal.h>
 #include <unistd.h>
 #include <unwind.h>
 
 #include <array>
 #include <atomic>
+#include <bit>
 #include <cerrno>
 #include <chrono>
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -34,7 +35,17 @@ extern "C" __attribute__((visibility("default"))) _Unwind_Ptr _Unwind_GetIP(_Unw
 #endif
 
 namespace {
-using namespace spark::gateway::permanent;
+using spark::gateway::permanent::Directory;
+using spark::gateway::permanent::Entry;
+using spark::gateway::permanent::Group;
+using spark::gateway::permanent::KCapacity;
+using spark::gateway::permanent::KCieSize;
+using spark::gateway::permanent::KCodeSize;
+using spark::gateway::permanent::KCodeStride;
+using spark::gateway::permanent::KEntryCount;
+using spark::gateway::permanent::KFdeStride;
+using spark::gateway::permanent::KMetadataSize;
+using spark::gateway::permanent::State;
 void require(bool condition, const char *message);
 
 Directory SampleDirectory;
@@ -44,7 +55,7 @@ std::atomic<bool> SampleDone{false};
 
 _Unwind_Reason_Code sampledFrame(_Unwind_Context *context, void *)
 {
-    const auto pc = reinterpret_cast<decltype(&_Unwind_GetIP)>(SampleDirectory.host.functions[4])(context);
+    const auto pc = std::bit_cast<decltype(&_Unwind_GetIP)>(SampleDirectory.host.functions[4])(context);
     SampleFrames.fetch_add(1);
     if (pc >= SampleDirectory.code && pc < SampleDirectory.code + SampleDirectory.code_size) {
         SampleGateway.store(true);
@@ -54,7 +65,7 @@ _Unwind_Reason_Code sampledFrame(_Unwind_Context *context, void *)
 
 void sampleSignal(int)
 {
-    reinterpret_cast<decltype(&_Unwind_Backtrace)>(SampleDirectory.host.functions[3])(&sampledFrame, nullptr);
+    std::bit_cast<decltype(&_Unwind_Backtrace)>(SampleDirectory.host.functions[3])(&sampledFrame, nullptr);
     SampleDone.store(true, std::memory_order_release);
 }
 
@@ -131,7 +142,7 @@ struct Fixture {
         require(symbol<int (*)()>(handle, "fixture_private_rows")() == 1,
                 "actual private GNU unwind restores IP/SP/RBP across every prologue and epilogue state");
         Dl_info owner{};
-        require(::dladdr(reinterpret_cast<void *>(directory.host.functions[0]), &owner) != 0, "host tuple owner");
+        require(::dladdr(std::bit_cast<void *>(directory.host.functions[0]), &owner) != 0, "host tuple owner");
         std::printf("host mode=%u provider=%s group=%u\n", static_cast<unsigned>(directory.host.mode), owner.dli_fname,
                     info.binding.group);
     }
@@ -196,6 +207,9 @@ void invoke(const SparkGatewayBindingV1 &binding, unsigned api)
         binding.tls_entry(&value);
         return;
     }
+    default:
+        require(false, "unsupported gateway signature");
+        return;
     }
     require(result != nullptr, "allocator signature result");
     reinterpret_cast<void (*)(void *)>(binding.entries[3])(result);
@@ -208,13 +222,13 @@ void verifyLookups(const Directory &directory)
         void *data;
         void *function;
     };
-    const auto find = reinterpret_cast<const void *(*)(const void *, Bases *)>(directory.host.functions[2]);
+    const auto find = std::bit_cast<const void *(*)(const void *, Bases *)>(directory.host.functions[2]);
     for (std::size_t i = 0; i < KEntryCount; ++i) {
         Bases bases{};
         const auto code = directory.code + i * KCodeStride;
-        require(find(reinterpret_cast<void *>(code + 1), &bases) ==
-                        reinterpret_cast<void *>(directory.metadata + KCieSize + i * KFdeStride) &&
-                    bases.function == reinterpret_cast<void *>(code),
+        require(find(std::bit_cast<void *>(code + 1), &bases) ==
+                        std::bit_cast<void *>(directory.metadata + KCieSize + i * KFdeStride) &&
+                    bases.function == std::bit_cast<void *>(code),
                 "all permanent host FDEs survive image removal");
     }
 }
@@ -231,7 +245,7 @@ void basic()
     }
     require(first.state.unwind_mask.load() == 15, "actual host and cpptrace unwind through gateway into caller");
     require(first.api->active(first.info.binding.group, 0) == 0, "nested gateway callbacks drain every admission");
-    auto &entry = reinterpret_cast<State *>(first.directory.state)->groups[first.info.binding.group].entries[0];
+    auto &entry = std::bit_cast<State *>(first.directory.state)->groups[first.info.binding.group].entries[0];
     const auto before_saturation = first.state.callbacks[0].load();
     entry.state.store(UINT32_MAX);
     invoke(first.info.binding, 0);
@@ -244,7 +258,7 @@ void basic()
             "admitted allocator errno");
     const auto entries = first.info.binding;
     const auto directory = first.directory;
-    const auto registrations = reinterpret_cast<State *>(directory.state)->host_registrations;
+    const auto registrations = std::bit_cast<State *>(directory.state)->host_registrations;
     const auto used = first.api->used();
     const auto leases = first.api->leases();
     for (unsigned repeat = 0; repeat < 20; ++repeat) {
@@ -260,7 +274,7 @@ void basic()
     verifyLookups(directory);
     Fixture next;
     next.begin(allocator);
-    require(reinterpret_cast<State *>(directory.state)->host_registrations == registrations,
+    require(std::bit_cast<State *>(directory.state)->host_registrations == registrations,
             "reload never registers host frames again");
     require(next.directory.code == directory.code && next.directory.host.mode == directory.host.mode,
             "reload adopts permanent arena and host registration");
@@ -383,6 +397,168 @@ std::size_t descriptors()
     return count;
 }
 
+bool loaded(const char *path)
+{
+    void *handle = ::dlopen(path, RTLD_NOW | RTLD_NOLOAD);
+    if (handle == nullptr) {
+        return false;
+    }
+    require(::dlclose(handle) == 0, "release loaded-image observation");
+    return true;
+}
+
+struct AdmissionBaseline {
+    std::uint32_t groups;
+    std::uint32_t leases;
+    std::size_t descriptors;
+};
+
+AdmissionBaseline admissionBaseline(Fixture &fixture)
+{
+    const auto root = std::filesystem::path(fixture.path).parent_path().string();
+    std::array<char, 256> error{};
+    require(fixture.api->bootstrap(root.c_str(), reinterpret_cast<const void *>(fixture.start), error.data(),
+                                   error.size()) != 0,
+            "initialize only permanent gateway and host-unwinder lease");
+    const AdmissionBaseline baseline{
+        .groups = fixture.api->used(), .leases = fixture.api->leases(), .descriptors = descriptors()};
+    require(baseline.groups == 0 && baseline.leases == 1, "admission starts with only the host-unwinder lease");
+    return baseline;
+}
+
+void unchangedAdmission(const Fixture &fixture, const AdmissionBaseline &baseline)
+{
+    require(fixture.api->used() == baseline.groups && fixture.api->leases() == baseline.leases &&
+                descriptors() == baseline.descriptors,
+            "failed admission creates no reservation, provider lease or descriptor");
+}
+
+void rejectedProvider(Fixture &fixture, void *provider, const AdmissionBaseline &baseline)
+{
+    require(fixture.start(provider, &fixture.state, &fixture.info) == 0, "unsafe provider admission fails");
+    const auto *const error = symbol<const char *(*)()>(fixture.handle, "fixture_error")();
+    require(std::strstr(error, "unsafe provider") != nullptr, "rejection occurs at provider admission");
+    unchangedAdmission(fixture, baseline);
+}
+
+void originalRejection(std::string_view mode)
+{
+    auto *allocator = provider();
+    Fixture fixture;
+    const auto baseline = admissionBaseline(fixture);
+    constexpr std::array names{"provider_malloc",        "provider_calloc",       "provider_realloc",
+                               "provider_free",          "provider_reallocarray", "provider_aligned_alloc",
+                               "provider_posix_memalign"};
+    std::array<void *, 7> originals{};
+    for (std::size_t i = 0; i < names.size(); ++i) {
+        originals[i] = symbol<void *>(allocator, names[i]);
+    }
+    void *anonymous = nullptr;
+    if (mode == "original_null") {
+        originals.back() = nullptr;
+    }
+    else if (mode == "original_anonymous") {
+        anonymous = ::mmap(nullptr, 4096, PROT_READ | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        require(anonymous != MAP_FAILED, "anonymous executable original fixture");
+        originals.back() = anonymous;
+    }
+    else if (mode == "original_spark") {
+        originals.back() = reinterpret_cast<void *>(fixture.start);
+    }
+    else {
+        require(mode == "original_nonexecutable", "select invalid original kind");
+        originals.back() = &SampleFrames;
+    }
+    SparkGatewayBindingV1 binding{
+        .size = sizeof(SparkGatewayBindingV1), .group = UINT32_MAX, .entries = {}, .tls_entry = nullptr};
+    std::array<char, 256> error{};
+    require(fixture.api->reserve(originals.data(), reinterpret_cast<const void *>(fixture.start), &binding,
+                                 error.data(), error.size()) == 0,
+            "invalid final original rejects partially acquired provider set");
+    require(error[0] != '\0' && binding.group == UINT32_MAX && binding.entries[0] == nullptr,
+            "rejected reservation does not publish a binding");
+    unchangedAdmission(fixture, baseline);
+    if (anonymous != nullptr) {
+        require(::munmap(anonymous, 4096) == 0, "release anonymous original fixture");
+    }
+    require(::dlclose(allocator) == 0, "release original provider observation");
+}
+
+void dependentProvider()
+{
+    Fixture fixture;
+    admissionBaseline(fixture);
+    void *dependent = ::dlopen(SPARK_GATEWAY_DEPENDENT_PROVIDER, RTLD_NOW | RTLD_LOCAL);
+    require(dependent != nullptr, "load provider with Spark DT_NEEDED dependency");
+    const auto baseline = admissionBaseline(fixture);
+    rejectedProvider(fixture, dependent, baseline);
+    require(::dlclose(dependent) == 0 && !loaded(SPARK_GATEWAY_DEPENDENT_PROVIDER),
+            "rejected Spark-dependent provider remains unloadable");
+}
+
+void transitiveProvider()
+{
+    void *transitive = ::dlopen(SPARK_GATEWAY_TRANSITIVE_PROVIDER, RTLD_NOW | RTLD_NOLOAD);
+    require(transitive != nullptr, "transitive provider is already in startup A dependency closure");
+    Fixture fixture;
+    const auto baseline = admissionBaseline(fixture);
+    fixture.begin(transitive);
+    require(fixture.api->used() == baseline.groups + 1 && fixture.api->leases() == baseline.leases + 1,
+            "transitive startup provider gains exactly one group and provider lease");
+    invoke(fixture.info.binding, 0);
+    require(fixture.state.callbacks[0].load() == 1, "transitive provider callback forwards successfully");
+    require(::dlclose(transitive) == 0, "release external transitive provider handle");
+    const auto entries = fixture.info.binding;
+    fixture.unload();
+    invoke(entries, 0);
+}
+
+void unlinkedProvider(bool lazy)
+{
+    Fixture fixture;
+    admissionBaseline(fixture);
+    void *global = ::dlopen(fixture.path, RTLD_NOW | RTLD_NOLOAD | RTLD_GLOBAL);
+    require(global != nullptr, "expose Spark fixture symbols to a provider without DT_NEEDED");
+    void *unlinked = ::dlopen(SPARK_GATEWAY_UNLINKED_PROVIDER, (lazy ? RTLD_LAZY : RTLD_NOW) | RTLD_GLOBAL);
+    require(unlinked != nullptr, "load provider with unresolved ELF imports into Spark");
+    const auto lookup = symbol<void *(*)()>(global, "fixture_default_binding");
+    const auto anchor = reinterpret_cast<void *(*)()>(lookup());
+    require(anchor != nullptr && anchor() == symbol<void *>(global, "spark_gateway_unlinked_import"),
+            "provider's undefined import actually resolves into Spark");
+    const auto calls = symbol<unsigned (*)()>(global, "fixture_query_calls");
+    require(calls() == 0, "provider call import has not executed before admission");
+    const auto baseline = admissionBaseline(fixture);
+    rejectedProvider(fixture, unlinked, baseline);
+    symbol<void (*)()>(unlinked, "provider_lazy_spark")();
+    require(calls() == 1, "provider's call import executes the Spark definition");
+    rejectedProvider(fixture, unlinked, baseline);
+    require(::dlclose(unlinked) == 0 && ::dlclose(global) == 0, "release external unlinked provider references");
+    fixture.unload();
+    require(!loaded(SPARK_GATEWAY_UNLINKED_PROVIDER), "unlinked provider leaves no permanent loader reference");
+}
+
+void providerLookup(bool perform_lookup)
+{
+    Fixture fixture;
+    admissionBaseline(fixture);
+    void *global = ::dlopen(fixture.path, RTLD_NOW | RTLD_NOLOAD | RTLD_GLOBAL);
+    require(global != nullptr, "expose Spark to a provider-origin lookup");
+    void *dynamic = ::dlopen(SPARK_GATEWAY_LOOKUP_PROVIDER, RTLD_NOW | RTLD_LOCAL);
+    require(dynamic != nullptr && loaded(SPARK_GATEWAY_DYNAMIC_PROVIDER),
+            "dynamic lookup provider loads its transitive provider dependency");
+    if (perform_lookup) {
+        const auto lookup = symbol<void *(*)()>(dynamic, "provider_lookup_spark");
+        require(lookup() == symbol<void *>(global, "spark_gateway_unlinked_import"),
+                "provider-origin RTLD_DEFAULT lookup actually resolves Spark");
+    }
+    const auto baseline = admissionBaseline(fixture);
+    rejectedProvider(fixture, dynamic, baseline);
+    require(::dlclose(dynamic) == 0 && ::dlclose(global) == 0, "release lookup provider handles");
+    fixture.unload();
+    require(!loaded(SPARK_GATEWAY_LOOKUP_PROVIDER) && !loaded(SPARK_GATEWAY_DYNAMIC_PROVIDER),
+            "lookup provider and its dynamic dependency remain unloadable");
+}
+
 void rollback()
 {
     auto *allocator = provider();
@@ -434,7 +610,7 @@ void registry()
         }
         ::close(descriptor);
     }
-    const auto last_page = reinterpret_cast<void *>(directory.code + directory.code_size - 4096);
+    auto *const last_page = std::bit_cast<void *>(directory.code + directory.code_size - 4096);
     require(::mprotect(last_page, 4096, PROT_READ) == 0, "invalidate final code mapping page");
     {
         Fixture rejected;
@@ -458,9 +634,9 @@ void arena(const char *output)
     std::filesystem::create_directories(output);
     const auto path = std::filesystem::path(output);
     std::ofstream code(path / "code.bin", std::ios::binary);
-    code.write(reinterpret_cast<const char *>(fixture.directory.code), KCodeSize);
+    code.write(std::bit_cast<const char *>(fixture.directory.code), KCodeSize);
     std::ofstream metadata(path / "metadata.bin", std::ios::binary);
-    metadata.write(reinterpret_cast<const char *>(fixture.directory.metadata), KMetadataSize);
+    metadata.write(std::bit_cast<const char *>(fixture.directory.metadata), KMetadataSize);
     std::ofstream manifest(path / "manifest.json");
     manifest << "{\"code\":" << fixture.directory.code << ",\"metadata\":" << fixture.directory.metadata
              << ",\"state\":" << fixture.directory.state << ",\"groups_offset\":" << offsetof(State, groups)
@@ -477,7 +653,7 @@ void cancellation()
     const auto cancel = symbol<int (*)()>(fixture.handle, "fixture_cancel");
     require(reserve(allocator) == 1, "reserve unpublished group");
     const auto directory = *symbol<const Directory *(*)()>(fixture.handle, "fixture_directory")();
-    auto *state = reinterpret_cast<State *>(directory.state);
+    auto *state = std::bit_cast<State *>(directory.state);
     require(state->lock.exchange(1) == 0, "hold setup lock for cancellation deadline");
     const auto begin = std::chrono::steady_clock::now();
     require(cancel() == 0, "noexcept cancellation retains ownership on setup deadline");
@@ -537,6 +713,21 @@ int main(int argc, char **argv)
     }
     else if (mode == "provider") {
         unsafeProvider();
+    }
+    else if (mode.starts_with("original_")) {
+        originalRejection(mode);
+    }
+    else if (mode == "provider_dependent") {
+        dependentProvider();
+    }
+    else if (mode == "provider_transitive") {
+        transitiveProvider();
+    }
+    else if (mode == "provider_unlinked_now" || mode == "provider_unlinked_lazy") {
+        unlinkedProvider(mode == "provider_unlinked_lazy");
+    }
+    else if (mode == "provider_lookup_unused" || mode == "provider_lookup_resolved") {
+        providerLookup(mode == "provider_lookup_resolved");
     }
     else if (mode == "rollback") {
         rollback();
