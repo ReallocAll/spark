@@ -70,6 +70,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Bound crash-recovery profile reconstruction and quarantine journals that exceed capacity so server startup can continue.
+
 - Keep Linux allocation gateways in permanent anonymous memory without adding a
   permanent allocation-profiler pin on Spark. Incompatible resident code or
   exhaustion of 256 lifetime groups requires a server restart. Retired published

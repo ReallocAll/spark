@@ -15,6 +15,7 @@
 #include "application/spark_application.h"
 #include "core/recovery/journal_format.h"
 #include "core/recovery/recovery_writer.h"
+#include "native/sampler/sampler.h"
 #include "native/sampler/types.h"
 
 namespace {
@@ -314,6 +315,55 @@ void testRollingSnapshotRecovery()
     std::cout << "testRollingSnapshotRecovery: PASS\n";
 }
 
+void testResourceLimitRecovery()
+{
+    const auto root = std::filesystem::temp_directory_path() / "spark_recovery_resource_limit";
+    const auto recovery = root / "recovery";
+    std::filesystem::remove_all(root);
+    std::filesystem::create_directories(recovery);
+    std::vector<RecordSpec> records{{.type = spark::RecordType::SessionConfig,
+                                     .sequence = 0,
+                                     .payload = spark::buildSessionConfigPayload(4000, 0, false, false, false, 1, 0,
+                                                                                 false, "Console", false, {}, {}, 0)},
+                                    {.type = spark::RecordType::ModuleDef,
+                                     .sequence = 1,
+                                     .payload = spark::buildModuleDefPayload(0, "recovery-fixture")}};
+    for (std::uint64_t i = 0; i <= spark::Sampler::threadRootCapacity(); ++i) {
+        spark::Sample sample;
+        sample.thread_id = i;
+        sample.weight = 4000;
+        sample.frames.push_back({.module = 0, .rva = 0x1000});
+        records.push_back({.type = spark::RecordType::Sample,
+                           .sequence = static_cast<std::uint32_t>(records.size()),
+                           .payload = spark::buildSamplePayload(sample)});
+    }
+    writeSegmentMulti(recovery / "segment-0.jnl", 950000, 0, records);
+    const auto journal_size = std::filesystem::file_size(recovery / "segment-0.jnl");
+
+    TestNotifier notifier;
+    assert(runEnableWithRecovery(root, recovery, notifier));
+    bool found_quarantine = false;
+    for (const auto &entry : std::filesystem::directory_iterator(root)) {
+        assert(entry.path().extension() != ".sparkprofile");
+        if (entry.path().filename().string().starts_with("recovery.failed-")) {
+            assert(std::filesystem::file_size(entry.path() / "segment-0.jnl") == journal_size);
+            found_quarantine = true;
+        }
+    }
+    assert(found_quarantine);
+    bool notified = false;
+    for (const auto &message : notifier.messages) {
+        if (message.find("Quarantining recovery journal (recovery exceeds thread root capacity)") !=
+            std::string::npos) {
+            notified = true;
+        }
+        assert(message.find("Discarding incomplete") == std::string::npos);
+    }
+    assert(notified);
+    std::filesystem::remove_all(root);
+    std::cout << "testResourceLimitRecovery: PASS\n";
+}
+
 }  // namespace
 
 int main()
@@ -324,6 +374,7 @@ int main()
     testCleanEndRecoveryCleanedUp();
     testThrowingNotifierRecovery();
     testRollingSnapshotRecovery();
+    testResourceLimitRecovery();
     std::cout << "All recovery corrupt tests passed.\n";
     return 0;
 }
