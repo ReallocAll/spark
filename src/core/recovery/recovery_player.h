@@ -1,6 +1,7 @@
 #ifndef SPARK_CORE_RECOVERY_RECOVERY_PLAYER_H
 #define SPARK_CORE_RECOVERY_RECOVERY_PLAYER_H
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <string>
@@ -9,6 +10,7 @@ namespace spark {
 
 struct RecoveredProfile {
     bool valid = false;
+    bool resource_limit_exceeded = false;
     std::string serialized_proto;  // uncompressed spark protobuf
     std::int64_t session_start_ms = 0;
     std::uint64_t sample_count = 0;
@@ -24,6 +26,11 @@ struct RecoveredProfile {
 class RecoveryPlayer {
 public:
     static RecoveredProfile replay(const std::filesystem::path &directory);
+
+private:
+    friend struct RecoveryPlayerTestAccess;
+    static RecoveredProfile replay(const std::filesystem::path &directory, std::size_t remaining_nodes,
+                                   std::size_t remaining_time_entries, std::size_t thread_capacity);
 };
 
 }  // namespace spark

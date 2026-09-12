@@ -228,6 +228,10 @@ void SparkApplication::recoverPreviousSessionImpl()
         return;
     }
 
+    if (profile.resource_limit_exceeded) {
+        quarantineRecovery(profile.error);
+        return;
+    }
     if (!profile.valid) {
         safeNotify("crash recovery", "Discarding incomplete recovery journal: " + profile.error);
         fs::remove_all(recovery_dir_, ec);

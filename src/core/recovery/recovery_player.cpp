@@ -78,6 +78,13 @@ std::uint64_t moduleBaseForPath(const std::string &path)
 
 RecoveredProfile RecoveryPlayer::replay(const std::filesystem::path &directory)
 {
+    return replay(directory, Sampler::profileNodeCapacity(), Sampler::profileTimeEntryCapacity(),
+                  Sampler::threadRootCapacity());
+}
+
+RecoveredProfile RecoveryPlayer::replay(const std::filesystem::path &directory, std::size_t remaining_nodes,
+                                        std::size_t remaining_time_entries, std::size_t thread_capacity)
+{
     RecoveredProfile result;
 
     JournalReadResult journal = JournalReader::readSession(directory);
@@ -313,7 +320,29 @@ RecoveredProfile RecoveryPlayer::replay(const std::filesystem::path &directory)
                 }
             }
 
-            global_tree.log(frames, window, weight);
+            const auto existing_thread = thread_trees.find(thread_id);
+            if (existing_thread == thread_trees.end() && thread_trees.size() >= thread_capacity) {
+                result.resource_limit_exceeded = true;
+                result.error = "recovery exceeds thread root capacity";
+                return result;
+            }
+            const CallTree empty_tree;
+            const auto global_required = global_tree.requiredStorage(frames, window);
+            const auto thread_required =
+                (existing_thread == thread_trees.end() ? empty_tree : existing_thread->second.tree)
+                    .requiredStorage(frames, window);
+            if (global_required.child_nodes > remaining_nodes ||
+                thread_required.child_nodes > remaining_nodes - global_required.child_nodes) {
+                result.resource_limit_exceeded = true;
+                result.error = "recovery exceeds profile node capacity";
+                return result;
+            }
+            if (global_required.time_entries > remaining_time_entries ||
+                thread_required.time_entries > remaining_time_entries - global_required.time_entries) {
+                result.resource_limit_exceeded = true;
+                result.error = "recovery exceeds profile time entry capacity";
+                return result;
+            }
             auto [it, inserted] = thread_trees.try_emplace(thread_id);
             if (inserted) {
                 it->second.thread_id = thread_id;
@@ -321,7 +350,12 @@ RecoveredProfile RecoveryPlayer::replay(const std::filesystem::path &directory)
                     it->second.thread_name = name->second;
                 }
             }
-            it->second.tree.log(frames, window, weight);
+            if (!global_tree.logBounded(frames, window, weight, remaining_nodes, remaining_time_entries) ||
+                !it->second.tree.logBounded(frames, window, weight, remaining_nodes, remaining_time_entries)) {
+                result.resource_limit_exceeded = true;
+                result.error = "recovery exceeds profile storage capacity";
+                return result;
+            }
             ++sample_count;
         }
         else if (rec.type == RecordType::TickEvent) {
@@ -333,6 +367,8 @@ RecoveredProfile RecoveryPlayer::replay(const std::filesystem::path &directory)
             }
         }
     }
+
+    decltype(journal.records){}.swap(journal.records);
 
     result.sample_count = sample_count;
     result.thread_count = thread_trees.size();
