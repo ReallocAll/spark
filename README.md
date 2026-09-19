@@ -510,6 +510,49 @@ cmake -S . -B build -G Ninja "-DCMAKE_TOOLCHAIN_FILE=build/RelWithDebInfo/genera
 cmake --build build
 ```
 
+### Optional LeviLamina native module
+
+The Windows x64 LeviLamina target is disabled by default. Enable it only with
+an existing, pinned LeviLamina 26.20.7 SDK and matching runtime inputs. CMake
+does not download or prepare LeviLamina or BDS files; each SDK, runtime, and
+tool path is explicit, and configuration stops with a missing-input error.
+The target requires clang-cl with the MSVC frontend, Python 3.12 or newer,
+`llvm-dlltool`, and the pinned prelink 0.7.1 executable. The SDK must provide
+the LeviLamina headers, dependency headers, runtime data, and
+`sources/symbolprovider/src/SymbolProvider.cpp`; the runtime provides
+`LeviLamina.dll` and its matching PDB.
+
+After installing the Conan dependencies, configure an LL build with paths to
+those external inputs:
+
+```powershell
+$sdk = 'C:\path\to\levilamina-sdk'
+$runtime = 'C:\path\to\levilamina-runtime'
+$allowlist = (Resolve-Path 'tools/levilamina/spark-levilamina-imports.json').Path
+
+conan install . --build=missing -of build-ll
+cmake -S . -B build-ll -G Ninja `
+  "-DCMAKE_TOOLCHAIN_FILE=build-ll/build/RelWithDebInfo/generators/conan_toolchain.cmake" `
+  "-DCMAKE_BUILD_TYPE=RelWithDebInfo" `
+  '-DENDSTONE_SPARK_BUILD_PLUGIN=OFF' `
+  '-DENDSTONE_SPARK_BUILD_SELFTEST=OFF' `
+  '-DSPARK_BUILD_LEVILAMINA=ON' `
+  "-DSPARK_LL_SDK_ROOT=$sdk" `
+  "-DSPARK_LL_RUNTIME_DLL=$runtime\plugins\LeviLamina\LeviLamina.dll" `
+  "-DSPARK_LL_RUNTIME_PDB=$runtime\plugins\LeviLamina\LeviLamina.pdb" `
+  "-DSPARK_LL_RUNTIME_DATA=$sdk\runtime-data\bedrock_runtime_data" `
+  "-DSPARK_LL_PRELINK=$sdk\tools\prelink\prelink.exe" `
+  "-DSPARK_LL_SYMBOLPROVIDER_SOURCE=$sdk\sources\symbolprovider\src\SymbolProvider.cpp" `
+  "-DSPARK_LL_IMPORT_ALLOWLIST=$allowlist"
+cmake --build build-ll --config RelWithDebInfo
+ctest --test-dir build-ll -C RelWithDebInfo --output-on-failure
+```
+
+The import allowlist is pinned in
+`tools/levilamina/spark-levilamina-imports.json`; its runtime DLL hash must
+match the configured DLL. The generated import library and prelink output stay
+in the build tree.
+
 To build the common profiler, application, native, protobuf, and network layers
 without fetching Endstone or PAPI, add `-DENDSTONE_SPARK_BUILD_PLUGIN=OFF` to
 the configure command. The default is `ON` and retains the plugin build.

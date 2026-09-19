@@ -71,6 +71,8 @@ struct ServerMetadata {
     std::int64_t uptime_ms = 0;
     std::vector<PluginInfo> plugins;
     std::map<std::string, std::string> server_configurations;
+    std::string platform_name = "Endstone";
+    std::string platform_brand = "Endstone";
 };
 
 }  // namespace spark

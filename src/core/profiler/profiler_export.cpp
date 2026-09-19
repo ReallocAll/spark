@@ -363,10 +363,14 @@ std::string Profiler::exportData(const ExportContext &ctx, const AllocationSnaps
     if (owned_ctx != nullptr) {
         meta.endstone_version = std::move(owned_ctx->endstone_version);
         meta.minecraft_version = std::move(owned_ctx->minecraft_version);
+        meta.platform_name = std::move(owned_ctx->platform_name);
+        meta.platform_brand = std::move(owned_ctx->platform_brand);
     }
     else {
         meta.endstone_version = ctx.endstone_version;
         meta.minecraft_version = ctx.minecraft_version;
+        meta.platform_name = ctx.platform_name;
+        meta.platform_brand = ctx.platform_brand;
     }
     if (mode_ == ProfileMode::Allocation) {
         meta.engine_version = std::string("endstone-spark ") + kVersion + " " + AllocationSampler::backendId();

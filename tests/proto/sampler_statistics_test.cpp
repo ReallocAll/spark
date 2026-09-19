@@ -26,6 +26,11 @@ int main()
     tree.log({frame}, 0);
 
     spark::ProfileMetadata metadata;
+    if (metadata.platform_name != "Endstone" || metadata.platform_brand != "Endstone") {
+        return 1;
+    }
+    metadata.platform_name = "LeviLamina";
+    metadata.platform_brand = "LeviLamina";
     metadata.start_time_ms = 1'000;
     metadata.creator_name = "PlayerOne";
     metadata.creator_is_player = true;
@@ -160,7 +165,9 @@ int main()
     const bool platform_metadata_version =
         spark::proto_test::findMessageBytes(profile, 1, [](std::string_view metadata_bytes) {
             return spark::proto_test::findMessageBytes(metadata_bytes, 7, [](std::string_view platform_metadata_bytes) {
-                return spark::proto_test::hasVarint(platform_metadata_bytes, 7, 2);
+                return spark::proto_test::hasVarint(platform_metadata_bytes, 7, 2) &&
+                       spark::proto_test::hasString(platform_metadata_bytes, 2, "LeviLamina") &&
+                       spark::proto_test::hasString(platform_metadata_bytes, 8, "LeviLamina");
             });
         });
     if (!check(platform_metadata_version, "platform metadata version was not encoded")) {

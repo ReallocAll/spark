@@ -19,5 +19,5 @@ public:
 int main()
 {
     CompileProvider provider;
-    return provider.nativePluginSources().empty() ? 0 : 1;
+    return provider.nativePluginSources().empty() && provider.worldGaugesAvailable() ? 0 : 1;
 }

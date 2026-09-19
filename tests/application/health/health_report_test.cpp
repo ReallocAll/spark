@@ -30,7 +30,11 @@ private:
 
 class Metadata final : public spark::ProfileMetadataProvider {
 public:
-    void gatherServerMetadata(spark::ServerMetadata &, std::int64_t) override {}
+    void gatherServerMetadata(spark::ServerMetadata &metadata, std::int64_t) override
+    {
+        metadata.platform_name = "LeviLamina";
+        metadata.platform_brand = "LeviLamina";
+    }
     void gatherWorldMetadata(spark::WorldInfo &world, std::string_view) override
     {
         ++world_gather_calls;
@@ -54,6 +58,8 @@ public:
             throw std::runtime_error("server metadata failed");
         }
         metadata.endstone_version = "provider-endstone";
+        metadata.platform_name = "LeviLamina";
+        metadata.platform_brand = "LeviLamina";
         metadata.minecraft_version = "provider-minecraft";
         metadata.bds_executable_sha256 = "provider-hash";
         metadata.player_count = 7;
@@ -97,6 +103,8 @@ int main()
         context.comment = "untouched";
         spark::gatherPlatformServerMetadata(bridge, context, 1000);
         assert(bridge.seen.endstone_version == "seed-endstone");
+        assert(bridge.seen.platform_name == "Endstone");
+        assert(bridge.seen.platform_brand == "Endstone");
         assert(bridge.seen.minecraft_version == "seed-minecraft");
         assert(bridge.seen.bds_executable_sha256 == "seed-hash");
         assert(bridge.seen.player_count == 3);
@@ -105,6 +113,8 @@ int main()
         assert(bridge.seen.plugins.size() == 1 && bridge.seen.plugins.front().name == "seed-plugin");
         assert(bridge.seen.server_configurations.at("seed") == "{}");
         assert(context.endstone_version == "provider-endstone");
+        assert(context.platform_name == "LeviLamina");
+        assert(context.platform_brand == "LeviLamina");
         assert(context.minecraft_version == "provider-minecraft");
         assert(context.bds_executable_sha256 == "provider-hash");
         assert(context.player_count == 7);
@@ -158,5 +168,7 @@ int main()
     assert(data.world.present);
     assert(data.world.total_entities == 8);
     assert(data.world.entity_counts.at("minecraft:zombie") == 3);
+    assert(data.platform_name == "LeviLamina");
+    assert(data.platform_brand == "LeviLamina");
     return 0;
 }

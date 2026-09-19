@@ -7,6 +7,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(ENDSTONE_SPARK_BUILD_SELFTEST "Build the offline sampler self-test tool" ON)
 option(ENDSTONE_SPARK_BUILD_PLUGIN "Build the Endstone plugin and host adapters" ON)
+option(SPARK_BUILD_LEVILAMINA "Build the isolated LeviLamina native module" OFF)
 option(ENDSTONE_SPARK_GATEWAY_TEST_ONLY "Build only the standalone Linux allocation gateway tests" OFF)
 option(ENDSTONE_SPARK_GATEWAY_SAMPLER_TESTS "Build isolated Linux allocation sampler tests" ON)
 
@@ -362,6 +363,10 @@ if (ENDSTONE_SPARK_BUILD_PLUGIN)
                             elf "$<TARGET_FILE:spark>" VERBATIM)
         endif ()
     endif ()
+endif ()
+
+if (SPARK_BUILD_LEVILAMINA)
+    include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/LeviLamina.cmake")
 endif ()
 
 # --- offline self-test (no BDS needed) ---

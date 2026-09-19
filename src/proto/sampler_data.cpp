@@ -219,13 +219,13 @@ std::string buildMetadata(const ProfileMetadata &m)
         std::string p;
         ProtoWriter pw(p);
         pw.varint(1, 0);  // type = SERVER
-        pw.string(2, "Endstone");
+        pw.string(2, m.platform_name.empty() ? "Endstone" : m.platform_name);
         pw.string(3, m.endstone_version);
         if (!m.minecraft_version.empty()) {
             pw.string(4, m.minecraft_version);
         }
         pw.int32(7, kSparkFormatVersion);  // spark_version (gates viewer feature support)
-        pw.string(8, "Endstone");          // brand
+        pw.string(8, m.platform_brand.empty() ? "Endstone" : m.platform_brand);  // brand
         w.message(7, p);
     }
     w.int64(11, m.end_time_ms);

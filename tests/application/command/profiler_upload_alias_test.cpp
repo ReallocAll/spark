@@ -1,4 +1,5 @@
 #include <cassert>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
@@ -20,6 +21,7 @@
 #include "application/spark_application.h"
 #include "core/config/spark_config.h"
 #include "core/config/trusted_viewers.h"
+#include "core/util/monotonic_time.h"
 
 namespace {
 
@@ -43,7 +45,17 @@ public:
     void gatherWorldMetadata(spark::WorldInfo & /*world*/, std::string_view /*minecraft_version*/) override {}
     std::int64_t serverUptimeSeconds() override { return 0; }
     std::int64_t playerCount() override { return 0; }
+    bool worldGaugesAvailable() override { return world_gauges_available; }
+    spark::WorldGaugeValues worldGauges() override
+    {
+        ++world_gauge_calls;
+        return world_gauges;
+    }
     spark::PlayerPingProvider *playerPingProvider() override { return nullptr; }
+
+    bool world_gauges_available = true;
+    int world_gauge_calls = 0;
+    spark::WorldGaugeValues world_gauges{.entities = 7, .chunks = 11};
 };
 
 class TestNotifier final : public spark::ResultNotifier {
@@ -265,6 +277,44 @@ void testMixedFormPrecedence()
     std::cout << "testMixedFormPrecedence: PASS\n";
 }
 
+void testUnavailableWorldGaugesAreOmitted()
+{
+    const auto root = std::filesystem::temp_directory_path() / "spark_unavailable_world_gauges";
+    std::filesystem::remove_all(root);
+    std::filesystem::create_directories(root);
+
+    spark::SparkConfig config(root / "config.toml");
+    config.background_profiler_enabled = false;
+    spark::TrustedViewersState trusted(root / "trusted-viewers.json");
+    TestDispatcher dispatcher;
+    TestMetadataProvider metadata;
+    metadata.world_gauges_available = false;
+    TestNotifier notifier;
+    spark::SparkApplication app({}, root, root / "activity.json", std::move(config), std::move(trusted), dispatcher,
+                                metadata, notifier);
+
+    const std::int64_t steady_now =
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch())
+            .count();
+    const std::int64_t unix_now = spark::monotonicUnixMillis();
+    app.statistics().startAt(steady_now - 1'001, unix_now - 1'001, spark::CpuSnapshot{});
+    app.onTick(1.0);
+
+    assert(metadata.world_gauge_calls == 0);
+    const auto windows = app.statistics().profileWindows(unix_now - 1'001, unix_now + 1'000);
+    assert(!windows.empty());
+    for (const auto &[window, stats] : windows) {
+        static_cast<void>(window);
+        assert(!stats.entities_present);
+        assert(!stats.chunks_present);
+        assert(!stats.tile_entities_present);
+    }
+
+    app.shutdown();
+    std::filesystem::remove_all(root);
+    std::cout << "testUnavailableWorldGaugesAreOmitted: PASS\n";
+}
+
 }  // namespace
 
 int main()
@@ -275,6 +325,7 @@ int main()
     testUploadSaveToFileFlag();
     testOtherCommandsUnaffected();
     testMixedFormPrecedence();
+    testUnavailableWorldGaugesAreOmitted();
     std::cout << "All profiler upload alias tests passed.\n";
     return 0;
 }

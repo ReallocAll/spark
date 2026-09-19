@@ -20,10 +20,15 @@ bool check(bool value, const char *message)
 int main()
 {
     spark::HealthData data;
+    if (data.platform_name != "Endstone" || data.platform_brand != "Endstone") {
+        return 1;
+    }
     data.creator_name = "PlayerOne";
     data.creator_is_player = true;
     data.creator_unique_id = "123e4567-e89b-12d3-a456-426614174000";
     data.endstone_version = "0.1.0";
+    data.platform_name = "LeviLamina";
+    data.platform_brand = "LeviLamina";
     data.minecraft_version = "1.21";
     data.generated_time_ms = 1234;
     data.server_configurations["server.properties"] = R"({"max-players":"20"})";
@@ -54,11 +59,13 @@ int main()
                                                                           "123e4567-e89b-12d3-a456-426614174000");
                                   }) &&
                               spark::proto_test::hasVarint(metadata_reader, 5, 1234) &&
-                              spark::proto_test::findMessage(metadata_reader, 2,
-                                                             [](spark::ProtoReader platform_metadata_reader) {
-                                                                 return spark::proto_test::hasVarint(
-                                                                     platform_metadata_reader, 7, 2);
-                                                             }) &&
+                              spark::proto_test::findMessage(
+                                  metadata_reader, 2,
+                                  [](spark::ProtoReader platform_metadata_reader) {
+                                      return spark::proto_test::hasVarint(platform_metadata_reader, 7, 2) &&
+                                             spark::proto_test::hasString(platform_metadata_reader, 2, "LeviLamina") &&
+                                             spark::proto_test::hasString(platform_metadata_reader, 8, "LeviLamina");
+                                  }) &&
                               spark::proto_test::findMessage(
                                   metadata_reader, 3,
                                   [](spark::ProtoReader platform_reader) {

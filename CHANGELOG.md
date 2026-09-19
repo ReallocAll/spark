@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased][Unreleased]
 
+### Added
+
+- Add an experimental Windows x64 LeviLamina 26.20.x host target with a
+  permission-gated `/spark` commands, shared configuration, TPS/MSPT and health
+  statistics, background profiling, local execution-profile saves, and clean
+  server shutdown. Full feature parity and reload validation remain in progress.
+
 ## [0.6.0][0.6.0] - 2026-09-17
 
 ### Added

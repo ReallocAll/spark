@@ -156,6 +156,8 @@ struct ProfileMetadata {
     std::unordered_map<PythonCodeId, PythonCodeMetadata> python_codes;
     WorldInfo world;
     std::string socket_channel_info_proto;  // field 8: SocketChannelInfo (empty for non-live)
+    std::string platform_name = "Endstone";
+    std::string platform_brand = "Endstone";
 };
 
 // Collect every distinct frame key present in the tree (for batch symbolication).

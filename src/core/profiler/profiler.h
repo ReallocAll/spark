@@ -92,6 +92,8 @@ struct ExportContext {
     std::map<std::string, NetworkInterfaceSnapshot> net_snapshots;
     // Pre-serialized SocketChannelInfo proto for live viewer (empty for normal exports).
     std::string socket_channel_info_proto;
+    std::string platform_name = "Endstone";
+    std::string platform_brand = "Endstone";
 };
 
 // Owns either the execution sampler or the platform allocation sampler and turns
