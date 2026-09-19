@@ -32,8 +32,8 @@ struct WorldGaugeValues {
 };
 
 // Gathers server and world metadata for profile export context and provides
-// runtime server stats for health reports. The Endstone adapter implements
-// this by querying the Endstone Server API.
+// runtime server stats for health reports. Platform adapters implement
+// this by querying their server APIs.
 class ProfileMetadataProvider {
 public:
     virtual ~ProfileMetadataProvider() = default;

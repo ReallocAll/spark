@@ -12,7 +12,7 @@
 
 namespace spark {
 
-// Server-side statistics sourced from the Endstone API (on the main thread).
+// Server-side statistics sourced from the platform API (on the main thread).
 struct PlatformStats {
     bool present = false;
     int target_tps = 20;

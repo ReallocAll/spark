@@ -87,7 +87,7 @@ void CommandRegistry::sendHelp(CommandSender &sender) const
         return false;
     };
 
-    sender.sendMessage(kColorGold + "endstone-spark " + kColorGray + "v" + spark::kVersion);
+    sender.sendMessage(kColorGold + "spark for Bedrock " + kColorGray + "v" + spark::kVersion);
     for (const auto &cmd : commands_) {
         if (!canUse(sender, cmd.permission)) {
             continue;

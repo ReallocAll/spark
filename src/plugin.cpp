@@ -322,7 +322,7 @@ private:
 
 ENDSTONE_PLUGIN("spark", "0.6.0", SparkPlugin)
 {
-    description = "spark profiler for Endstone - find what's slowing your server down.";
+    description = "A performance profiler for Bedrock Dedicated Server.";
     authors = {"ReallocAll <ReallocAll@outlook.com>"};
     prefix = "Spark";
     load = endstone::PluginLoadOrder::PostWorld;

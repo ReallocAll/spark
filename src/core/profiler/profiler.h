@@ -69,7 +69,7 @@ struct ProfilerOptions {
     std::uint32_t allocation_aggregator_delay_ms_for_testing = 0;
 };
 
-// Server facts needed only at export time (read from Endstone on the main thread).
+// Server facts needed only at export time (read from the platform adapter on the main thread).
 struct ExportContext {
     std::string endstone_version;
     std::string minecraft_version;

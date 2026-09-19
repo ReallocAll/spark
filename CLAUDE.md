@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Endstone Spark is a native statistical profiler plugin for Minecraft Bedrock Dedicated Server (BDS). It samples native execution and allocation call stacks on Windows and Linux, aggregates them into spark-compatible profiles, and uploads them to or opens them with the standard spark viewer.
+spark for Bedrock is a native statistical profiler for Minecraft Bedrock Dedicated Server (BDS), with host adapters for Endstone on Windows/Linux and an experimental LeviLamina Windows x64 module. It samples native execution and allocation call stacks, aggregates them into spark-compatible profiles, and uploads them to or opens them with the standard spark viewer. The LeviLamina target is source-build-only for BDS 1.26.20.x / LeviLamina 26.20.7 and does not imply full feature parity.
 
 The plugin must remain safe inside a long-running server process. Sampling and allocator-hook paths have stricter constraints than ordinary plugin code: they must be bounded, avoid blocking, and defer symbolization, aggregation, compression, and network I/O to safe background or export-time code.
 
@@ -146,10 +146,12 @@ Leave successfully symbolicated frames and non-BDS modules untouched
 ### Source Structure
 
 - `src/plugin.cpp` - Endstone plugin lifecycle and command dispatch (thin bootstrap)
+- `src/platform/levilamina/` - experimental LeviLamina Windows x64 module, application bridge, and host adapters
 - `src/application/` - platform-independent business orchestration: command registry, profiler service, profile exporter, health, activity, and tick-monitor commands, platform capability interfaces
 - `src/core/` - platform-independent services: profiler, statistics, command parsing, config (TOML), recovery journal, activity log, WebSocket/crypto, server-properties metadata, utilities
 - `src/native/` - native backend: execution sampler, symbol guesser, allocation hooks, and Python shadow-stack primitives
-- `src/platform/endstone/` - thin Endstone platform adapters: command sender, thread dispatcher, metadata provider (including world gauges and ping), result notifier
+- `src/platform/endstone/` - thin Endstone platform adapters: command sender, thread dispatcher, metadata provider (including host-available world gauges and ping), result notifier
+- `src/platform/levilamina/` - experimental LeviLamina adapters and native module bootstrap; currently no ping provider, plugin/world metadata, or world gauges
 - `src/proto/` - spark protobuf serialization
 - `src/net/` - gzip compression, bytebin upload, WebSocket transport, and local profile persistence
 - `proto/` - upstream spark protocol references
@@ -165,7 +167,7 @@ Leave successfully symbolicated frames and non-BDS modules untouched
 4. **Symbolization:** Normal platform symbols have priority. Unresolved frames in the BDS main executable may receive conservative runtime guesses from unwind metadata, RTTI, vtables, thunks, and decoded string references. Guesses retain the RVA and identify their evidence source.
 5. **Statistics service:** Maintains bounded rolling TPS, MSPT, CPU, player-count, and world-gauge histories independently of an active profile.
 6. **Application layer:** Platform-independent business orchestration in `src/application/`. `SparkApplication` owns all services and dispatches ticks and commands. `ProfilerService` manages profiler sessions, background profiling, live viewer connections, and exports. Three focused capability interfaces (`MainThreadDispatcher`, `ProfileMetadataProvider`, `ResultNotifier`) abstract platform dependencies without a god-Platform.
-7. **Platform adapters:** `src/platform/endstone/` provides thin Endstone implementations of the capability interfaces and `CommandSender`. `plugin.cpp` remains a thin bootstrap responsible for registration and lifecycle wiring.
+7. **Platform adapters:** `src/platform/endstone/` provides thin Endstone implementations of the capability interfaces and `CommandSender`; `src/platform/levilamina/` provides the experimental Windows x64 module, bridge, and LeviLamina implementations. `plugin.cpp` remains the Endstone bootstrap responsible for registration and lifecycle wiring.
 8. **Crash recovery:** `RecoveryWriter` journals module, thread, sample, and tick records to segmented files via a bounded lock-free queue. On startup, `RecoveryPlayer` replays an unclean supported session and exports a recovered profile.
 9. **Stall watchdog:** `StallWatchdog` runs on an independent thread, monitoring the main-thread heartbeat. It journals stall-begin and stall-end events without calling Endstone APIs or stopping the profiler.
 10. **Live viewer:** `ViewerSocket` manages a WebSocket connection to the spark live viewer, uploading initial sampler data and pushing payload IDs on window rotation. A dedicated worker thread moves gzip and HTTP upload off the main thread.
