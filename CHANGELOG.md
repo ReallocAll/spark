@@ -75,6 +75,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   same display name.
 - Export Python filename leaves and code identifiers without server-owner
   directory paths while retaining available line information.
+- Strip absolute source directories from native compiler-generated lambda names
+  in exported profiles while retaining the source filename and location.
 - Harden live-viewer and health-dashboard connection lifecycle, reconnects,
   trusted-client validation, malformed input handling, and bounded send/receive
   queues.
