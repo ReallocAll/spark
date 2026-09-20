@@ -373,10 +373,10 @@ std::string Profiler::exportData(const ExportContext &ctx, const AllocationSnaps
         meta.platform_brand = ctx.platform_brand;
     }
     if (mode_ == ProfileMode::Allocation) {
-        meta.engine_version = std::string("endstone-spark ") + kVersion + " " + AllocationSampler::backendId();
+        meta.engine_version = std::string("spark for Bedrock ") + kVersion + " " + AllocationSampler::backendId();
     }
     else {
-        meta.engine_version = std::string("endstone-spark ") + kVersion;
+        meta.engine_version = std::string("spark for Bedrock ") + kVersion;
     }
     if (!ctx.comment.empty()) {
         if (owned_ctx != nullptr) {

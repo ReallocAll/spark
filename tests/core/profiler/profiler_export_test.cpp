@@ -101,6 +101,66 @@ struct ProfilerTestAccess {
         return profiler.allocation_sampler_.pendingSampleDrops();
     }
 
+    static std::uint64_t allocationPendingFinalDrops(const Profiler &profiler)
+    {
+        return profiler.allocation_sampler_.pendingFinalDrops();
+    }
+
+    static AllocationDiagnosticsSnapshot allocationDiagnostics(const Profiler &profiler)
+    {
+        return profiler.allocation_sampler_.allocationDiagnostics();
+    }
+
+    static std::uint64_t allocationDroppedEvents(const Profiler &profiler)
+    {
+        return profiler.allocation_sampler_.droppedEvents();
+    }
+
+    static std::uint64_t allocationDroppedTickEvents(const Profiler &profiler)
+    {
+        return profiler.allocation_sampler_.droppedTickEvents();
+    }
+
+    static std::uint64_t allocationThreadStateDrops(const Profiler &profiler)
+    {
+        return profiler.allocation_sampler_.threadStateDrops();
+    }
+
+    static std::uint64_t allocationDrainTruncated(const Profiler &profiler)
+    {
+        return profiler.allocation_sampler_.drainTruncated();
+    }
+
+    static bool allocationStopWaitTimedOut(const Profiler &profiler)
+    {
+        return profiler.allocation_sampler_.stopWaitTimedOut();
+    }
+
+    static std::uint64_t allocationProfileStorageSampleDrops(const Profiler &profiler)
+    {
+        return profiler.allocation_sampler_.profileStorageSampleDrops();
+    }
+
+    static bool allocationProfileStorageExhausted(const Profiler &profiler)
+    {
+        return profiler.allocation_sampler_.profileStorageExhausted();
+    }
+
+    static std::uint64_t allocationPendingCapacityDrops(const Profiler &profiler)
+    {
+        return profiler.allocation_sampler_.pendingCapacityDrops();
+    }
+
+    static std::uint64_t allocationPendingStaleDrops(const Profiler &profiler)
+    {
+        return profiler.allocation_sampler_.pendingStaleDrops();
+    }
+
+    static std::uint64_t allocationThreadIdentityCacheDrops(const Profiler &profiler)
+    {
+        return profiler.allocation_sampler_.threadIdentityCacheDrops();
+    }
+
     static bool allocationDataIncomplete(const Profiler &profiler)
     {
         return profiler.allocation_sampler_.dataIncomplete();
@@ -129,6 +189,10 @@ struct ProfilerTestAccess {
                      allocationAccountingStateName(diagnostics.accounting_state));
         std::fprintf(stderr, "terminal metadata: getter.stop_timeout bool=%s\n",
                      sampler.stopWaitTimedOut() ? "true" : "false");
+        std::fprintf(stderr, "terminal metadata: diagnostics.insertion_contention_failures=%llu\n",
+                     static_cast<unsigned long long>(diagnostics.insertion_contention_failures));
+        std::fprintf(stderr, "terminal metadata: diagnostics.detach_contention_attempts=%llu\n",
+                     static_cast<unsigned long long>(diagnostics.detach_contention_attempts));
     }
 
     static void seedExecutionTerminalSamples(Profiler &profiler, std::size_t count)
@@ -442,19 +506,82 @@ bool verifyTerminalMetadataExportWithSamples()
         return false;
     }
     const std::uint64_t terminal = spark::ProfilerTestAccess::allocationTerminalSamples(allocation);
+    const std::uint64_t pending_final = spark::ProfilerTestAccess::allocationPendingFinalDrops(allocation);
+    const std::uint64_t dropped = spark::ProfilerTestAccess::allocationDroppedSamples(allocation);
+    const std::uint64_t lifecycle = spark::ProfilerTestAccess::allocationLifecycleDropped(allocation);
+    const std::uint64_t contention = spark::ProfilerTestAccess::allocationContentionDropped(allocation);
+    const auto diagnostics = spark::ProfilerTestAccess::allocationDiagnostics(allocation);
+    const std::uint64_t contention_loss = diagnostics.insertion_contention_failures +
+                                          diagnostics.detach_contention_attempts;
+#ifdef _WIN32
+    const std::uint64_t expected_capture_loss = diagnostics.insertion_contention_failures;
+    const bool source_accounting_valid = dropped == diagnostics.insertion_contention_failures &&
+                                         lifecycle == contention_loss && contention == contention_loss;
+#else
+    const std::uint64_t expected_capture_loss = 0;
+    const bool source_accounting_valid = diagnostics.insertion_contention_failures == 0 &&
+                                         diagnostics.detach_contention_attempts == 0 && dropped == 0 && lifecycle == 0 &&
+                                         contention == 0;
+#endif
+    const bool expected_incomplete = contention_loss != 0;
+    const bool unrelated_losses_zero =
+        spark::ProfilerTestAccess::allocationPendingSamples(allocation) == 0 &&
+        spark::ProfilerTestAccess::allocationDroppedEvents(allocation) == 0 &&
+        spark::ProfilerTestAccess::allocationDroppedTickEvents(allocation) == 0 &&
+        spark::ProfilerTestAccess::allocationThreadStateDrops(allocation) == 0 &&
+        spark::ProfilerTestAccess::allocationDrainTruncated(allocation) == 0 &&
+        !spark::ProfilerTestAccess::allocationStopWaitTimedOut(allocation) &&
+        spark::ProfilerTestAccess::allocationProfileStorageSampleDrops(allocation) == 0 &&
+        !spark::ProfilerTestAccess::allocationProfileStorageExhausted(allocation) &&
+        spark::ProfilerTestAccess::allocationPendingCapacityDrops(allocation) == 0 &&
+        spark::ProfilerTestAccess::allocationPendingStaleDrops(allocation) == 0 &&
+        spark::ProfilerTestAccess::allocationThreadIdentityCacheDrops(allocation) == 0 &&
+        diagnostics.drain_truncated == 0 && diagnostics.drain_truncated_allocation_events == 0 &&
+        diagnostics.drain_truncated_thread_observation_events == 0 && diagnostics.drain_truncated_tick_events == 0 &&
+        diagnostics.retained_allocations_skipped == 0 && diagnostics.record_pool_acquisition_failures == 0 &&
+        diagnostics.exhausted_insertion_probe_failures == 0 && diagnostics.discarded_allocation_events == 0 &&
+        diagnostics.discarded_thread_observation_events == 0 && diagnostics.discarded_tick_events == 0;
     const std::string allocation_profile = allocation.exportData({});
-    const bool valid =
-        terminal != 0 &&
+    const bool serialized_accounting_valid =
         metadataUnsigned(allocation_profile, "Allocation terminal in-flight tick samples discarded", terminal) &&
-        metadataUnsigned(allocation_profile, "Allocation pending final drops", terminal) &&
-        metadataUnsigned(allocation_profile, "Allocation samples dropped", 0) &&
+        metadataUnsigned(allocation_profile, "Allocation pending final drops", pending_final) &&
+        metadataUnsigned(allocation_profile, "Allocation samples dropped", expected_capture_loss) &&
         metadataUnsigned(allocation_profile, "Allocation pending samples dropped", 0) &&
-        metadataBoolean(allocation_profile, "Allocation data incomplete", false) &&
+        metadataUnsigned(allocation_profile, "Allocation sample events dropped", 0) &&
+        metadataUnsigned(allocation_profile, "Allocation tick events dropped", 0) &&
+        metadataUnsigned(allocation_profile, "Allocation thread state drops", 0) &&
+        metadataUnsigned(allocation_profile, "Allocation lifecycle records dropped", contention_loss) &&
+        metadataUnsigned(allocation_profile, "Allocation lock contention records dropped", contention_loss) &&
+        metadataUnsigned(allocation_profile, "Allocation stop budget truncated records", 0) &&
+        metadataBoolean(allocation_profile, "Allocation stop wait timed out", false) &&
+        metadataBoolean(allocation_profile, "Allocation data incomplete", expected_incomplete) &&
+        metadataUnsigned(allocation_profile, "Allocation diagnostics insertion contention failures",
+                         diagnostics.insertion_contention_failures) &&
+        metadataUnsigned(allocation_profile, "Allocation diagnostics detach contention attempts",
+                         diagnostics.detach_contention_attempts) &&
         metadataString(allocation_profile, "Allocation diagnostics accounting state", "\"Complete\"");
+    std::fprintf(stderr,
+                 "terminal metadata: allocation counters terminal=%llu pending_final=%llu dropped=%llu "
+                 "lifecycle=%llu contention=%llu insertion_contention=%llu detach_contention=%llu incomplete=%s\n",
+                 static_cast<unsigned long long>(terminal), static_cast<unsigned long long>(pending_final),
+                 static_cast<unsigned long long>(dropped), static_cast<unsigned long long>(lifecycle),
+                 static_cast<unsigned long long>(contention),
+                 static_cast<unsigned long long>(diagnostics.insertion_contention_failures),
+                 static_cast<unsigned long long>(diagnostics.detach_contention_attempts),
+                 spark::ProfilerTestAccess::allocationDataIncomplete(allocation) ? "true" : "false");
+    const bool valid = terminal != 0 && terminal == pending_final && source_accounting_valid && unrelated_losses_zero &&
+                       spark::ProfilerTestAccess::allocationDataIncomplete(allocation) == expected_incomplete &&
+                       serialized_accounting_valid;
     if (!valid) {
         std::fprintf(stderr, "terminal metadata: allocation nonzero values were not serialized correctly\n");
-        std::fprintf(stderr, "terminal metadata: terminal uint64=%llu expected=>0 profile_bytes size_t=%zu\n",
-                     static_cast<unsigned long long>(terminal), allocation_profile.size());
+        std::fprintf(stderr,
+                     "terminal metadata: terminal=%llu pending_final=%llu dropped=%llu lifecycle=%llu contention=%llu "
+                     "expected_capture_loss=%llu contention_loss=%llu incomplete=%s profile_bytes=%zu\n",
+                     static_cast<unsigned long long>(terminal), static_cast<unsigned long long>(pending_final),
+                     static_cast<unsigned long long>(dropped), static_cast<unsigned long long>(lifecycle),
+                     static_cast<unsigned long long>(contention), static_cast<unsigned long long>(expected_capture_loss),
+                     static_cast<unsigned long long>(contention_loss), expected_incomplete ? "true" : "false",
+                     allocation_profile.size());
         const auto report_metadata = [&](const char *key, const char *type, const std::string &expected) {
             std::string value;
             const bool found = findExtraMetadataValue(allocation_profile, key, value);
@@ -462,10 +589,12 @@ bool verifyTerminalMetadataExportWithSamples()
                          found ? "true" : "false", found ? value.c_str() : "<missing-or-invalid>", expected.c_str());
         };
         report_metadata("Allocation terminal in-flight tick samples discarded", "uint64", std::to_string(terminal));
-        report_metadata("Allocation pending final drops", "uint64", std::to_string(terminal));
-        report_metadata("Allocation samples dropped", "uint64", "0");
+        report_metadata("Allocation pending final drops", "uint64", std::to_string(pending_final));
+        report_metadata("Allocation samples dropped", "uint64", std::to_string(expected_capture_loss));
         report_metadata("Allocation pending samples dropped", "uint64", "0");
-        report_metadata("Allocation data incomplete", "bool", "false");
+        report_metadata("Allocation lifecycle records dropped", "uint64", std::to_string(contention_loss));
+        report_metadata("Allocation lock contention records dropped", "uint64", std::to_string(contention_loss));
+        report_metadata("Allocation data incomplete", "bool", expected_incomplete ? "true" : "false");
         report_metadata("Allocation diagnostics accounting state", "string", "\"Complete\"");
         spark::ProfilerTestAccess::reportAllocationTerminalState(allocation);
     }

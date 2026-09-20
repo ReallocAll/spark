@@ -219,7 +219,8 @@ void SparkApplication::recoverPreviousSessionImpl()
 
     RecoveredProfile profile;
     try {
-        profile = RecoveryPlayer::replay(recovery_dir_);
+        const PlatformIdentity identity = metadata_provider_.platformIdentity();
+        profile = RecoveryPlayer::replay(recovery_dir_, identity.platform_name, identity.platform_brand);
     }
     catch (const std::exception &e) {
         quarantineRecovery(std::string("replay exception: ") + e.what());

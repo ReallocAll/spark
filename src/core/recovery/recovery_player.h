@@ -23,7 +23,8 @@ struct RecoveredProfile {
 // Reconstructs a spark profile from crash-recovery journal files.
 class RecoveryPlayer {
 public:
-    static RecoveredProfile replay(const std::filesystem::path &directory);
+    static RecoveredProfile replay(const std::filesystem::path &directory, std::string platform_name = "Endstone",
+                                   std::string platform_brand = "Endstone");
 };
 
 }  // namespace spark

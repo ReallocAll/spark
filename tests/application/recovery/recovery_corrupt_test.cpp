@@ -16,6 +16,7 @@
 #include "core/recovery/journal_format.h"
 #include "core/recovery/recovery_writer.h"
 #include "native/sampler/types.h"
+#include "proto/proto_reader.h"
 
 namespace {
 
@@ -31,6 +32,27 @@ public:
     std::int64_t serverUptimeSeconds() override { return 0; }
     std::int64_t playerCount() override { return 0; }
     spark::PlayerPingProvider *playerPingProvider() override { return nullptr; }
+};
+
+class RecoveryIdentityMetadataProvider final : public spark::ProfileMetadataProvider {
+public:
+    spark::PlatformIdentity platformIdentity() const override
+    {
+        ++identity_calls;
+        return {.platform_name = "LeviLamina", .platform_brand = "LeviLamina"};
+    }
+
+    void gatherServerMetadata(spark::ServerMetadata & /*metadata*/, std::int64_t /*now_ms*/) override
+    {
+        ++gather_server_calls;
+    }
+    void gatherWorldMetadata(spark::WorldInfo & /*world*/, std::string_view /*minecraft_version*/) override {}
+    std::int64_t serverUptimeSeconds() override { return 0; }
+    std::int64_t playerCount() override { return 0; }
+    spark::PlayerPingProvider *playerPingProvider() override { return nullptr; }
+
+    mutable int identity_calls = 0;
+    int gather_server_calls = 0;
 };
 
 class TestNotifier final : public spark::ResultNotifier {
@@ -314,6 +336,96 @@ void testRollingSnapshotRecovery()
     std::cout << "testRollingSnapshotRecovery: PASS\n";
 }
 
+void testRecoveryUsesCurrentPlatformIdentity()
+{
+    const auto root = std::filesystem::temp_directory_path() / "spark_recovery_identity";
+    std::filesystem::remove_all(root);
+    const auto recovery = root / "recovery";
+
+    spark::RecoveryWriter::Config cfg;
+    cfg.directory = recovery;
+    cfg.session_id = 950000;
+    cfg.flush_interval_ms = 20;
+    cfg.sync_interval_ms = 20;
+    spark::RecoveryWriter writer(cfg);
+    assert(writer.start());
+    writer.journalSessionConfig(4000, 0, false, false, false, 1, 0, false, "Console", false, "identity recovery",
+                                {}, 0);
+    writer.journalModuleDef(0, "bedrock_server");
+    writer.journalThreadDef(1, 100, "Server thread");
+    spark::Sample sample;
+    sample.thread_id = 1;
+    sample.weight = 4000;
+    sample.frames.push_back({.module = 0, .rva = 0x1000, .raw_address = 0});
+    writer.journalSample(sample);
+    writer.stop();
+
+    spark::SparkConfig config(root / "config.toml");
+    config.background_profiler_enabled = false;
+    spark::TrustedViewersState trusted(root / "trusted-viewers.json");
+    TestDispatcher dispatcher;
+    RecoveryIdentityMetadataProvider metadata;
+    TestNotifier notifier;
+    {
+        spark::SparkApplication application({}, root, root / "activity.json", std::move(config), std::move(trusted),
+                                            dispatcher, metadata, notifier);
+        application.enable();
+        application.shutdown();
+    }
+
+    assert(metadata.identity_calls == 1);
+    assert(metadata.gather_server_calls == 0);
+
+    std::filesystem::path profile_path;
+    for (const auto &entry : std::filesystem::directory_iterator(root)) {
+        if (entry.is_regular_file() && entry.path().extension() == ".sparkprofile") {
+            profile_path = entry.path();
+            break;
+        }
+    }
+    assert(!profile_path.empty());
+    std::ifstream profile_stream(profile_path, std::ios::binary);
+    const std::string profile((std::istreambuf_iterator<char>(profile_stream)), std::istreambuf_iterator<char>());
+    std::string platform_name;
+    std::string platform_brand;
+    spark::ProtoReader data(profile);
+    int field = 0;
+    int wire = 0;
+    while (data.nextField(field, wire)) {
+        if (field != 1 || wire != 2) {
+            data.skip(wire);
+            continue;
+        }
+        auto metadata = data.readMessage();
+        while (metadata.nextField(field, wire)) {
+            if (field != 7 || wire != 2) {
+                metadata.skip(wire);
+                continue;
+            }
+            auto platform = metadata.readMessage();
+            while (platform.nextField(field, wire)) {
+                if (field == 2 && wire == 2) {
+                    platform_name = std::string(platform.readString());
+                }
+                else if (field == 8 && wire == 2) {
+                    platform_brand = std::string(platform.readString());
+                }
+                else {
+                    platform.skip(wire);
+                }
+            }
+            assert(platform.valid());
+        }
+        assert(metadata.valid());
+    }
+    assert(data.valid());
+    profile_stream.close();
+    assert(platform_name == "LeviLamina");
+    assert(platform_brand == "LeviLamina");
+    std::filesystem::remove_all(root);
+    std::cout << "testRecoveryUsesCurrentPlatformIdentity: PASS\n";
+}
+
 }  // namespace
 
 int main()
@@ -324,6 +436,7 @@ int main()
     testCleanEndRecoveryCleanedUp();
     testThrowingNotifierRecovery();
     testRollingSnapshotRecovery();
+    testRecoveryUsesCurrentPlatformIdentity();
     std::cout << "All recovery corrupt tests passed.\n";
     return 0;
 }

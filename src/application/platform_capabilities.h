@@ -31,12 +31,18 @@ struct WorldGaugeValues {
     bool tile_entities_present = false;
 };
 
+struct PlatformIdentity {
+    std::string platform_name = "Endstone";
+    std::string platform_brand = "Endstone";
+};
+
 // Gathers server and world metadata for profile export context and provides
 // runtime server stats for health reports. Platform adapters implement
 // this by querying their server APIs.
 class ProfileMetadataProvider {
 public:
     virtual ~ProfileMetadataProvider() = default;
+    virtual PlatformIdentity platformIdentity() const { return {}; }
     virtual void gatherServerMetadata(ServerMetadata &metadata, std::int64_t now_ms) = 0;
     virtual void gatherWorldMetadata(WorldInfo &world, std::string_view minecraft_version) = 0;
     virtual std::vector<NativePluginSource> nativePluginSources() { return {}; }

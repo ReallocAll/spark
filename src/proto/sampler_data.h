@@ -130,7 +130,7 @@ struct ProfileMetadata {
     std::int32_t number_of_ticks = 0;
     std::string endstone_version;
     std::string minecraft_version;
-    std::string engine_version;  // e.g. "endstone-spark 0.1.0"
+    std::string engine_version;  // e.g. "spark for Bedrock 0.1.0"
     std::string comment;
     std::string creator_name = "Console";
     bool creator_is_player = false;
