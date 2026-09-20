@@ -40,8 +40,8 @@ void setError(const char *operation, const std::string &detail) noexcept
 extern "C" void *__cdecl hookMalloc(std::size_t size) noexcept
 {
     GCalls.fetch_add(1, std::memory_order_relaxed);
-    GEntered.store(true, std::memory_order_release);
     while (GHold.load(std::memory_order_acquire)) {
+        GEntered.store(true, std::memory_order_release);
         (void)::SwitchToThread();
     }
     MallocFn original = GMalloc;
