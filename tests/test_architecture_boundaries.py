@@ -9,7 +9,7 @@ Dependency model: platform/endstone -> application -> core/proto/net -> native
 - src/application/ may include from src/application/, the shared core layer,
                    and src/native/
 - src/platform/    may include from anywhere
-- src/plugin.cpp   may include from anywhere
+- src/platform/endstone/ may include from anywhere
 
 No layer below platform/ may include <endstone/...> or "platform/endstone/...".
 """
@@ -38,6 +38,14 @@ FORBIDDEN_PATTERNS = [
     re.compile(r"^platform/"),
 ]
 
+INTERNAL_PREFIXES = ("core/", "proto/", "net/", "native/", "application/", "platform/")
+EXACT_LAYER_INCLUDES = {"native": {"core/profiler/profiling_window.h"}}
+SHARED_INTERFACE_PATHS = {"core/profiler/profiling_window.h"}
+
+
+def _is_project_internal_include(include: str) -> bool:
+    return any(include.startswith(prefix) for prefix in INTERNAL_PREFIXES)
+
 
 def layer_of(path: Path) -> str | None:
     rel = path.relative_to(SRC)
@@ -51,21 +59,27 @@ def layer_of(path: Path) -> str | None:
     return None
 
 
-def check_file(path: Path) -> list[str]:
+def check_text(relative: str, text: str) -> list[str]:
+    path = ROOT / relative
     layer = layer_of(path)
     if layer is None:
         return []
     allowed = LAYER_RULES[layer]
     violations = []
-    text = path.read_text(encoding="utf-8", errors="replace")
+    source_relative = path.relative_to(SRC).as_posix()
     for m in INCLUDE_RE.finditer(text):
         inc = m.group(1)
+        if source_relative in SHARED_INTERFACE_PATHS and _is_project_internal_include(inc):
+            violations.append(f"{relative}: shared interface includes <{inc}> (project-internal include forbidden)")
+            continue
         # Check forbidden patterns first.
         for pat in FORBIDDEN_PATTERNS:
             if pat.match(inc):
-                violations.append(f"{path.relative_to(ROOT)}: includes <{inc}> (forbidden in {layer} layer)")
+                violations.append(f"{relative}: includes <{inc}> (forbidden in {layer} layer)")
                 break
         else:
+            if inc in EXACT_LAYER_INCLUDES.get(layer, set()):
+                continue
             # System/library includes (no slash or known external libs) are always fine.
             if "/" not in inc and not inc.startswith("endstone"):
                 continue
@@ -74,13 +88,16 @@ def check_file(path: Path) -> list[str]:
             if not any(inc.startswith(prefix) for prefix in allowed):
                 # External library includes (cpptrace, etc.) don't match any
                 # internal prefix and are fine.
-                internal_prefixes = ("core/", "proto/", "net/", "native/", "application/", "platform/")
-                if not any(inc.startswith(p) for p in internal_prefixes):
+                if not _is_project_internal_include(inc):
                     continue
                 violations.append(
-                    f"{path.relative_to(ROOT)}: includes <{inc}> (not allowed in {layer} layer)"
+                    f"{relative}: includes <{inc}> (not allowed in {layer} layer)"
                 )
     return violations
+
+
+def check_file(path: Path) -> list[str]:
+    return check_text(path.relative_to(ROOT).as_posix(), path.read_text(encoding="utf-8", errors="replace"))
 
 
 def main() -> int:
@@ -96,6 +113,24 @@ def main() -> int:
         return 1
     print(f"OK: {len(files)} files checked, no boundary violations.")
     return 0
+
+
+def test_native_allows_only_the_exact_shared_profiling_header() -> None:
+    assert check_text("src/native/fixture.cpp", '#include "core/profiler/profiling_window.h"\n') == []
+
+
+def test_native_rejects_shared_header_prefixes() -> None:
+    for include in ("core/profiler/profiler.h", "core/profiler/profiling_window.h.extra"):
+        violations = check_text("src/native/fixture.cpp", f'#include "{include}"\n')
+        assert violations
+
+
+def test_shared_interface_rejects_project_internal_includes() -> None:
+    violations = check_text(
+        "src/core/profiler/profiling_window.h",
+        '#include "core/util/format.h"\n',
+    )
+    assert violations
 
 
 if __name__ == "__main__":

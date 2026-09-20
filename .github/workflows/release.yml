@@ -108,8 +108,8 @@ jobs:
           echo
           echo "=== Current versions ==="
           grep -F 'project(spark VERSION ' CMakeLists.txt
-          grep -F 'inline constexpr const char *kVersion = ' src/spark_constants.h
-          grep -F 'ENDSTONE_PLUGIN("spark", ' src/plugin.cpp
+          grep -F 'inline constexpr const char *kVersion = ' src/core/spark_constants.h
+          grep -F 'ENDSTONE_PLUGIN("spark", ' src/platform/endstone/plugin.cpp
           echo
           echo "=== Versions after update ==="
           echo "project(spark VERSION $VERSION LANGUAGES CXX)"
@@ -127,8 +127,8 @@ jobs:
         shell: bash
         run: |
           sed -E -i "s/^project\(spark VERSION [0-9]+\.[0-9]+\.[0-9]+ LANGUAGES CXX\)$/project(spark VERSION $VERSION LANGUAGES CXX)/" CMakeLists.txt
-          sed -E -i "s/^inline constexpr const char \*kVersion = \"[0-9]+\.[0-9]+\.[0-9]+\";/inline constexpr const char *kVersion = \"$VERSION\";/" src/spark_constants.h
-          sed -E -i "s/ENDSTONE_PLUGIN\(\"spark\", \"[0-9]+\.[0-9]+\.[0-9]+\", SparkPlugin\)/ENDSTONE_PLUGIN(\"spark\", \"$VERSION\", SparkPlugin)/" src/plugin.cpp
+          sed -E -i "s/^inline constexpr const char \*kVersion = \"[0-9]+\.[0-9]+\.[0-9]+\";/inline constexpr const char *kVersion = \"$VERSION\";/" src/core/spark_constants.h
+          sed -E -i "s/ENDSTONE_PLUGIN\(\"spark\", \"[0-9]+\.[0-9]+\.[0-9]+\", SparkPlugin\)/ENDSTONE_PLUGIN(\"spark\", \"$VERSION\", SparkPlugin)/" src/platform/endstone/plugin.cpp
           cp /tmp/CHANGELOG.md CHANGELOG.md
 
       - name: Verify versions
@@ -136,13 +136,13 @@ jobs:
         shell: bash
         run: |
           grep -Fx "project(spark VERSION $VERSION LANGUAGES CXX)" CMakeLists.txt
-          grep -Fx "inline constexpr const char *kVersion = \"$VERSION\";" src/spark_constants.h
-          grep -Fx "ENDSTONE_PLUGIN(\"spark\", \"$VERSION\", SparkPlugin)" src/plugin.cpp
+          grep -Fx "inline constexpr const char *kVersion = \"$VERSION\";" src/core/spark_constants.h
+          grep -Fx "ENDSTONE_PLUGIN(\"spark\", \"$VERSION\", SparkPlugin)" src/platform/endstone/plugin.cpp
           test "$(grep -Fc "## [$VERSION]" CHANGELOG.md)" -eq 1
           test "$(grep -Fc "[$VERSION]:" CHANGELOG.md)" -eq 1
           test -s /tmp/release_body.md
           git diff --check
-          git diff -- CMakeLists.txt src/spark_constants.h src/plugin.cpp CHANGELOG.md
+          git diff -- CMakeLists.txt src/core/spark_constants.h src/platform/endstone/plugin.cpp CHANGELOG.md
 
       - name: Commit and tag
         if: env.DRY_RUN != 'true'
@@ -154,7 +154,7 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add CMakeLists.txt CHANGELOG.md src/spark_constants.h src/plugin.cpp
+          git add CMakeLists.txt CHANGELOG.md src/core/spark_constants.h src/platform/endstone/plugin.cpp
           git commit -m "chore: release v$VERSION"
           if [[ "$TAG_TRIGGER" == "true" ]]; then
             git tag --force "v$VERSION"

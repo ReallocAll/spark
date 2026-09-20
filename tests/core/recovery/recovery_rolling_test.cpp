@@ -15,7 +15,7 @@
 #include "journal_test_cases.h"
 #include "journal_test_support.h"
 #include "native/sampler/types.h"
-#include "profiling_window.h"
+#include "core/profiler/profiling_window.h"
 #include "proto/proto_reader.h"
 
 using namespace spark;                // NOLINT(google-build-using-namespace)

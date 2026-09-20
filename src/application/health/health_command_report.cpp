@@ -10,7 +10,7 @@
 #include "core/util/format.h"
 #include "core/util/monotonic_time.h"
 #include "net/gzip.h"
-#include "spark_constants.h"
+#include "core/spark_constants.h"
 
 namespace spark {
 

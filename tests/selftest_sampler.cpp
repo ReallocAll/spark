@@ -17,7 +17,7 @@
 #include "native/sampler/types.h"
 #include "proto/sampler_data.h"
 #include "selftest_internal.h"
-#include "spark_constants.h"
+#include "core/spark_constants.h"
 
 namespace spark {
 

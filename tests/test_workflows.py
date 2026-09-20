@@ -111,9 +111,9 @@ class WorkflowTest(unittest.TestCase):
         )
 
     def test_windows_version_resource_is_configure_time_generated(self):
-        cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
-        resource = (ROOT / "src" / "version.rc.in").read_text(encoding="utf-8")
-        self.assertIn("configure_file(src/version.rc.in", cmake)
+        cmake = (ROOT / "cmake" / "Endstone.cmake").read_text(encoding="utf-8")
+        resource = (ROOT / "src" / "platform" / "endstone" / "version.rc.in").read_text(encoding="utf-8")
+        self.assertIn("configure_file(src/platform/endstone/version.rc.in", cmake)
         self.assertIn('target_sources(spark PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated/version.rc")', cmake)
         self.assertIn("@PROJECT_VERSION_MAJOR@", resource)
         self.assertIn("@PROJECT_VERSION_MINOR@", resource)
@@ -123,7 +123,7 @@ class WorkflowTest(unittest.TestCase):
         self.assertNotIn("0.5.3", resource)
 
     def test_cmake_uses_pinned_official_dependency_defaults(self):
-        cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+        cmake = (ROOT / "cmake" / "Endstone.cmake").read_text(encoding="utf-8")
         expected = {
             "ENDSTONE_SPARK_ENDSTONE_GIT_REPOSITORY": "https://github.com/EndstoneMC/endstone.git",
             "ENDSTONE_SPARK_ENDSTONE_GIT_TAG": "v0.11.11",

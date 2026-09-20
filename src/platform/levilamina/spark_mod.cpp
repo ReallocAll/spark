@@ -39,7 +39,7 @@
 #include "platform/levilamina/cleanup_deadline_guard.h"
 #include "platform/levilamina/command_lifecycle.h"
 #include "platform/levilamina/host_command_parameter.h"
-#include "spark_constants.h"
+#include "core/spark_constants.h"
 
 struct SparkRawParameters {
     ::CommandRawText raw;

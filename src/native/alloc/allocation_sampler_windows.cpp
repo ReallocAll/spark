@@ -52,7 +52,7 @@
 #include "native/alloc/windows_allocation_iat_hooks.h"
 #include "native/alloc/windows_dynamic_stack_capture.h"
 #include "native/sampler/thread_info.h"
-#include "profiling_window.h"
+#include "core/profiler/profiling_window.h"
 
 #ifdef SPARK_ALLOCATION_LAST_ERROR_TESTING
 #define SPARK_ALLOCATION_LAST_ERROR_TEST_IMPLEMENTATION

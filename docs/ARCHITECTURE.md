@@ -28,14 +28,13 @@ src/
     recovery/                 #   journal, replay, and stall watchdog
     stats/                    #   rolling metrics, network, ping, and system data
     ws/                       #   crypto, WebSocket protocol, and live viewer
+    spark_constants.h         #   project version
   native/                     # sampler, symbol guesser, allocation hooks, Python bridge
   platform/
     endstone/                 # Endstone adapters and optional PlaceholderAPI integration
     levilamina/               # experimental Windows x64 LeviLamina adapter/module
   proto/                      # spark protobuf serialization
   net/                        # gzip, bytebin, WebSocket transport, profile files
-  plugin.cpp                  # Endstone lifecycle and bootstrap
-  spark_constants.h           # project version
 ```
 
 `src/platform/levilamina/` contains the native module entry point in
@@ -55,14 +54,19 @@ spark_native          <- sampler, symbol guesser, allocation hooks
 spark_core            <- config, profiler, statistics, recovery, proto, network
 spark_application     <- commands, services, export, host capability interfaces
 spark_papi_integration <- optional Endstone PlaceholderAPI adapter
-spark                 <- Endstone adapters and src/plugin.cpp
+spark                 <- Endstone adapters and src/platform/endstone/plugin.cpp
 spark_levilamina      <- LeviLamina module objects, bridge, and host SDK inputs
 ```
 
+`src/core/profiler/profiling_window.h` is the small shared interface compiled by
+`spark_profiling_time` and consumed by native sampling code. Native code may
+include this one header by exact path; the shared header itself has no project
+internal includes.
+
 The shared path is `platform adapter -> application -> core -> native ->
 profiling_time`. `spark_application`, `spark_core`, and `spark_native` do not
-include host SDK headers. Endstone's API is confined to `src/platform/endstone/`
-and `src/plugin.cpp`; LeviLamina's SDK is confined to `src/platform/levilamina/`
+include host SDK headers. Endstone's API is confined to `src/platform/endstone/`;
+LeviLamina's SDK is confined to `src/platform/levilamina/`
 and its isolated CMake target.
 
 ## Application and host boundaries
@@ -75,7 +79,7 @@ receives three host capabilities:
 - `ProfileMetadataProvider` supplies version, player, resource, and host metadata.
 - `ResultNotifier` delivers command and background-operation results.
 
-The Endstone bootstrap in `src/plugin.cpp` constructs those adapters, starts the
+The Endstone bootstrap in `src/platform/endstone/plugin.cpp` constructs those adapters, starts the
 application, schedules tick forwarding, and registers the optional PAPI
 expansion. The LeviLamina bootstrap in `src/platform/levilamina/spark_mod.cpp`
 waits for `ServerStartedEvent`, creates the bridge with LeviLamina data/config

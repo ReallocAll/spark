@@ -9,7 +9,7 @@
 #include "core/stats/system_stats.h"
 #include "core/util/format.h"
 #include "proto/sampler_data.h"
-#include "spark_constants.h"
+#include "core/spark_constants.h"
 
 namespace spark {
 

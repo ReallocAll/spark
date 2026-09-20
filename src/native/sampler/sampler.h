@@ -22,7 +22,7 @@
 #include "native/sampler/recovery_sink.h"
 #include "native/sampler/thread_selector.h"
 #include "native/sampler/types.h"
-#include "profiling_window.h"
+#include "core/profiler/profiling_window.h"
 
 namespace spark {
 

@@ -28,7 +28,7 @@
 #include "platform/endstone/adapters.h"
 #include "platform/endstone/papi_integration.h"
 #include "platform/endstone/python_attribution.h"
-#include "spark_constants.h"
+#include "core/spark_constants.h"
 
 namespace {
 

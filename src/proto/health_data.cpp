@@ -3,7 +3,7 @@
 #include "proto/metrics_proto.h"
 #include "proto/proto_writer.h"
 #include "proto/statistics_proto.h"
-#include "spark_constants.h"
+#include "core/spark_constants.h"
 
 namespace spark {
 

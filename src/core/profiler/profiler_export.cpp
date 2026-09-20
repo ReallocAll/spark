@@ -14,7 +14,7 @@
 #include "core/profiler/thread_grouper.h"
 #include "core/util/monotonic_time.h"
 #include "proto/sampler_data.h"
-#include "spark_constants.h"
+#include "core/spark_constants.h"
 #ifdef _WIN32
 #include "native/symbol/symbol_guess_windows.h"
 #elif defined(__linux__) && defined(__x86_64__)

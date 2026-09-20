@@ -6,7 +6,7 @@
 #include <utility>
 
 #include "core/util/format.h"
-#include "spark_constants.h"
+#include "core/spark_constants.h"
 
 namespace spark {
 namespace {

@@ -5,7 +5,7 @@
 #include <vector>
 
 #include "native/alloc/allocation_profile_aggregation.h"
-#include "profiling_window.h"
+#include "core/profiler/profiling_window.h"
 
 namespace spark {
 namespace {

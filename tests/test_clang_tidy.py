@@ -35,8 +35,11 @@ class ClangTidyDriverTest(unittest.TestCase):
                 "src/application/service.cpp",
                 "/build/CMakeFiles/spark_application.dir/src/application/service.cpp.o",
             ),
-            entry(ROOT, "src/platform/endstone.cpp", "/build/CMakeFiles/spark.dir/src/platform/endstone.cpp.o"),
-            entry(ROOT, "src/plugin.cpp", "/build/CMakeFiles/spark.dir/src/plugin.cpp.o"),
+            entry(
+                ROOT,
+                "src/platform/endstone/plugin.cpp",
+                "/build/CMakeFiles/spark.dir/src/platform/endstone/plugin.cpp.o",
+            ),
             entry(
                 ROOT,
                 "tests/native/sampler_test.cpp",

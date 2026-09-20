@@ -71,8 +71,6 @@ def _path_shard(relative: pathlib.PurePosixPath) -> str | None:
             return "application"
         if len(parts) > 1 and parts[1] in {"core", "net", "proto"}:
             return "core"
-        if len(parts) == 2 and parts[1] == "plugin.cpp":
-            return "application"
     elif parts[0] == "tests":
         if len(parts) > 1 and parts[1] == "native":
             return "native"

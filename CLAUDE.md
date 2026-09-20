@@ -145,7 +145,7 @@ Leave successfully symbolicated frames and non-BDS modules untouched
 
 ### Source Structure
 
-- `src/plugin.cpp` - Endstone plugin lifecycle and command dispatch (thin bootstrap)
+- `src/platform/endstone/plugin.cpp` - Endstone plugin lifecycle and command dispatch (thin bootstrap)
 - `src/platform/levilamina/` - experimental LeviLamina Windows x64 module, application bridge, and host adapters
 - `src/application/` - platform-independent business orchestration: command registry, profiler service, profile exporter, health, activity, and tick-monitor commands, platform capability interfaces
 - `src/core/` - platform-independent services: profiler, statistics, command parsing, config (TOML), recovery journal, activity log, WebSocket/crypto, server-properties metadata, utilities
@@ -167,7 +167,7 @@ Leave successfully symbolicated frames and non-BDS modules untouched
 4. **Symbolization:** Normal platform symbols have priority. Unresolved frames in the BDS main executable may receive conservative runtime guesses from unwind metadata, RTTI, vtables, thunks, and decoded string references. Guesses retain the RVA and identify their evidence source.
 5. **Statistics service:** Maintains bounded rolling TPS, MSPT, CPU, player-count, and world-gauge histories independently of an active profile.
 6. **Application layer:** Platform-independent business orchestration in `src/application/`. `SparkApplication` owns all services and dispatches ticks and commands. `ProfilerService` manages profiler sessions, background profiling, live viewer connections, and exports. Three focused capability interfaces (`MainThreadDispatcher`, `ProfileMetadataProvider`, `ResultNotifier`) abstract platform dependencies without a god-Platform.
-7. **Platform adapters:** `src/platform/endstone/` provides thin Endstone implementations of the capability interfaces and `CommandSender`; `src/platform/levilamina/` provides the experimental Windows x64 module, bridge, and LeviLamina implementations. `plugin.cpp` remains the Endstone bootstrap responsible for registration and lifecycle wiring.
+7. **Platform adapters:** `src/platform/endstone/` provides thin Endstone implementations of the capability interfaces and `CommandSender`; `src/platform/levilamina/` provides the experimental Windows x64 module, bridge, and LeviLamina implementations. `src/platform/endstone/plugin.cpp` remains the Endstone bootstrap responsible for registration and lifecycle wiring.
 8. **Crash recovery:** `RecoveryWriter` journals module, thread, sample, and tick records to segmented files via a bounded lock-free queue. On startup, `RecoveryPlayer` replays an unclean supported session and exports a recovered profile.
 9. **Stall watchdog:** `StallWatchdog` runs on an independent thread, monitoring the main-thread heartbeat. It journals stall-begin and stall-end events without calling Endstone APIs or stopping the profiler.
 10. **Live viewer:** `ViewerSocket` manages a WebSocket connection to the spark live viewer, uploading initial sampler data and pushing payload IDs on window rotation. A dedicated worker thread moves gzip and HTTP upload off the main thread.
@@ -204,7 +204,7 @@ Conan supplies cpptrace, concurrentqueue, zlib, expected-lite, libcurl, tomlplus
 - Release versions follow Semantic Versioning.
 - `.github/workflows/release.yml` can be dispatched from `main` with a version or triggered by pushing a `vX.Y.Z` tag. A release requires the selected ref, `main`, and `develop` to point to the same commit.
 - Manual release dispatch defaults `dry_run` to `true`; set it explicitly to `false` for a real release. Non-dry-run dispatches must run from `main`, while a tag push performs a real release automatically.
-- The release workflow updates `CMakeLists.txt`, `src/spark_constants.h`, `src/plugin.cpp`, and `CHANGELOG.md`; creates the release commit and tag; builds both platform artifacts; and uploads them to the GitHub release.
+- The release workflow updates `CMakeLists.txt`, `src/core/spark_constants.h`, `src/platform/endstone/plugin.cpp`, and `CHANGELOG.md`; creates the release commit and tag; builds both platform artifacts; and uploads them to the GitHub release.
 - Do not manually duplicate version changes that the release workflow owns.
 
 ## Git Conventions

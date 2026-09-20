@@ -13,7 +13,7 @@
 #include "core/util/monotonic_time.h"
 #include "core/ws/crypto.h"
 #include "net/bytebin.h"
-#include "spark_constants.h"
+#include "core/spark_constants.h"
 
 namespace spark {
 

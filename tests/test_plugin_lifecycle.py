@@ -15,7 +15,7 @@ def method_body(source: str, signature: str, next_signature: str) -> str:
 class PluginLifecycleTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.source = (ROOT / "src" / "plugin.cpp").read_text(encoding="utf-8")
+        cls.source = (ROOT / "src" / "platform" / "endstone" / "plugin.cpp").read_text(encoding="utf-8")
         cls.enable_body = method_body(cls.source, "void onEnable() override", "void onDisable() override")
         cls.disable_body = method_body(cls.source, "void onDisable() override", "bool onCommand(")
 
