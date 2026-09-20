@@ -151,7 +151,7 @@ Leave successfully symbolicated frames and non-BDS modules untouched
 - `src/core/` - platform-independent services: profiler, statistics, command parsing, config (TOML), recovery journal, activity log, WebSocket/crypto, server-properties metadata, utilities
 - `src/native/` - native backend: execution sampler, symbol guesser, allocation hooks, and Python shadow-stack primitives
 - `src/platform/endstone/` - thin Endstone platform adapters: command sender, thread dispatcher, metadata provider (including host-available world gauges and ping), result notifier
-- `src/platform/levilamina/` - experimental LeviLamina adapters and native module bootstrap; currently no ping provider, plugin/world metadata, or world gauges
+- `src/platform/levilamina/` - experimental single-DLL LeviLamina module, adapters, native-mod metadata, and aggregate ping; world metadata, world gauges, gamerules, and packs remain unavailable
 - `src/proto/` - spark protobuf serialization
 - `src/net/` - gzip compression, bytebin upload, WebSocket transport, and local profile persistence
 - `proto/` - upstream spark protocol references

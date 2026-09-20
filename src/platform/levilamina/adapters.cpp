@@ -1,31 +1,127 @@
 #include "platform/levilamina/adapters.h"
 
 #include <chrono>
+#include <cstdint>
+#include <limits>
 #include <stdexcept>
+#include <type_traits>
 #include <utility>
 
 #include "ll/api/Versions.h"
 #include "ll/api/io/Logger.h"
+#include "ll/api/mod/ModManagerRegistry.h"
+#include "ll/api/mod/NativeMod.h"
 #include "ll/api/service/Bedrock.h"
+#include "ll/api/utils/SystemUtils.h"
+#include "ll/core/mod/NativeModManager.h"
 #include "mc/server/commands/CommandOrigin.h"
 #include "mc/server/commands/CommandOutput.h"
 #include "mc/server/commands/CommandPermissionLevel.h"
 #include "mc/world/actor/Actor.h"
 #include "mc/world/actor/player/Player.h"
 #include "mc/world/level/Level.h"
+#include "platform/levilamina/bds/player_ping.h"
 #include "platform/levilamina/callback_state.h"
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 namespace spark::levilamina {
 
-bool StartupClock::recordStart()
+namespace {
+
+static_assert(std::is_polymorphic_v<ll::mod::ModManager>);
+static_assert(std::is_final_v<ll::mod::NativeModManager>);
+
+std::optional<std::uintptr_t> validatedModuleBase(ll::sys_utils::HandleT handle) noexcept
 {
-    const auto now = Clock::now();
-    std::lock_guard lock(mutex_);
-    if (start_time_.has_value()) {
+#ifdef _WIN32
+    if (handle == nullptr) {
+        return std::nullopt;
+    }
+
+    MEMORY_BASIC_INFORMATION info{};
+    if (VirtualQuery(handle, &info, sizeof(info)) != sizeof(info) || info.Type != MEM_IMAGE ||
+        info.AllocationBase != handle) {
+        return std::nullopt;
+    }
+    return reinterpret_cast<std::uintptr_t>(info.AllocationBase);
+#else
+    (void)handle;
+    return std::nullopt;
+#endif
+}
+
+std::string modulePath(ll::sys_utils::HandleT handle)
+{
+    const auto path = ll::sys_utils::getModulePath(handle);
+    return path.has_value() ? path->string() : std::string{};
+}
+
+std::shared_ptr<ll::mod::NativeModManager> nativeModManager()
+{
+    const auto manager = ll::mod::ModManagerRegistry::getInstance().getManager(ll::mod::NativeModManagerName);
+    if (!manager) {
+        return nullptr;
+    }
+    return std::dynamic_pointer_cast<ll::mod::NativeModManager>(manager);
+}
+
+}  // namespace
+
+bool StartupClock::initializeProcessStart()
+{
+#ifdef _WIN32
+    FILETIME creation_time{};
+    FILETIME exit_time{};
+    FILETIME kernel_time{};
+    FILETIME user_time{};
+    FILETIME utc_now{};
+    if (::GetProcessTimes(::GetCurrentProcess(), &creation_time, &exit_time, &kernel_time, &user_time) == FALSE) {
         return false;
     }
-    start_time_ = now;
+    ::GetSystemTimeAsFileTime(&utc_now);
+
+    const auto ticks = [](FILETIME value) noexcept {
+        return (static_cast<std::uint64_t>(value.dwHighDateTime) << 32U) |
+               static_cast<std::uint64_t>(value.dwLowDateTime);
+    };
+    const auto creation_ticks = ticks(creation_time);
+    const auto now_ticks = ticks(utc_now);
+    if (now_ticks < creation_ticks) {
+        return false;
+    }
+    const auto elapsed_ticks = now_ticks - creation_ticks;
+    constexpr auto max_nanoseconds = static_cast<std::uint64_t>((std::numeric_limits<std::int64_t>::max)());
+    if (elapsed_ticks > max_nanoseconds / 100U) {
+        return false;
+    }
+
+    const auto elapsed = std::chrono::duration_cast<Clock::duration>(
+        std::chrono::nanoseconds{static_cast<std::int64_t>(elapsed_ticks * 100U)});
+    const auto now = Clock::now();
+    if (now.time_since_epoch() < elapsed) {
+        return false;
+    }
+
+    std::lock_guard lock(mutex_);
+    if (start_time_.has_value()) {
+        return true;
+    }
+    start_time_ = now - elapsed;
     return true;
+#else
+    return false;
+#endif
+}
+
+bool StartupClock::recordStart()
+{
+    return initializeProcessStart();
 }
 
 std::optional<StartupClock::TimePoint> StartupClock::startTime() const
@@ -55,6 +151,11 @@ LeviLaminaMetadataProvider::LeviLaminaMetadataProvider(std::shared_ptr<const Sta
     }
 }
 
+PlatformIdentity LeviLaminaMetadataProvider::platformIdentity() const
+{
+    return {.platform_name = "LeviLamina", .platform_brand = "LeviLamina"};
+}
+
 void LeviLaminaMetadataProvider::gatherServerMetadata(ServerMetadata& metadata, std::int64_t /*now_ms*/)
 {
     metadata.endstone_version = ll::getLoaderVersion().to_string();
@@ -63,6 +164,16 @@ void LeviLaminaMetadataProvider::gatherServerMetadata(ServerMetadata& metadata, 
     metadata.online_mode = 0;
     metadata.uptime_ms = uptimeMilliseconds();
     metadata.plugins.clear();
+    if (const auto manager = nativeModManager()) {
+        for (ll::mod::Mod& mod : manager->mods()) {
+            const auto manifest = mod.getManifest();
+            metadata.plugins.push_back({.name = manifest.name,
+                                        .version = manifest.version.has_value() ? manifest.version->to_string()
+                                                                                 : std::string{},
+                                        .author = manifest.author.value_or(std::string{}),
+                                        .description = manifest.description.value_or(std::string{})});
+        }
+    }
     metadata.server_configurations.clear();
     metadata.platform_name = "LeviLamina";
     metadata.platform_brand = "LeviLamina";
@@ -75,7 +186,26 @@ void LeviLaminaMetadataProvider::gatherWorldMetadata(WorldInfo& world, std::stri
 
 std::vector<NativePluginSource> LeviLaminaMetadataProvider::nativePluginSources()
 {
-    return {};
+    const auto manager = nativeModManager();
+    if (!manager) {
+        return {};
+    }
+
+    std::vector<NativePluginSource> sources;
+    for (ll::mod::Mod& mod : manager->mods()) {
+        auto& native_mod = static_cast<ll::mod::NativeMod&>(mod);
+        const auto handle = native_mod.getHandle();
+        const auto module_base = validatedModuleBase(handle);
+        if (!module_base.has_value()) {
+            continue;
+        }
+
+        const auto manifest = native_mod.getManifest();
+        sources.push_back({.module_base = *module_base,
+                           .module_path = modulePath(handle),
+                           .source_id = manifest.name});
+    }
+    return sources;
 }
 
 std::int64_t LeviLaminaMetadataProvider::serverUptimeSeconds()
@@ -104,7 +234,34 @@ WorldGaugeValues LeviLaminaMetadataProvider::worldGauges()
 
 PlayerPingProvider* LeviLaminaMetadataProvider::playerPingProvider()
 {
-    return nullptr;
+    if (!ping_provider_) {
+        ping_provider_ = std::make_unique<LeviLaminaPlayerPingProvider>();
+    }
+    return ping_provider_.get();
+}
+
+std::map<std::string, int> LeviLaminaPlayerPingProvider::poll()
+{
+    std::map<std::string, int> result;
+    const auto level = ll::service::getLevel();
+    if (!level) {
+        return result;
+    }
+
+    level->forEachPlayer([&result](::Player& player) {
+        const auto name = player.getRealName();
+        if (name.empty()) {
+            return true;
+        }
+
+        const auto ping = bds::readPlayerAveragePingMilliseconds(player);
+        if (!ping.has_value() || *ping < 0 || *ping > std::numeric_limits<int>::max()) {
+            return true;
+        }
+        result.emplace(name, static_cast<int>(*ping));
+        return true;
+    });
+    return result;
 }
 
 std::int64_t LeviLaminaMetadataProvider::uptimeMilliseconds() const

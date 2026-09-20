@@ -1,5 +1,3 @@
-#include "ll/api/Global.h"
-
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -11,22 +9,25 @@
 #include <new>
 #include <stdexcept>
 #include <string>
+#include <string_view>
+#include <thread>
 #include <utility>
 
 #include "application/command/command_sender.h"
+#include "ll/api/Global.h"
 #include "ll/api/Versions.h"
 #include "ll/api/command/CommandHandle.h"
 #include "ll/api/command/CommandRegistrar.h"
+#include "ll/api/command/OverloadData.h"
 #include "ll/api/event/EventBus.h"
 #include "ll/api/event/Listener.h"
-#include "ll/api/event/server/ServerStartedEvent.h"
 #include "ll/api/event/world/ServerLevelTickEvent.h"
 #include "ll/api/io/Logger.h"
 #include "ll/api/mod/NativeMod.h"
 #include "ll/api/mod/RegisterHelper.h"
 #include "ll/api/service/Bedrock.h"
-#include "ll/api/service/GamingStatus.h"
 #include "ll/api/thread/ServerThreadExecutor.h"
+#include "mc/server/commands/Command.h"
 #include "mc/server/commands/CommandOrigin.h"
 #include "mc/server/commands/CommandOutput.h"
 #include "mc/server/commands/CommandPermissionLevel.h"
@@ -36,6 +37,8 @@
 #include "platform/levilamina/bds/tick_duration.h"
 #include "platform/levilamina/callback_state.h"
 #include "platform/levilamina/cleanup_deadline_guard.h"
+#include "platform/levilamina/command_lifecycle.h"
+#include "platform/levilamina/host_command_parameter.h"
 #include "spark_constants.h"
 
 struct SparkRawParameters {
@@ -45,14 +48,13 @@ struct SparkRawParameters {
 namespace {
 
 using TickEvent = ll::event::ServerLevelTickEvent;
-using ServerStartedEvent = ll::event::ServerStartedEvent;
 
 template <typename Deleter>
 class ProbeMemory final {
 public:
-    ProbeMemory(void* pointer, Deleter deleter) : pointer_(pointer), deleter_(deleter) {}
-    ProbeMemory(ProbeMemory const&) = delete;
-    ProbeMemory& operator=(ProbeMemory const&) = delete;
+    ProbeMemory(void *pointer, Deleter deleter) : pointer_(pointer), deleter_(deleter) {}
+    ProbeMemory(ProbeMemory const &) = delete;
+    ProbeMemory &operator=(ProbeMemory const &) = delete;
     ~ProbeMemory()
     {
         if (pointer_ != nullptr) {
@@ -60,20 +62,20 @@ public:
         }
     }
 
-    [[nodiscard]] void* get() const noexcept { return pointer_; }
+    [[nodiscard]] void *get() const noexcept { return pointer_; }
 
 private:
-    void* pointer_;
+    void *pointer_;
     Deleter deleter_;
 };
 
 struct AlignedProbeDeleter {
-    using DeleteFn = void (*)(void*, std::align_val_t) noexcept;
+    using DeleteFn = void (*)(void *, std::align_val_t) noexcept;
 
     DeleteFn function;
     std::align_val_t alignment;
 
-    void operator()(void* pointer) const noexcept { function(pointer, alignment); }
+    void operator()(void *pointer) const noexcept { function(pointer, alignment); }
 };
 
 struct HostSession final {
@@ -84,39 +86,234 @@ struct HostSession final {
     std::atomic_bool tick_started{false};
 };
 
+using CommandLifetimeGuard = spark::levilamina::CommandLifetimeGuard;
+using PublicationBoundary = spark::levilamina::PublicationBoundary;
+
+struct CommandContext final {
+    std::shared_ptr<spark::levilamina::CallbackState> callback_state;
+    std::weak_ptr<HostSession> session;
+    std::shared_ptr<CommandLifetimeGuard> lifetime;
+
+    void dispatch(::CommandOrigin const &origin, ::CommandOutput &output, std::string_view raw_text) const
+    {
+        bool handled = false;
+        const bool admitted = callback_state->invokeInline([&] {
+            auto current_session = session.lock();
+            if (!current_session || !current_session->bridge) {
+                return;
+            }
+            spark::levilamina::BorrowedCommandSender sender(origin, output);
+            handled = current_session->bridge->dispatch(sender, raw_text);
+        });
+        if (!admitted) {
+            output.error("Spark is disabled");
+        }
+        else if (!handled) {
+            output.error("Spark command was not handled");
+        }
+    }
+};
+
+class SparkNoArgumentCommand final : public ::Command {
+public:
+    SparkNoArgumentCommand(CommandLifetimeGuard::Lease lease, std::shared_ptr<CommandContext> context)
+        : lease_(std::move(lease)), context_(std::move(context))
+    {
+    }
+
+    SparkNoArgumentCommand(SparkNoArgumentCommand const&)            = delete;
+    SparkNoArgumentCommand& operator=(SparkNoArgumentCommand const&) = delete;
+    SparkNoArgumentCommand(SparkNoArgumentCommand&&)                 = delete;
+    SparkNoArgumentCommand& operator=(SparkNoArgumentCommand&&)      = delete;
+
+    ~SparkNoArgumentCommand() override = default;
+
+    void execute(::CommandOrigin const &origin, ::CommandOutput &output) const override
+    {
+        if (!lease_.admitExecution()) {
+            output.error("Spark command was rejected on an unobserved server thread");
+            return;
+        }
+        context_->dispatch(origin, output, {});
+    }
+
+private:
+    mutable CommandLifetimeGuard::Lease lease_;
+    std::shared_ptr<CommandContext> context_;
+};
+
+class SparkRawCommand final : public ::Command {
+public:
+    std::uint64_t placeholder = 0;
+    SparkRawParameters parameters;
+
+    SparkRawCommand(CommandLifetimeGuard::Lease lease, std::shared_ptr<CommandContext> context)
+        : lease_(std::move(lease)), context_(std::move(context))
+    {
+    }
+
+    SparkRawCommand(SparkRawCommand const&)            = delete;
+    SparkRawCommand& operator=(SparkRawCommand const&) = delete;
+    SparkRawCommand(SparkRawCommand&&)                 = delete;
+    SparkRawCommand& operator=(SparkRawCommand&&)      = delete;
+
+    ~SparkRawCommand() override = default;
+
+    void execute(::CommandOrigin const &origin, ::CommandOutput &output) const override
+    {
+        if (!lease_.admitExecution()) {
+            output.error("Spark command was rejected on an unobserved server thread");
+            return;
+        }
+        context_->dispatch(origin, output, parameters.raw.getText());
+    }
+
+private:
+    mutable CommandLifetimeGuard::Lease lease_;
+    std::shared_ptr<CommandContext> context_;
+};
+
+struct SparkRawLayoutProbe final : ::Command {
+    std::uint64_t placeholder = 0;
+    SparkRawParameters parameters;
+
+    void execute(::CommandOrigin const &, ::CommandOutput &) const override {}
+};
+
+static_assert(offsetof(SparkRawCommand, parameters) == offsetof(SparkRawLayoutProbe, parameters));
+constexpr int kSparkRawParameterOffset =
+    static_cast<int>(offsetof(SparkRawLayoutProbe, parameters) + offsetof(SparkRawParameters, raw));
+
+bool validateActiveSparkCommand(
+    ::CommandRegistry::Signature const& signature,
+    spark::levilamina::HostRawParameterTemplate const& expected,
+    ll::sys_utils::HandleT current_module,
+    spark::levilamina::HostRawParameterTemplate& actual,
+    std::string& error
+)
+{
+    if (signature.overloads.size() != 2) {
+        error = "active spark signature does not contain exactly two overloads";
+        return false;
+    }
+
+    ::CommandParameterData const* raw = nullptr;
+    bool empty = false;
+    for (auto const& overload : signature.overloads) {
+        if (overload.params.empty()) {
+            if (empty) {
+                error = "active spark signature contains duplicate empty overloads";
+                return false;
+            }
+            empty = true;
+            continue;
+        }
+        if (overload.params.size() == 1 && overload.params.front().mName == "raw") {
+            if (raw != nullptr) {
+                error = "active spark signature contains duplicate raw overloads";
+                return false;
+            }
+            raw = &overload.params.front();
+            continue;
+        }
+        error = "active spark signature contains an unexpected overload";
+        return false;
+    }
+    if (!empty || raw == nullptr) {
+        error = "active spark signature is missing the expected empty/raw overload pair";
+        return false;
+    }
+
+    if (raw->mTypeIndex != expected.type_index || raw->mParseOverride != expected.parse_override ||
+        raw->mParseRule != expected.parse_rule) {
+        error = "active raw overload does not retain the host type/parser/rule pointers";
+        return false;
+    }
+    if (raw->mParamType != ::CommandParameterDataType::Basic || raw->mOffset != kSparkRawParameterOffset ||
+        raw->mSetOffset != -1 || raw->mIsOptional || raw->mOptions != ::CommandParameterOption::None ||
+        raw->mEnumNameOrPostfix != nullptr || raw->mChainedSubcommand != nullptr) {
+        error = "active raw overload changed the frozen parameter layout or required semantics";
+        return false;
+    }
+
+    actual = spark::levilamina::copyHostRawParameterFields(*raw, expected.rule_module, expected.parser_module);
+    return spark::levilamina::validateHostRawParameterTemplate(actual, current_module, error);
+}
+
+class SparkEmptyOverload final : public ll::command::OverloadData {
+public:
+    SparkEmptyOverload(::ll::command::CommandHandle &handle, std::weak_ptr<ll::mod::Mod> mod)
+        : OverloadData(handle, std::move(mod))
+    {
+    }
+
+    void setFactory(::CommandRegistry::Overload::AllocFunction factory)
+    {
+        OverloadData::setFactory(std::move(factory));
+    }
+};
+
+class SparkRawOverload final : public ll::command::OverloadData {
+public:
+    SparkRawOverload(::ll::command::CommandHandle &handle, std::weak_ptr<ll::mod::Mod> mod)
+        : OverloadData(handle, std::move(mod))
+    {
+    }
+
+    void requiredRaw(spark::levilamina::HostRawParameterTemplate const& host)
+    {
+        auto &data = addParamImpl(
+            host.type_index, host.parse_override, "raw", ::CommandParameterDataType::Basic, {}, {},
+            kSparkRawParameterOffset, -1, false,
+            ::CommandParameterOption::None, host.parse_rule);
+        static_cast<void>(data);
+    }
+
+    void setFactory(::CommandRegistry::Overload::AllocFunction factory)
+    {
+        OverloadData::setFactory(std::move(factory));
+    }
+};
+
 class SparkMod final {
 public:
     bool load();
     bool enable();
     bool disable();
+    bool unload();
 
 private:
     using Executor = ll::thread::ServerThreadExecutor;
     using CallbackState = spark::levilamina::CallbackState;
     using CleanupDeadlineGuard = spark::levilamina::CleanupDeadlineGuard;
 
-    [[nodiscard]] ll::io::Logger& logger() const noexcept;
+    [[nodiscard]] ll::io::Logger &logger() const noexcept;
     [[nodiscard]] bool registerCommand();
+    [[nodiscard]] bool confirmCommandRegistryCleanup();
     [[nodiscard]] bool runAllocatorProbe();
-    [[nodiscard]] bool closeResources();
-    void reportException(char const* operation, std::exception_ptr exception) const noexcept;
+    [[nodiscard]] bool closeResources(bool require_server_thread);
+    [[nodiscard]] bool admitRuntimeClose() const;
+    void resetSessionState() noexcept;
+    void reportException(char const *operation, std::exception_ptr exception) const noexcept;
 
     std::weak_ptr<ll::mod::NativeMod> owner_;
     std::weak_ptr<ll::io::Logger> logger_;
     std::shared_ptr<CallbackState> callback_state_;
     std::unique_ptr<CleanupDeadlineGuard> cleanup_guard_;
     std::shared_ptr<spark::levilamina::StartupClock> startup_clock_;
+    std::shared_ptr<CommandLifetimeGuard> command_lifetime_;
+    std::shared_ptr<CommandContext> command_context_;
     std::shared_ptr<HostSession> host_session_;
     std::shared_ptr<Executor> executor_;
-    ll::event::ListenerPtr startup_listener_;
     ll::event::ListenerPtr tick_listener_;
     std::shared_ptr<std::atomic_bool> tick_warning_once_;
     std::atomic_bool enabled_{false};
     bool loaded_ = false;
     bool command_registered_ = false;
+    PublicationBoundary publication_boundary_;
 };
 
-ll::io::Logger& SparkMod::logger() const noexcept
+ll::io::Logger &SparkMod::logger() const noexcept
 {
     if (auto logger = logger_.lock()) {
         return *logger;
@@ -124,7 +321,7 @@ ll::io::Logger& SparkMod::logger() const noexcept
     std::terminate();
 }
 
-void SparkMod::reportException(char const* operation, std::exception_ptr exception) const noexcept
+void SparkMod::reportException(char const *operation, std::exception_ptr exception) const noexcept
 {
     auto logger = logger_.lock();
     if (!logger) {
@@ -136,7 +333,7 @@ void SparkMod::reportException(char const* operation, std::exception_ptr excepti
             std::rethrow_exception(exception);
         }
     }
-    catch (std::exception const& error) {
+    catch (std::exception const &error) {
         try {
             logger->error("spark {} failed: {}", operation, error.what());
         }
@@ -161,10 +358,10 @@ void SparkMod::reportException(char const* operation, std::exception_ptr excepti
 
 bool SparkMod::runAllocatorProbe()
 {
-    using NewFn = void* (*)(std::size_t);
-    using DeleteFn = void (*)(void*) noexcept;
-    using AlignedNewFn = void* (*)(std::size_t, std::align_val_t);
-    using AlignedDeleteFn = void (*)(void*, std::align_val_t) noexcept;
+    using NewFn = void *(*)(std::size_t);
+    using DeleteFn = void (*)(void *) noexcept;
+    using AlignedNewFn = void *(*)(std::size_t, std::align_val_t);
+    using AlignedDeleteFn = void (*)(void *, std::align_val_t) noexcept;
 
     const volatile NewFn scalar_new = static_cast<NewFn>(&::operator new);
     const volatile DeleteFn scalar_delete = static_cast<DeleteFn>(&::operator delete);
@@ -172,7 +369,7 @@ bool SparkMod::runAllocatorProbe()
     if (scalar.get() == nullptr) {
         throw std::runtime_error{"scalar allocator returned null"};
     }
-    auto* scalar_bytes = static_cast<volatile std::uint8_t*>(scalar.get());
+    auto *scalar_bytes = static_cast<volatile std::uint8_t *>(scalar.get());
     scalar_bytes[0] = 0x5A;
     if (scalar_bytes[0] != 0x5A) {
         throw std::runtime_error{"scalar allocator readback failed"};
@@ -184,7 +381,7 @@ bool SparkMod::runAllocatorProbe()
     if (array.get() == nullptr) {
         throw std::runtime_error{"array allocator returned null"};
     }
-    auto* array_bytes = static_cast<volatile std::uint8_t*>(array.get());
+    auto *array_bytes = static_cast<volatile std::uint8_t *>(array.get());
     array_bytes[17] = 0xA5;
     if (array_bytes[17] != 0xA5) {
         throw std::runtime_error{"array allocator readback failed"};
@@ -197,11 +394,11 @@ bool SparkMod::runAllocatorProbe()
         aligned_new(96, alignment),
         AlignedProbeDeleter{aligned_delete, alignment},
     };
-    if (aligned.get() == nullptr
-        || reinterpret_cast<std::uintptr_t>(aligned.get()) % static_cast<std::size_t>(alignment) != 0) {
+    if (aligned.get() == nullptr ||
+        reinterpret_cast<std::uintptr_t>(aligned.get()) % static_cast<std::size_t>(alignment) != 0) {
         throw std::runtime_error{"aligned allocator returned an invalid address"};
     }
-    auto* aligned_bytes = static_cast<volatile std::uint8_t*>(aligned.get());
+    auto *aligned_bytes = static_cast<volatile std::uint8_t *>(aligned.get());
     aligned_bytes[31] = 0x3C;
     if (aligned_bytes[31] != 0x3C) {
         throw std::runtime_error{"aligned allocator readback failed"};
@@ -213,11 +410,11 @@ bool SparkMod::runAllocatorProbe()
         aligned_array_new(128, alignment),
         AlignedProbeDeleter{aligned_array_delete, alignment},
     };
-    if (aligned_array.get() == nullptr
-        || reinterpret_cast<std::uintptr_t>(aligned_array.get()) % static_cast<std::size_t>(alignment) != 0) {
+    if (aligned_array.get() == nullptr ||
+        reinterpret_cast<std::uintptr_t>(aligned_array.get()) % static_cast<std::size_t>(alignment) != 0) {
         throw std::runtime_error{"aligned array allocator returned an invalid address"};
     }
-    auto* aligned_array_bytes = static_cast<volatile std::uint8_t*>(aligned_array.get());
+    auto *aligned_array_bytes = static_cast<volatile std::uint8_t *>(aligned_array.get());
     aligned_array_bytes[63] = 0xC3;
     if (aligned_array_bytes[63] != 0xC3) {
         throw std::runtime_error{"aligned array readback failed"};
@@ -249,40 +446,10 @@ bool SparkMod::load()
         std::filesystem::create_directories(owner->getDataDir());
         std::filesystem::create_directories(owner->getConfigDir());
 
-        cleanup_guard_ = std::make_unique<CleanupDeadlineGuard>();
-        callback_state_ = std::make_shared<CallbackState>();
         startup_clock_ = std::make_shared<spark::levilamina::StartupClock>();
-        tick_warning_once_ = std::make_shared<std::atomic_bool>(false);
-
-        const auto weak_logger = logger_;
-        auto state = callback_state_;
-        state->setInfoCallback([weak_logger](std::string const& message) {
-            if (auto logger = weak_logger.lock()) {
-                logger->info("{}", message);
-            }
-        });
-        state->setErrorCallback([weak_logger](std::string const& message) {
-            if (auto logger = weak_logger.lock()) {
-                logger->error("{}", message);
-            }
-        });
-        state->setFatalHandler([](CallbackState::FatalReason) { CleanupDeadlineGuard::terminateOnTimeout(); });
-
-        const std::weak_ptr<spark::levilamina::StartupClock> weak_clock = startup_clock_;
-        startup_listener_ = ll::event::EventBus::getInstance().emplaceListener<ServerStartedEvent>(
-            [state, weak_clock](ServerStartedEvent&) {
-                static_cast<void>(state->invokeInline([weak_clock] {
-                    if (auto clock = weak_clock.lock()) {
-                        static_cast<void>(clock->recordStart());
-                    }
-                }));
-            },
-            ll::event::EventPriority::Normal,
-            owner_
-        );
-        if (!startup_listener_) {
-            static_cast<void>(closeResources());
-            logger().error("spark load failed: could not register ServerStartedEvent listener");
+        if (!startup_clock_->initializeProcessStart()) {
+            startup_clock_.reset();
+            logger().error("spark load failed: BDS process creation time could not be anchored");
             return false;
         }
 
@@ -294,10 +461,43 @@ bool SparkMod::load()
     }
     catch (...) {
         auto exception = std::current_exception();
-        static_cast<void>(closeResources());
+        resetSessionState();
+        startup_clock_.reset();
         reportException("load", exception);
         return false;
     }
+}
+
+bool SparkMod::confirmCommandRegistryCleanup()
+{
+    if (!publication_boundary_.published()) {
+        return true;
+    }
+
+    auto registry = ll::service::getCommandRegistry();
+    if (!registry) {
+        if (auto logger = logger_.lock()) {
+            try {
+                logger->warn("Spark lifecycle could not prove command registry cleanup");
+            }
+            catch (...) {
+            }
+        }
+        return false;
+    }
+    auto *command = registry->findCommand("spark");
+    const bool registry_empty = command == nullptr || command->overloads.empty();
+    if (!registry_empty) {
+        if (auto logger = logger_.lock()) {
+            try {
+                logger->warn("Spark lifecycle found retained command overloads after disable");
+            }
+            catch (...) {
+            }
+        }
+        return false;
+    }
+    return publication_boundary_.confirmHostRegistryCleanup(true);
 }
 
 bool SparkMod::registerCommand()
@@ -307,50 +507,82 @@ bool SparkMod::registerCommand()
         throw std::runtime_error{"spark command registration failed: server command registry is unavailable"};
     }
 
-    if (auto* existing = registry->findCommand("spark"); existing != nullptr) {
+    if (auto *existing = registry->findCommand("spark"); existing != nullptr) {
         if (existing->permissionLevel != ::CommandPermissionLevel::GameDirectors || !existing->overloads.empty()) {
             throw std::runtime_error{"spark command registration rejected a conflicting pre-existing signature"};
         }
     }
 
-    auto& registrar = ll::command::CommandRegistrar::getServerInstance();
-    auto state = callback_state_;
-    const std::weak_ptr<HostSession> weak_session = host_session_;
-    auto& command = registrar.getOrCreateCommand(
-        "spark", "Spark profiler", ::CommandPermissionLevel::GameDirectors, ::CommandFlagValue::NotCheat, owner_
-    );
+    auto &registrar = ll::command::CommandRegistrar::getServerInstance();
+    auto context = command_context_;
+    if (!context || !context->callback_state || !context->lifetime) {
+        throw std::runtime_error{"spark command registration has no live command context"};
+    }
+    publication_boundary_.begin();
+    auto &command = registrar.getOrCreateCommand("spark", "Spark profiler", ::CommandPermissionLevel::GameDirectors,
+                                                 ::CommandFlagValue::NotCheat, owner_);
 
-    const auto dispatch = [state, weak_session](
-                              ::CommandOrigin const& origin,
-                              ::CommandOutput& output,
-                              std::string raw_text
-                          ) {
-        bool handled = false;
-        const bool admitted = state->invokeInline([&] {
-            auto session = weak_session.lock();
-            if (!session || !session->bridge) {
-                return;
-            }
-            spark::levilamina::BorrowedCommandSender sender(origin, output);
-            handled = session->bridge->dispatch(sender, raw_text);
-        });
-        if (!admitted) {
-            output.error("Spark is disabled");
-        }
-        else if (!handled) {
-            output.error("Spark command was not handled");
-        }
-    };
-
-    command.overload(owner_).execute([dispatch](::CommandOrigin const& origin, ::CommandOutput& output) {
-        dispatch(origin, output, {});
-    });
-    command.overload<SparkRawParameters>(owner_).required("raw").execute(
-        [dispatch](::CommandOrigin const& origin, ::CommandOutput& output, SparkRawParameters const& params) {
-            dispatch(origin, output, params.raw.getText());
-        }
+    auto native_owner = owner_.lock();
+    if (!native_owner) {
+        throw std::runtime_error{"spark raw command registration lost its owning native mod"};
+    }
+    std::string host_parameter_error;
+    auto host_raw = spark::levilamina::captureHostRawParameterTemplate(
+        command, owner_, native_owner->getHandle(), host_parameter_error
     );
+    if (!host_raw.has_value()) {
+        throw std::runtime_error{"spark raw command host parameter validation failed: " + host_parameter_error};
+    }
+
+    SparkEmptyOverload empty{command, owner_};
+    empty.setFactory(::CommandRegistry::Overload::AllocFunction{[context]() -> std::unique_ptr<::Command> {
+        auto lease = context->lifetime->acquireForConstruction();
+        if (!lease.has_value()) {
+            return {};
+        }
+        try {
+            return std::make_unique<SparkNoArgumentCommand>(std::move(*lease), context);
+        }
+        catch (...) {
+            return {};
+        }
+    }});
+
+    SparkRawOverload raw{command, owner_};
+    raw.requiredRaw(*host_raw);
+    raw.setFactory(::CommandRegistry::Overload::AllocFunction{[context]() -> std::unique_ptr<::Command> {
+        auto lease = context->lifetime->acquireForConstruction();
+        if (!lease.has_value()) {
+            return {};
+        }
+        try {
+            return std::make_unique<SparkRawCommand>(std::move(*lease), context);
+        }
+        catch (...) {
+            return {};
+        }
+    }});
+    auto *active_signature = registry->findCommand("spark");
+    if (active_signature == nullptr) {
+        throw std::runtime_error{"spark command registration lost its active signature"};
+    }
+    spark::levilamina::HostRawParameterTemplate actual_raw;
+    std::string active_parameter_error;
+    if (!validateActiveSparkCommand(
+            *active_signature,
+            *host_raw,
+            native_owner->getHandle(),
+            actual_raw,
+            active_parameter_error
+        )) {
+        throw std::runtime_error{"spark active raw parameter validation failed: " + active_parameter_error};
+    }
     command_registered_ = true;
+    logger().debug(
+        "Spark raw command host rule accepted: rule_module={}, parser_module={}, symbol=RawText",
+        actual_raw.rule_module,
+        actual_raw.parser_module
+    );
     logger().info("Registered /spark with GameDirectors permission");
     return true;
 }
@@ -361,7 +593,8 @@ bool SparkMod::enable()
         if (enabled_.load(std::memory_order_acquire)) {
             return true;
         }
-        if (!loaded_ || !cleanup_guard_ || !callback_state_ || !startup_clock_) {
+        if (!loaded_ || !startup_clock_ || callback_state_ || cleanup_guard_ || host_session_ || executor_ ||
+            tick_listener_ || command_lifetime_ || command_context_) {
             throw std::runtime_error{"spark enable requires a completed load"};
         }
 
@@ -369,19 +602,32 @@ bool SparkMod::enable()
         if (!owner) {
             throw std::runtime_error{"spark enable could not resolve its owning native mod"};
         }
-        if (callback_state_->phase() != CallbackState::Phase::Open) {
-            throw std::runtime_error{"spark enable requires an open callback state"};
+        if (!confirmCommandRegistryCleanup()) {
+            CleanupDeadlineGuard::terminateOnTimeout();
         }
-        if (!startup_clock_->startTime().has_value()) {
-            throw std::runtime_error{"spark enable requires ServerStartedEvent startup timing"};
-        }
-
         if (!runAllocatorProbe()) {
             throw std::runtime_error{"spark allocator probe failed"};
         }
 
-        auto state = callback_state_;
+        callback_state_ = std::make_shared<CallbackState>();
+        cleanup_guard_ = std::make_unique<CleanupDeadlineGuard>();
+        command_lifetime_ = std::make_shared<CommandLifetimeGuard>();
+        tick_warning_once_ = std::make_shared<std::atomic_bool>(false);
+
         const auto weak_logger = logger_;
+        auto state = callback_state_;
+        state->setInfoCallback([weak_logger](std::string const &message) {
+            if (auto logger = weak_logger.lock()) {
+                logger->info("{}", message);
+            }
+        });
+        state->setErrorCallback([weak_logger](std::string const &message) {
+            if (auto logger = weak_logger.lock()) {
+                logger->error("{}", message);
+            }
+        });
+        state->setFatalHandler([](CallbackState::FatalReason) { CleanupDeadlineGuard::terminateOnTimeout(); });
+
         executor_ = std::make_shared<Executor>("spark_server_thread", std::chrono::milliseconds{30}, 16);
         const std::weak_ptr<Executor> weak_executor = executor_;
         state->setSubmitter([state, weak_executor](std::function<void()> wrapper) {
@@ -398,16 +644,25 @@ bool SparkMod::enable()
         session->metadata = std::make_unique<spark::levilamina::LeviLaminaMetadataProvider>(startup_clock_);
         session->notifier = std::make_shared<spark::levilamina::LeviLaminaNotifier>(state, weak_logger);
         session->bridge = std::make_unique<spark::levilamina::ApplicationBridge>(
-            owner->getDataDir(), owner->getConfigDir(), *session->dispatcher, *session->metadata, *session->notifier
-        );
+            owner->getDataDir(), owner->getConfigDir(), *session->dispatcher, *session->metadata, *session->notifier);
         session->bridge->enable();
+
+        command_context_ = std::make_shared<CommandContext>(CommandContext{
+            .callback_state = state,
+            .session = session,
+            .lifetime = command_lifetime_,
+        });
 
         const std::weak_ptr<HostSession> weak_session = session;
         const auto warning_once = tick_warning_once_;
+        const auto lifetime = command_lifetime_;
         tick_listener_ = ll::event::EventBus::getInstance().emplaceListener<TickEvent>(
-            [state, weak_session, warning_once](TickEvent&) {
-                static_cast<void>(state->invokeInline([state, weak_session, warning_once] {
+            [state, weak_session, warning_once, lifetime](TickEvent &) {
+                static_cast<void>(state->invokeInline([state, weak_session, warning_once, lifetime] {
                     state->observeTick();
+                    if (lifetime) {
+                        lifetime->observeServerThread(std::this_thread::get_id());
+                    }
                     const auto measured_ms = spark::levilamina::bds::readServerTickMilliseconds();
                     auto session = weak_session.lock();
                     if (!session) {
@@ -425,9 +680,7 @@ bool SparkMod::enable()
                     }
                 }));
             },
-            ll::event::EventPriority::Normal,
-            owner_
-        );
+            ll::event::EventPriority::Normal, owner_);
         if (!tick_listener_) {
             throw std::runtime_error{"spark enable failed: could not register ServerLevelTickEvent listener"};
         }
@@ -443,139 +696,155 @@ bool SparkMod::enable()
     }
     catch (...) {
         auto exception = std::current_exception();
-        static_cast<void>(closeResources());
-        reportException("enable", exception);
-        return false;
+        return spark::levilamina::runPublicationFailurePath(
+            publication_boundary_, exception,
+            [this] { static_cast<void>(closeResources(false)); },
+            [this](std::exception_ptr error) { reportException("enable", error); },
+            [] { CleanupDeadlineGuard::terminateOnTimeout(); }
+        );
     }
 }
 
-bool SparkMod::closeResources()
+void SparkMod::resetSessionState() noexcept
+{
+    command_context_.reset();
+    command_lifetime_.reset();
+    host_session_.reset();
+    executor_.reset();
+    tick_listener_.reset();
+    tick_warning_once_.reset();
+    callback_state_.reset();
+    enabled_.store(false, std::memory_order_release);
+    command_registered_ = false;
+}
+
+bool SparkMod::admitRuntimeClose() const
+{
+    auto state = callback_state_;
+    auto session = host_session_;
+    auto lifetime = command_lifetime_;
+    return state && session && session->bridge && tick_listener_ && tick_listener_.use_count() == 2 &&
+           session->tick_started.load(std::memory_order_acquire) &&
+           state->phase() == CallbackState::Phase::Open && !state->isInBodyOnCurrentThread() && lifetime &&
+           lifetime->hasObservedServerThread() && lifetime->isServerThread() && lifetime->activeCommands() == 0 &&
+           !lifetime->unsafeViolation();
+}
+
+bool SparkMod::closeResources(bool require_server_thread)
 {
     try {
         auto state = callback_state_;
         if (!state) {
-            if (!cleanup_guard_) {
-                enabled_.store(false, std::memory_order_release);
-                startup_clock_.reset();
-                tick_warning_once_.reset();
-                return true;
+            if (cleanup_guard_) {
+                if (!cleanup_guard_->cancelDormantAndJoin()) {
+                    CleanupDeadlineGuard::terminateOnTimeout();
+                }
+                cleanup_guard_.reset();
             }
-            if (!cleanup_guard_->cancelDormantAndJoin()) {
-                CleanupDeadlineGuard::terminateOnTimeout();
-            }
-            cleanup_guard_.reset();
-            startup_clock_.reset();
-            tick_warning_once_.reset();
-            enabled_.store(false, std::memory_order_release);
+            resetSessionState();
             return true;
         }
 
-        constexpr auto cleanup_timeout = std::chrono::seconds{5};
+        if (require_server_thread && !admitRuntimeClose()) {
+            logger().warn("Spark cleanup refused: server tick thread or command lifetime admission is not proven");
+            return false;
+        }
         if (!cleanup_guard_) {
             state->failFatal(CallbackState::FatalReason::Deadline);
             CleanupDeadlineGuard::terminateOnTimeout();
         }
+        if (require_server_thread && (!command_lifetime_ || !command_lifetime_->beginCleanup())) {
+            logger().warn("Spark cleanup refused: a command or lifecycle transition became active");
+            return false;
+        }
+
+        constexpr auto cleanup_timeout = std::chrono::seconds{5};
         cleanup_guard_->arm(cleanup_timeout);
         const auto deadline = cleanup_guard_->deadline();
 
         std::shared_ptr<Executor> executor;
-        ll::event::ListenerPtr startup_listener;
         ll::event::ListenerPtr tick_listener;
         const auto claim = state->beginClosing([&] {
-            startup_listener = std::move(startup_listener_);
             tick_listener = std::move(tick_listener_);
             executor = std::move(executor_);
         });
-
-        if (claim == CallbackState::CloseClaim::AlreadyClosed) {
-            enabled_.store(false, std::memory_order_release);
-            return true;
-        }
-        if (claim == CallbackState::CloseClaim::AlreadyClosing) {
-            if (state->waitClosed(deadline)) {
-                enabled_.store(false, std::memory_order_release);
-                return true;
-            }
-            state->failFatal(CallbackState::FatalReason::Deadline);
-            CleanupDeadlineGuard::terminateOnTimeout();
-        }
-        if (claim == CallbackState::CloseClaim::SelfWaitRejected) {
-            state->failFatal(CallbackState::FatalReason::SelfWait);
+        if (claim != CallbackState::CloseClaim::Owner) {
+            state->failFatal(claim == CallbackState::CloseClaim::SelfWaitRejected
+                                 ? CallbackState::FatalReason::SelfWait
+                                 : CallbackState::FatalReason::Deadline);
             CleanupDeadlineGuard::terminateOnTimeout();
         }
 
-        auto cleanup_scope = state->enterCleanupScope();
-        if (!state->waitProducer(deadline)) {
-            state->failFatal(CallbackState::FatalReason::Deadline);
-            CleanupDeadlineGuard::terminateOnTimeout();
-        }
-
-        auto pending_payloads = state->takePendingPayloads();
-        state->destroyPendingPayloads(pending_payloads);
-
-        if (startup_listener) {
-            ll::event::EventBus::getInstance().removeListener<ServerStartedEvent>(startup_listener);
-        }
-        if (tick_listener) {
-            ll::event::EventBus::getInstance().removeListener<TickEvent>(tick_listener);
-        }
-        startup_listener.reset();
-        tick_listener.reset();
-
-        auto diagnostic_callbacks = state->takeDiagnosticCallbacks();
-        state->destroyDiagnosticCallbacks(diagnostic_callbacks);
-
-        if (!state->waitQuiescent(deadline)) {
-            state->failFatal(CallbackState::FatalReason::Deadline);
-            CleanupDeadlineGuard::terminateOnTimeout();
-        }
-
-        auto session = std::move(host_session_);
-        if (session && session->bridge) {
-            std::string error;
-            if (!session->bridge->shutdown(error)) {
+        {
+            auto cleanup_scope = state->enterCleanupScope();
+            if (!state->waitProducer(deadline)) {
                 state->failFatal(CallbackState::FatalReason::Deadline);
                 CleanupDeadlineGuard::terminateOnTimeout();
             }
-            session->bridge.reset();
-        }
-        if (session) {
-            session->notifier.reset();
-            session->metadata.reset();
-            session->dispatcher.reset();
-        }
-        session.reset();
-        executor.reset();
 
-        startup_clock_.reset();
+            auto pending_payloads = state->takePendingPayloads();
+            state->destroyPendingPayloads(pending_payloads);
+
+            if (tick_listener) {
+                ll::event::EventBus::getInstance().removeListener<TickEvent>(tick_listener);
+                if (!spark::levilamina::waitForSoleSharedOwner(tick_listener, deadline)) {
+                    state->failFatal(CallbackState::FatalReason::Deadline);
+                    CleanupDeadlineGuard::terminateOnTimeout();
+                }
+            }
+            tick_listener.reset();
+
+            auto diagnostic_callbacks = state->takeDiagnosticCallbacks();
+            state->destroyDiagnosticCallbacks(diagnostic_callbacks);
+            if (!state->waitQuiescent(deadline)) {
+                state->failFatal(CallbackState::FatalReason::Deadline);
+                CleanupDeadlineGuard::terminateOnTimeout();
+            }
+
+            auto session = std::move(host_session_);
+            if (session && session->bridge) {
+                std::string error;
+                if (!session->bridge->shutdown(error)) {
+                    state->reportError(error.empty() ? "Spark application shutdown failed" : error);
+                    state->failFatal(CallbackState::FatalReason::Deadline);
+                    CleanupDeadlineGuard::terminateOnTimeout();
+                }
+                session->bridge.reset();
+            }
+            if (session) {
+                session->notifier.reset();
+                session->metadata.reset();
+                session->dispatcher.reset();
+            }
+            session.reset();
+
+            executor.reset();
+            if (state->activeBodies() != 0 || state->pendingWorkSlots() != 0 || executor) {
+                state->failFatal(CallbackState::FatalReason::Deadline);
+                CleanupDeadlineGuard::terminateOnTimeout();
+            }
+
+            const auto ticks = state->rawTickObservations();
+            logger().info(
+                "Spark cleanup quiescent: ticks={}, active_bodies={}, pending_payloads={}, tick_listener_released={}, "
+                "executor_released={}",
+                ticks, state->activeBodies(), state->pendingWorkSlots(), tick_listener == nullptr, executor == nullptr);
+
+            command_context_.reset();
+            if (require_server_thread && (!command_lifetime_ || !command_lifetime_->completeCleanup())) {
+                state->failFatal(CallbackState::FatalReason::Deadline);
+                CleanupDeadlineGuard::terminateOnTimeout();
+            }
+
+            enabled_.store(false, std::memory_order_release);
+            command_registered_ = false;
+            cleanup_guard_->completeAndJoin();
+            state->markClosed();
+        }
+        callback_state_.reset();
+        command_lifetime_.reset();
         tick_warning_once_.reset();
-
-        const auto active_bodies = state->activeBodies();
-        const auto pending_work_slots = state->pendingWorkSlots();
-        const bool startup_listener_released = startup_listener == nullptr;
-        const bool tick_listener_released = tick_listener == nullptr;
-        const bool executor_released = executor == nullptr;
-        if (active_bodies != 0 || pending_work_slots != 0 || !startup_listener_released || !tick_listener_released
-            || !executor_released) {
-            state->failFatal(CallbackState::FatalReason::Deadline);
-            CleanupDeadlineGuard::terminateOnTimeout();
-        }
-
-        const auto ticks = state->rawTickObservations();
-        logger().info(
-            "Spark cleanup quiescent: ticks={}, active_bodies={}, pending_payloads={}, "
-            "startup_listener_released={}, tick_listener_released={}, executor_released={}",
-            ticks,
-            active_bodies,
-            pending_work_slots,
-            startup_listener_released,
-            tick_listener_released,
-            executor_released
-        );
-        enabled_.store(false, std::memory_order_release);
-        logger().info("Spark disabled after {} admitted ServerLevelTickEvent callbacks", ticks);
-        cleanup_guard_->completeAndJoin();
-        state->markClosed();
+        cleanup_guard_.reset();
         return true;
     }
     catch (...) {
@@ -585,20 +854,49 @@ bool SparkMod::closeResources()
 
 bool SparkMod::disable()
 {
-    if (ll::getGamingStatus() == ll::GamingStatus::Running) {
-        logger().warn("Spark disable refused while LeviLamina gaming status is Running; restart is required");
-        return false;
+    if (!enabled_.load(std::memory_order_acquire)) {
+        return true;
     }
-
     try {
-        return closeResources();
+        return closeResources(true);
     }
     catch (...) {
         CleanupDeadlineGuard::terminateOnTimeout();
     }
 }
 
-SparkMod& getSparkMod()
+bool SparkMod::unload()
+{
+    if (!loaded_) {
+        return true;
+    }
+    if (enabled_.load(std::memory_order_acquire) || callback_state_ || cleanup_guard_ || command_lifetime_ ||
+        command_context_ || host_session_ || executor_ || tick_listener_) {
+        if (auto logger = logger_.lock()) {
+            logger->warn("Spark unload refused while the active session is not fully disabled");
+        }
+        return false;
+    }
+    if (!confirmCommandRegistryCleanup()) {
+        return false;
+    }
+    if (command_registered_) {
+        if (auto logger = logger_.lock()) {
+            logger->warn("Spark unload refused before LeviLamina command registry cleanup");
+        }
+        return false;
+    }
+    if (auto logger = logger_.lock()) {
+        logger->info("Spark unloaded after a quiescent session");
+    }
+    startup_clock_.reset();
+    loaded_ = false;
+    owner_.reset();
+    logger_.reset();
+    return true;
+}
+
+SparkMod &getSparkMod()
 {
     static SparkMod mod;
     return mod;

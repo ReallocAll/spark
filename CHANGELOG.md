@@ -9,10 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Preserve the active host identity when saving profiles recovered from a crash journal.
+
 - Add an experimental Windows x64 LeviLamina 26.20.x host target with a
   permission-gated `/spark` commands, shared configuration, TPS/MSPT and health
   statistics, background profiling, local execution-profile saves, and clean
-  server shutdown. Full feature parity and reload validation remain in progress.
+  server shutdown. Full feature parity remains in progress; lifecycle modes
+  beyond quiescent unload/load remain experimental.
+
+- Build the LeviLamina target as a single `levilamina_spark.dll` with its
+  matching PDB and manifest, while retaining the existing LL host adapters and
+  shared profiler services.
+
+- Add LL-managed quiescent unload/load for the single LeviLamina module; reload
+  and reactivate remain experimental while their combinations are validated.
+
+- Expose LeviLamina native-mod metadata and aggregate player ping. World
+  metadata, world gauges, gamerules, and packs remain unavailable.
 
 ## [0.6.0][0.6.0] - 2026-09-17
 

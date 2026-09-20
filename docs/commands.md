@@ -10,13 +10,32 @@ LeviLamina registers one native `/spark` command at the `GameDirectors`
 permission level. It forwards the same command grammar, but does not expose the
 Endstone per-command permission nodes.
 
+## LeviLamina module lifecycle
+
+The LL loader manages the single native module through the normal server-thread
+path:
+
+```text
+/ll unload spark
+/ll load spark
+/ll reload spark
+/ll reactivate spark
+```
+
+`unload` and `load` can physically remove and restore `levilamina_spark.dll`
+after a quiescent session. Stop and save a profile first when its data must be
+preserved; unloading does not export profiles automatically. `reload` and
+`reactivate` remain experimental while their combinations are being validated.
+These operations do not support arbitrary-thread reentry. If unload is refused,
+Spark cannot force it; use diagnostics or a normal server restart.
+
 ## Command names and aliases
 
 | Primary command | Aliases | Purpose |
 | --- | --- | --- |
 | `profiler` | `sampler` | Start, stop, inspect, cancel, or open an execution or allocation profile |
 | `tps` | `cpu` | Show rolling TPS, MSPT percentiles, and CPU usage |
-| `ping` | — | Show player ping RTT statistics (Endstone; unavailable on LeviLamina) |
+| `ping` | — | Show player ping RTT statistics |
 | `health` | `healthreport`, `ht` | Show or upload a health report, or open the live dashboard |
 | `activity` | `activitylog`, `log` | Show recent profile and health activity |
 | `tickmonitor` | `tickmonitoring` | Report unusually long ticks |
@@ -97,8 +116,8 @@ is actually available.
 
 `/spark ping` reports current player RTT minimum, median, p95, and maximum, plus
 the rolling 15-minute average of the median. `--player` filters by
-case-insensitive player name. This command is unavailable on LeviLamina until a
-ping provider is implemented.
+case-insensitive player name. LeviLamina supplies aggregate player ping through
+its host adapter.
 
 `/spark health` opens the live dashboard. `health show` prints the local report;
 `--memory` adds process virtual memory, thread count, and swap/page-file data;

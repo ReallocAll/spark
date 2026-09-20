@@ -8,8 +8,9 @@ viewer. The project has host adapters for [Endstone](https://endstone.dev/) and
 
 The Endstone plugin is the supported distribution path on Windows and Linux.
 The LeviLamina module is an experimental Windows x64 source-build target for
-BDS 1.26.20.x and LeviLamina 26.20.7. It is not a published stable release and
-does not yet provide full feature parity. See [host support](#host-support) and
+BDS 1.26.20.x and LeviLamina 26.20.7. It ships as one native
+`levilamina_spark.dll` with its matching PDB and manifest; full feature parity
+is not yet available. See [host support](#host-support) and
 [building](docs/building.md) before choosing it.
 
 Profiles use spark's existing protobuf format, upload protocol, and web viewer;
@@ -20,13 +21,19 @@ credit for those parts belongs to [lucko/spark](https://github.com/lucko/spark).
 | Host | Status | Output | Notes |
 | --- | --- | --- | --- |
 | Endstone | Supported plugin path | `endstone_spark.dll` or `endstone_spark.so` | Windows and Linux; native execution and allocation profiling on x64 hosts |
-| LeviLamina | Experimental source-build target | `spark.dll` plus `manifest.json` | Windows x64, BDS 1.26.20.x / LeviLamina 26.20.7 inputs; no published binary or full parity |
+| LeviLamina | Experimental source-build target | `levilamina_spark.dll` + matching `levilamina_spark.pdb` | Windows x64, BDS 1.26.20.x / LeviLamina 26.20.7 inputs; no published binary; world and server-rule metadata remain unavailable |
 
-The LeviLamina adapter currently supplies server version, player count, uptime,
-TPS/MSPT history, CPU and basic health data. It does not supply ping statistics,
-plugin lists, world metadata, or world gauges. The LeviLamina `/spark` command is
-permission-gated at the `GameDirectors` level. Its build and limitations are
-described in [building](docs/building.md#levilamina-experimental-target).
+The LeviLamina build produces one native module, `levilamina_spark.dll`, with its
+matching `levilamina_spark.pdb` and manifest. It supplies server and native-mod
+metadata, aggregate player ping, uptime, TPS/MSPT history, CPU and health data;
+world metadata, world gauges, gamerules,
+and packs remain unavailable. Uptime follows the BDS process lifetime and does
+not reset when the module is unloaded and loaded again. The LeviLamina `/spark`
+command is permission-gated at the `GameDirectors` level. Use the LL lifecycle
+commands described in [the command reference](docs/commands.md#levilamina-module-lifecycle).
+An unload refusal cannot be forced by Spark; use diagnostics or a normal server
+restart when needed. Its build and limitations are described in
+[building](docs/building.md#levilamina-experimental-target).
 
 ## Install the Endstone plugin
 

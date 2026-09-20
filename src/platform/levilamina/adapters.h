@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -13,6 +14,7 @@
 
 #include "application/command/command_sender.h"
 #include "application/platform_capabilities.h"
+#include "core/stats/ping_statistics.h"
 
 class CommandOrigin;
 class CommandOutput;
@@ -26,7 +28,7 @@ namespace spark::levilamina {
 
 class CallbackState;
 
-// Shared monotonic start state captured by the ServerStartedEvent listener.
+// Shared monotonic start state anchored to the BDS process creation time.
 class StartupClock final {
 public:
     using Clock = std::chrono::steady_clock;
@@ -37,7 +39,7 @@ public:
     StartupClock(StartupClock const&) = delete;
     StartupClock& operator=(StartupClock const&) = delete;
 
-    // Records the first start time and ignores later calls.
+    bool initializeProcessStart();
     bool recordStart();
     [[nodiscard]] std::optional<TimePoint> startTime() const;
 
@@ -57,11 +59,18 @@ private:
     std::shared_ptr<CallbackState> callback_state_;
 };
 
+// Polls player ping from LeviLamina's main-thread Bedrock API.
+class LeviLaminaPlayerPingProvider final : public PlayerPingProvider {
+public:
+    std::map<std::string, int> poll() override;
+};
+
 // Provides the server facts available through LeviLamina's typed Bedrock API.
 class LeviLaminaMetadataProvider final : public ProfileMetadataProvider {
 public:
     explicit LeviLaminaMetadataProvider(std::shared_ptr<const StartupClock> startup_clock);
 
+    PlatformIdentity platformIdentity() const override;
     void gatherServerMetadata(ServerMetadata& metadata, std::int64_t now_ms) override;
     void gatherWorldMetadata(WorldInfo& world, std::string_view minecraft_version) override;
     std::vector<NativePluginSource> nativePluginSources() override;
@@ -75,6 +84,7 @@ private:
     [[nodiscard]] std::int64_t uptimeMilliseconds() const;
 
     std::shared_ptr<const StartupClock> startup_clock_;
+    std::unique_ptr<LeviLaminaPlayerPingProvider> ping_provider_;
 };
 
 // Posts result delivery to the server thread and resolves the player afresh.

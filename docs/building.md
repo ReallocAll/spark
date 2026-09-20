@@ -94,10 +94,12 @@ required 3.12-or-newer runtime for Python attribution.
 
 `SPARK_BUILD_LEVILAMINA` is disabled by default. It is an experimental,
 source-build-only Windows x64 target for BDS 1.26.20.x with LeviLamina 26.20.7
-inputs. It is not a published stable package and the host adapter does not yet
-have full feature parity: ping, plugin-list metadata, world metadata, and world
-gauges are unavailable. The raw `/spark` command requires LeviLamina's
-`GameDirectors` permission level.
+inputs. It builds one native module (`levilamina_spark.dll`, with matching
+`levilamina_spark.pdb` for Windows symbols). The module supplies server and
+native-mod metadata, aggregate player ping, uptime, TPS/MSPT, and health data;
+world metadata, world gauges, gamerules, and packs remain unavailable. Uptime
+follows the BDS process lifetime and is not reset by module unload/load. The raw
+`/spark` command requires LeviLamina's `GameDirectors` permission level.
 
 CMake does not download or prepare the LeviLamina SDK, runtime, BDS data, or
 prelink tool. Supply every external input explicitly:
@@ -143,10 +145,14 @@ ctest --test-dir build-ll -C RelWithDebInfo --output-on-failure
 
 The target synthesizes a named import library from the runtime DLL/PDB and
 allowlist, runs prelink against the Bedrock runtime data, and writes the native
-module to `build-ll/bin/spark/spark.dll` with `manifest.json` beside it. The
-generated import library, receipt, prelink output, map, and PDB remain in the
-build tree. Install `spark.dll` and its manifest according to the LeviLamina
-loader's native-mod layout for the matching runtime.
+module to `build-ll/bin/spark/levilamina_spark.dll` with matching
+`levilamina_spark.pdb` and `manifest.json` beside it. The manifest entry names
+the DLL basename. LL's quiescent `unload` and `load` commands can remove and
+restore this module; `reload` and `reactivate` remain experimental. Stop and
+save a profile first when its data must be preserved because unload does not
+export profiles automatically. A refused unload cannot be forced; use
+diagnostics or a normal server restart. The generated import library, receipt,
+prelink output, map, and PDB remain in the build tree.
 
 The LeviLamina CTest entries include the import-generator self-test, callback
 protocol test, and cleanup-deadline test. They validate build-time and lifecycle
