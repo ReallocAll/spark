@@ -127,8 +127,10 @@ void SparkApplication::onTick(double mspt)
         statistics_.recordPlayerCount(metadata_provider_.playerCount());
         if (metadata_provider_.worldGaugesAvailable()) {
             const WorldGaugeValues gauges = metadata_provider_.worldGauges();
-            statistics_.recordWorldGauges(gauges.entities, gauges.tile_entities, gauges.chunks,
-                                          gauges.tile_entities_present);
+            if (metadata_provider_.worldGaugesAvailable()) {
+                statistics_.recordWorldGauges(gauges.entities, gauges.tile_entities, gauges.chunks,
+                                              gauges.tile_entities_present);
+            }
         }
     }
     const MonitoringDue monitoring_due = monitoring_schedule_.poll(monotonicUnixMillis());
