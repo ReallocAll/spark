@@ -27,6 +27,7 @@ class Logger;
 namespace spark::levilamina {
 
 class CallbackState;
+class LeviLaminaWorldGaugeProvider;
 
 // Shared monotonic start state anchored to the BDS process creation time.
 class StartupClock final {
@@ -36,8 +37,8 @@ public:
 
     StartupClock() = default;
 
-    StartupClock(StartupClock const&) = delete;
-    StartupClock& operator=(StartupClock const&) = delete;
+    StartupClock(StartupClock const &) = delete;
+    StartupClock &operator=(StartupClock const &) = delete;
 
     bool initializeProcessStart();
     bool recordStart();
@@ -68,23 +69,33 @@ public:
 // Provides the server facts available through LeviLamina's typed Bedrock API.
 class LeviLaminaMetadataProvider final : public ProfileMetadataProvider {
 public:
-    explicit LeviLaminaMetadataProvider(std::shared_ptr<const StartupClock> startup_clock);
+    LeviLaminaMetadataProvider(std::shared_ptr<const StartupClock> startup_clock,
+                               std::shared_ptr<CallbackState> callback_state);
+
+    LeviLaminaMetadataProvider(LeviLaminaMetadataProvider const &) = delete;
+    LeviLaminaMetadataProvider &operator=(LeviLaminaMetadataProvider const &) = delete;
+    ~LeviLaminaMetadataProvider() override;
 
     PlatformIdentity platformIdentity() const override;
-    void gatherServerMetadata(ServerMetadata& metadata, std::int64_t now_ms) override;
-    void gatherWorldMetadata(WorldInfo& world, std::string_view minecraft_version) override;
+    void gatherServerMetadata(ServerMetadata &metadata, std::int64_t now_ms) override;
+    void gatherWorldMetadata(WorldInfo &world, std::string_view minecraft_version) override;
     std::vector<NativePluginSource> nativePluginSources() override;
     std::int64_t serverUptimeSeconds() override;
     std::int64_t playerCount() override;
     bool worldGaugesAvailable() override;
     WorldGaugeValues worldGauges() override;
-    PlayerPingProvider* playerPingProvider() override;
+    PlayerPingProvider *playerPingProvider() override;
+
+    [[nodiscard]] bool closeWorldGauges(std::chrono::steady_clock::time_point deadline) noexcept;
 
 private:
     [[nodiscard]] std::int64_t uptimeMilliseconds() const;
+    [[nodiscard]] LeviLaminaWorldGaugeProvider *ensureWorldGauges();
 
     std::shared_ptr<const StartupClock> startup_clock_;
+    std::shared_ptr<CallbackState> callback_state_;
     std::unique_ptr<LeviLaminaPlayerPingProvider> ping_provider_;
+    std::unique_ptr<LeviLaminaWorldGaugeProvider> world_gauges_;
 };
 
 // Posts result delivery to the server thread and resolves the player afresh.
@@ -92,10 +103,10 @@ class LeviLaminaNotifier final : public ResultNotifier, public std::enable_share
 public:
     LeviLaminaNotifier(std::shared_ptr<CallbackState> callback_state, std::weak_ptr<ll::io::Logger> logger);
 
-    void notify(const std::string& sender_name, const std::string& text) override;
+    void notify(const std::string &sender_name, const std::string &text) override;
 
 private:
-    void notifyOnMainThread(const std::string& sender_name, const std::string& text);
+    void notifyOnMainThread(const std::string &sender_name, const std::string &text);
 
     std::shared_ptr<CallbackState> callback_state_;
     std::weak_ptr<ll::io::Logger> logger_;
@@ -104,21 +115,21 @@ private:
 // Synchronous, borrowed adapter for a single command callback invocation.
 class BorrowedCommandSender final : public CommandSender {
 public:
-    BorrowedCommandSender(::CommandOrigin const& origin, ::CommandOutput& output);
+    BorrowedCommandSender(::CommandOrigin const &origin, ::CommandOutput &output);
 
     std::string getName() const override;
     bool isPlayer() const override;
     std::string getUniqueId() const override;
-    bool hasPermission(const std::string& name) const override;
+    bool hasPermission(const std::string &name) const override;
 
 private:
-    void sendImpl(const std::string& message) override;
-    void errorImpl(const std::string& message) override;
+    void sendImpl(const std::string &message) override;
+    void errorImpl(const std::string &message) override;
 
-    [[nodiscard]] ::Player const* resolvePlayer() const;
+    [[nodiscard]] ::Player const *resolvePlayer() const;
 
-    ::CommandOrigin const& origin_;
-    ::CommandOutput& output_;
+    ::CommandOrigin const &origin_;
+    ::CommandOutput &output_;
 };
 
 using LevilaminaDispatcher = LeviLaminaDispatcher;

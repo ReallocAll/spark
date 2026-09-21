@@ -97,13 +97,17 @@ add_library(spark_levilamina_objects OBJECT
         src/platform/levilamina/spark_mod.cpp
         src/platform/levilamina/adapters.cpp
         src/platform/levilamina/bds/player_ping.cpp
+        src/platform/levilamina/bds/pubsub.cpp
         src/platform/levilamina/bds/tick_duration.cpp
+        src/platform/levilamina/bds/world_access.cpp
         src/platform/levilamina/memory_operators.cpp
         src/platform/levilamina/callback_state.cpp
         src/platform/levilamina/cleanup_deadline_guard.cpp
         src/platform/levilamina/command_lifecycle.cpp
         src/platform/levilamina/host_parser_provenance.cpp
-        src/platform/levilamina/host_command_parameter.cpp)
+        src/platform/levilamina/host_command_parameter.cpp
+        src/platform/levilamina/world_callback_admission.cpp
+        src/platform/levilamina/world_gauge_provider.cpp)
 target_include_directories(spark_levilamina_objects PRIVATE
         "${_spark_ll_server_include}"
         "${_spark_ll_common_include}"
@@ -258,6 +262,87 @@ if (CMAKE_CXX_COMPILER_ID MATCHES "Clang|MSVC")
 endif ()
 add_test(NAME spark_levilamina_callback_protocol_test COMMAND spark_levilamina_callback_protocol_test)
 set_tests_properties(spark_levilamina_callback_protocol_test PROPERTIES TIMEOUT 30)
+
+add_executable(spark_levilamina_world_gauge_state_test
+        tests/levilamina/world_gauge_state_test.cpp)
+target_include_directories(spark_levilamina_world_gauge_state_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+set_target_properties(spark_levilamina_world_gauge_state_test PROPERTIES
+        CXX_STANDARD 20
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+        MSVC_RUNTIME_LIBRARY "MultiThreadedDLL"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+        ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+        PDB_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+if (CMAKE_CXX_COMPILER_ID MATCHES "Clang|MSVC")
+    target_compile_options(spark_levilamina_world_gauge_state_test PRIVATE /utf-8 /permissive- /EHsc /Zc:__cplusplus)
+endif ()
+add_test(NAME spark_levilamina_world_gauge_state_test COMMAND spark_levilamina_world_gauge_state_test)
+set_tests_properties(spark_levilamina_world_gauge_state_test PROPERTIES TIMEOUT 30)
+
+add_executable(spark_levilamina_world_callback_admission_test
+        tests/levilamina/world_callback_admission_test.cpp
+        src/platform/levilamina/world_callback_admission.cpp
+        src/platform/levilamina/callback_state.cpp)
+target_include_directories(spark_levilamina_world_callback_admission_test PRIVATE
+        "${_spark_ll_server_include}"
+        "${_spark_ll_common_include}"
+        ${_spark_ll_dependency_includes}
+        "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_compile_definitions(spark_levilamina_world_callback_admission_test PRIVATE
+        LL_PLAT_S
+        ENTT_PACKED_PAGE=128
+        ENTT_SPARSE_PAGE=2048
+        ENTT_NO_MIXIN
+        FMT_HEADER_ONLY
+        NOMINMAX
+        WIN32_LEAN_AND_MEAN
+        _CRT_SECURE_NO_WARNINGS
+        _ITERATOR_DEBUG_LEVEL=0)
+set_target_properties(spark_levilamina_world_callback_admission_test PROPERTIES
+        CXX_STANDARD 20
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+        MSVC_RUNTIME_LIBRARY "MultiThreadedDLL"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+        ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+        PDB_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+if (CMAKE_CXX_COMPILER_ID MATCHES "Clang|MSVC")
+    target_compile_options(spark_levilamina_world_callback_admission_test PRIVATE /utf-8 /permissive- /EHsc /Zc:__cplusplus)
+endif ()
+add_test(NAME spark_levilamina_world_callback_admission_test COMMAND spark_levilamina_world_callback_admission_test)
+set_tests_properties(spark_levilamina_world_callback_admission_test PROPERTIES TIMEOUT 30)
+
+add_executable(spark_levilamina_world_connector_abi_test
+        tests/levilamina/world_connector_abi_test.cpp)
+target_include_directories(spark_levilamina_world_connector_abi_test PRIVATE
+        "${_spark_ll_server_include}"
+        "${_spark_ll_common_include}"
+        ${_spark_ll_dependency_includes}
+        "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_compile_definitions(spark_levilamina_world_connector_abi_test PRIVATE
+        LL_PLAT_S
+        ENTT_PACKED_PAGE=128
+        ENTT_SPARSE_PAGE=2048
+        ENTT_NO_MIXIN
+        FMT_HEADER_ONLY
+        NOMINMAX
+        WIN32_LEAN_AND_MEAN
+        _CRT_SECURE_NO_WARNINGS
+        _ITERATOR_DEBUG_LEVEL=0)
+set_target_properties(spark_levilamina_world_connector_abi_test PROPERTIES
+        CXX_STANDARD 20
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+        MSVC_RUNTIME_LIBRARY "MultiThreadedDLL"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+        ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+        PDB_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+if (CMAKE_CXX_COMPILER_ID MATCHES "Clang|MSVC")
+    target_compile_options(spark_levilamina_world_connector_abi_test PRIVATE /utf-8 /permissive- /EHsc /Zc:__cplusplus)
+endif ()
+add_test(NAME spark_levilamina_world_connector_abi_test COMMAND spark_levilamina_world_connector_abi_test)
+set_tests_properties(spark_levilamina_world_connector_abi_test PROPERTIES TIMEOUT 30)
 
 add_executable(spark_levilamina_command_lifecycle_test
         tests/levilamina/command_lifecycle_test.cpp

@@ -8,7 +8,7 @@ viewer. The project has host adapters for [Endstone](https://endstone.dev/) and
 
 The Endstone plugin is available on Windows and Linux. The LeviLamina module is
 the Windows x64 source-build target for BDS 1.26.20.x and LeviLamina 26.20.7.
-See [hostsupport](#host-support) and [building](docs/building.md) for setup details.
+See [host support](#host-support) and [building](docs/building.md) for setup details.
 
 Profiles use spark's existing protobuf format, upload protocol, and web viewer;
 credit for those parts belongs to [lucko/spark](https://github.com/lucko/spark).
@@ -39,7 +39,7 @@ Its build and limitations are described in [building](docs/building.md#levilamin
 
 1. Install Endstone using its [official installation guide](https://endstone.dev/latest/getting-started/installation/).
 2. Download the matching `endstone_spark.dll` (Windows) or `endstone_spark.so`
-   (Linux) from the [latest Release](https://github.com/ReallocAll/spark/releases/latest).
+   (Linux) from the [latest Release](https://github.com/EndstoneMC/spark/releases/latest).
 3. Copy the library into the server's `plugins/` directory.
 4. Start or restart BDS. Endstone should load `spark` and create its data folder.
 
@@ -57,7 +57,7 @@ see [configuration](docs/configuration.md) for the keys and paths.
 
 For a matching BDS 1.26.20.x and LeviLamina 26.20.7 installation, download the
 `levilamina_spark.dll` and `manifest.json` from the [latest
-Release](https://github.com/ReallocAll/spark/releases/latest). The matching
+Release](https://github.com/EndstoneMC/spark/releases/latest). The matching
 PDB is optional and is useful for Windows symbol debugging. Copy the DLL and
 manifest into the same LeviLamina native-mod directory; if you downloaded the
 PDB, keep it beside the DLL. Start or restart BDS so LL can load the module.
