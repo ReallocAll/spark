@@ -14,12 +14,8 @@ using spark::levilamina::bds::pubsub::ConnectorView;
 class MockConnector final : public ConnectorView<ChunkLoadedSignature> {
 public:
 private:
-    ::Bedrock::PubSub::Subscription _connectInternal(
-        FunctionType &&,
-        ::Bedrock::PubSub::ConnectPosition,
-        ContextType &&,
-        std::optional<int>
-    ) override
+    ::Bedrock::PubSub::Subscription _connectInternal(FunctionType &&, ::Bedrock::PubSub::ConnectPosition,
+                                                     ContextType &&, std::optional<int>) override
     {
         throw std::runtime_error{"the ABI mock must not invoke the imported subscription destructor"};
     }

@@ -6,21 +6,17 @@
 namespace spark::levilamina {
 
 WorldCallbackControl::BodyLease::BodyLease(std::shared_ptr<WorldCallbackControl> owner,
-                                            WorldCallbackAdmission::Lease admission,
-                                            LeviLaminaWorldGaugeProvider *provider,
-                                            std::shared_ptr<CallbackState> callback_state) noexcept
-    : owner_(std::move(owner)),
-      admission_(std::move(admission)),
-      provider_(provider),
+                                           WorldCallbackAdmission::Lease admission,
+                                           LeviLaminaWorldGaugeProvider *provider,
+                                           std::shared_ptr<CallbackState> callback_state) noexcept
+    : owner_(std::move(owner)), admission_(std::move(admission)), provider_(provider),
       callback_state_(std::move(callback_state))
 {
 }
 
 WorldCallbackControl::BodyLease::BodyLease(BodyLease &&other) noexcept
-    : owner_(std::exchange(other.owner_, nullptr)),
-      admission_(std::move(other.admission_)),
-      provider_(std::exchange(other.provider_, nullptr)),
-      callback_state_(std::move(other.callback_state_))
+    : owner_(std::exchange(other.owner_, nullptr)), admission_(std::move(other.admission_)),
+      provider_(std::exchange(other.provider_, nullptr)), callback_state_(std::move(other.callback_state_))
 {
 }
 
@@ -36,7 +32,10 @@ WorldCallbackControl::BodyLease &WorldCallbackControl::BodyLease::operator=(Body
     return *this;
 }
 
-WorldCallbackControl::BodyLease::~BodyLease() noexcept { release(); }
+WorldCallbackControl::BodyLease::~BodyLease() noexcept
+{
+    release();
+}
 
 void WorldCallbackControl::BodyLease::release() noexcept
 {

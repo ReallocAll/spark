@@ -31,10 +31,10 @@ class WorldCallbackControl;
 class ImportedSubscriptionSlot final {
 public:
     ImportedSubscriptionSlot() = default;
-    ImportedSubscriptionSlot(ImportedSubscriptionSlot const&) = delete;
-    ImportedSubscriptionSlot& operator=(ImportedSubscriptionSlot const&) = delete;
+    ImportedSubscriptionSlot(ImportedSubscriptionSlot const &) = delete;
+    ImportedSubscriptionSlot &operator=(ImportedSubscriptionSlot const &) = delete;
 
-    void assign(::Bedrock::PubSub::Subscription&& subscription)
+    void assign(::Bedrock::PubSub::Subscription &&subscription)
     {
         if (connected_) {
             body_.disconnect();
@@ -133,10 +133,8 @@ public:
 
     private:
         friend class WorldCallbackControl;
-        BodyLease(std::shared_ptr<WorldCallbackControl> owner,
-                  WorldCallbackAdmission::Lease admission,
-                  LeviLaminaWorldGaugeProvider *provider,
-                  std::shared_ptr<CallbackState> callback_state) noexcept;
+        BodyLease(std::shared_ptr<WorldCallbackControl> owner, WorldCallbackAdmission::Lease admission,
+                  LeviLaminaWorldGaugeProvider *provider, std::shared_ptr<CallbackState> callback_state) noexcept;
 
         void release() noexcept;
 
@@ -298,8 +296,7 @@ public:
         }
         auto function = function_;
         static_cast<void>(callback_state->invokeInline(
-            [provider, function, &args...] { function(*provider, std::forward<Args>(args)...); }
-        ));
+            [provider, function, &args...] { function(*provider, std::forward<Args>(args)...); }));
     }
 
 private:

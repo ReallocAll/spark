@@ -145,7 +145,7 @@ void LeviLaminaDispatcher::runOnMainThread(std::function<void()> task)
 }
 
 LeviLaminaMetadataProvider::LeviLaminaMetadataProvider(std::shared_ptr<const StartupClock> startup_clock,
-                                                     std::shared_ptr<CallbackState> callback_state)
+                                                       std::shared_ptr<CallbackState> callback_state)
     : startup_clock_(std::move(startup_clock)), callback_state_(std::move(callback_state))
 {
     if (!startup_clock_ || !startup_clock_->startTime().has_value()) {
@@ -163,7 +163,7 @@ PlatformIdentity LeviLaminaMetadataProvider::platformIdentity() const
     return {.platform_name = "LeviLamina", .platform_brand = "LeviLamina"};
 }
 
-void LeviLaminaMetadataProvider::gatherServerMetadata(ServerMetadata& metadata, std::int64_t /*now_ms*/)
+void LeviLaminaMetadataProvider::gatherServerMetadata(ServerMetadata &metadata, std::int64_t /*now_ms*/)
 {
     metadata.endstone_version = ll::getLoaderVersion().to_string();
     metadata.minecraft_version = ll::getGameVersion().to_string();
@@ -172,13 +172,13 @@ void LeviLaminaMetadataProvider::gatherServerMetadata(ServerMetadata& metadata, 
     metadata.uptime_ms = uptimeMilliseconds();
     metadata.plugins.clear();
     if (const auto manager = nativeModManager()) {
-        for (ll::mod::Mod& mod : manager->mods()) {
+        for (ll::mod::Mod &mod : manager->mods()) {
             const auto manifest = mod.getManifest();
-            metadata.plugins.push_back({.name = manifest.name,
-                                        .version = manifest.version.has_value() ? manifest.version->to_string()
-                                                                                 : std::string{},
-                                        .author = manifest.author.value_or(std::string{}),
-                                        .description = manifest.description.value_or(std::string{})});
+            metadata.plugins.push_back(
+                {.name = manifest.name,
+                 .version = manifest.version.has_value() ? manifest.version->to_string() : std::string{},
+                 .author = manifest.author.value_or(std::string{}),
+                 .description = manifest.description.value_or(std::string{})});
         }
     }
     metadata.server_configurations.clear();
@@ -186,7 +186,7 @@ void LeviLaminaMetadataProvider::gatherServerMetadata(ServerMetadata& metadata, 
     metadata.platform_brand = "LeviLamina";
 }
 
-void LeviLaminaMetadataProvider::gatherWorldMetadata(WorldInfo& world, std::string_view level_name_hint)
+void LeviLaminaMetadataProvider::gatherWorldMetadata(WorldInfo &world, std::string_view level_name_hint)
 {
     if (auto *provider = ensureWorldGauges(); provider != nullptr) {
         provider->gatherWorldMetadata(world, level_name_hint);
@@ -203,8 +203,8 @@ std::vector<NativePluginSource> LeviLaminaMetadataProvider::nativePluginSources(
     }
 
     std::vector<NativePluginSource> sources;
-    for (ll::mod::Mod& mod : manager->mods()) {
-        auto& native_mod = static_cast<ll::mod::NativeMod&>(mod);
+    for (ll::mod::Mod &mod : manager->mods()) {
+        auto &native_mod = static_cast<ll::mod::NativeMod &>(mod);
         const auto handle = native_mod.getHandle();
         const auto module_base = validatedModuleBase(handle);
         if (!module_base.has_value()) {
@@ -212,9 +212,7 @@ std::vector<NativePluginSource> LeviLaminaMetadataProvider::nativePluginSources(
         }
 
         const auto manifest = native_mod.getManifest();
-        sources.push_back({.module_base = *module_base,
-                           .module_path = modulePath(handle),
-                           .source_id = manifest.name});
+        sources.push_back({.module_base = *module_base, .module_path = modulePath(handle), .source_id = manifest.name});
     }
     return sources;
 }
@@ -258,7 +256,7 @@ bool LeviLaminaMetadataProvider::closeWorldGauges(std::chrono::steady_clock::tim
     return true;
 }
 
-PlayerPingProvider* LeviLaminaMetadataProvider::playerPingProvider()
+PlayerPingProvider *LeviLaminaMetadataProvider::playerPingProvider()
 {
     if (!ping_provider_) {
         ping_provider_ = std::make_unique<LeviLaminaPlayerPingProvider>();
@@ -266,7 +264,7 @@ PlayerPingProvider* LeviLaminaMetadataProvider::playerPingProvider()
     return ping_provider_.get();
 }
 
-LeviLaminaWorldGaugeProvider* LeviLaminaMetadataProvider::ensureWorldGauges()
+LeviLaminaWorldGaugeProvider *LeviLaminaMetadataProvider::ensureWorldGauges()
 {
     const auto level = ll::service::getLevel();
     if (!level) {
@@ -289,7 +287,7 @@ std::map<std::string, int> LeviLaminaPlayerPingProvider::poll()
         return result;
     }
 
-    level->forEachPlayer([&result](::Player& player) {
+    level->forEachPlayer([&result](::Player &player) {
         const auto name = player.getRealName();
         if (name.empty()) {
             return true;
@@ -324,7 +322,7 @@ LeviLaminaNotifier::LeviLaminaNotifier(std::shared_ptr<CallbackState> callback_s
     }
 }
 
-void LeviLaminaNotifier::notify(const std::string& sender_name, const std::string& text)
+void LeviLaminaNotifier::notify(const std::string &sender_name, const std::string &text)
 {
     const auto weak_self = weak_from_this();
     static_cast<void>(callback_state_->post([weak_self, sender_name, text] {
@@ -334,7 +332,7 @@ void LeviLaminaNotifier::notify(const std::string& sender_name, const std::strin
     }));
 }
 
-void LeviLaminaNotifier::notifyOnMainThread(const std::string& sender_name, const std::string& text)
+void LeviLaminaNotifier::notifyOnMainThread(const std::string &sender_name, const std::string &text)
 {
     if (const auto logger = logger_.lock()) {
         logger->info("{}", text);
@@ -344,7 +342,7 @@ void LeviLaminaNotifier::notifyOnMainThread(const std::string& sender_name, cons
     if (!level) {
         return;
     }
-    level->forEachPlayer([&](::Player& player) {
+    level->forEachPlayer([&](::Player &player) {
         if (player.getRealName() == sender_name) {
             player.sendMessage(text);
             return false;
@@ -353,14 +351,14 @@ void LeviLaminaNotifier::notifyOnMainThread(const std::string& sender_name, cons
     });
 }
 
-BorrowedCommandSender::BorrowedCommandSender(::CommandOrigin const& origin, ::CommandOutput& output)
+BorrowedCommandSender::BorrowedCommandSender(::CommandOrigin const &origin, ::CommandOutput &output)
     : origin_(origin), output_(output)
 {
 }
 
 std::string BorrowedCommandSender::getName() const
 {
-    if (const auto* player = resolvePlayer()) {
+    if (const auto *player = resolvePlayer()) {
         return player->getRealName();
     }
     return origin_.getName();
@@ -373,39 +371,38 @@ bool BorrowedCommandSender::isPlayer() const
 
 std::string BorrowedCommandSender::getUniqueId() const
 {
-    if (const auto* player = resolvePlayer()) {
+    if (const auto *player = resolvePlayer()) {
         return player->getUuid().asString();
     }
     return {};
 }
 
-bool BorrowedCommandSender::hasPermission(const std::string& /*name*/) const
+bool BorrowedCommandSender::hasPermission(const std::string & /*name*/) const
 {
-    return static_cast<int>(origin_.getPermissionsLevel())
-        >= static_cast<int>(::CommandPermissionLevel::GameDirectors);
+    return static_cast<int>(origin_.getPermissionsLevel()) >= static_cast<int>(::CommandPermissionLevel::GameDirectors);
 }
 
-void BorrowedCommandSender::sendImpl(const std::string& message)
+void BorrowedCommandSender::sendImpl(const std::string &message)
 {
     output_.success(message);
 }
 
-void BorrowedCommandSender::errorImpl(const std::string& message)
+void BorrowedCommandSender::errorImpl(const std::string &message)
 {
     output_.error(message);
 }
 
-::Player const* BorrowedCommandSender::resolvePlayer() const
+::Player const *BorrowedCommandSender::resolvePlayer() const
 {
-    auto* level = origin_.getLevel();
-    auto* entity = origin_.getEntity();
+    auto *level = origin_.getLevel();
+    auto *entity = origin_.getEntity();
     if (level == nullptr || entity == nullptr) {
         return nullptr;
     }
 
-    ::Player const* result = nullptr;
-    level->forEachPlayer([&](::Player& player) {
-        if (static_cast<::Actor*>(&player) == entity) {
+    ::Player const *result = nullptr;
+    level->forEachPlayer([&](::Player &player) {
+        if (static_cast<::Actor *>(&player) == entity) {
             result = &player;
             return false;
         }

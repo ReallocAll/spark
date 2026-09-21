@@ -43,9 +43,7 @@ public:
 
     template <typename Fn>
     [[nodiscard]] ::Bedrock::PubSub::Subscription connect(
-        Fn &&function,
-        ::Bedrock::PubSub::ConnectPosition position = ::Bedrock::PubSub::ConnectPosition::AtBack
-    )
+        Fn &&function, ::Bedrock::PubSub::ConnectPosition position = ::Bedrock::PubSub::ConnectPosition::AtBack)
     {
         FunctionType callback(std::forward<Fn>(function));
         return _connectInternal(std::move(callback), position, ContextType{}, std::nullopt);
@@ -56,28 +54,22 @@ protected:
     virtual ~ConnectorView() = default;
 
 private:
-    virtual ::Bedrock::PubSub::Subscription _connectInternal(
-        FunctionType &&function,
-        ::Bedrock::PubSub::ConnectPosition position,
-        ContextType &&context,
-        std::optional<int> group
-    ) = 0;
+    virtual ::Bedrock::PubSub::Subscription _connectInternal(FunctionType &&function,
+                                                             ::Bedrock::PubSub::ConnectPosition position,
+                                                             ContextType &&context, std::optional<int> group) = 0;
 };
 
 template <typename Signature>
 [[nodiscard]] inline ConnectorView<Signature> &borrowConnectorView(
-    ::Bedrock::PubSub::Connector<Signature> &connector
-) noexcept
+    ::Bedrock::PubSub::Connector<Signature> &connector) noexcept
 {
     return reinterpret_cast<ConnectorView<Signature> &>(connector);
 }
 
 template <typename Signature, typename Fn>
 [[nodiscard]] inline ::Bedrock::PubSub::Subscription connect(
-    ::Bedrock::PubSub::Connector<Signature> &connector,
-    Fn &&function,
-    ::Bedrock::PubSub::ConnectPosition position = ::Bedrock::PubSub::ConnectPosition::AtBack
-)
+    ::Bedrock::PubSub::Connector<Signature> &connector, Fn &&function,
+    ::Bedrock::PubSub::ConnectPosition position = ::Bedrock::PubSub::ConnectPosition::AtBack)
 {
     return borrowConnectorView(connector).connect(std::forward<Fn>(function), position);
 }

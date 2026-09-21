@@ -24,9 +24,7 @@ void dimensionCallbackBody(LeviLaminaWorldGaugeProvider &provider, ::Dimension &
     provider.onDimensionCreated(dimension);
 }
 
-void chunkLoadedCallbackBody(LeviLaminaWorldGaugeProvider &provider,
-                             ::ChunkSource &source,
-                             ::LevelChunk &chunk,
+void chunkLoadedCallbackBody(LeviLaminaWorldGaugeProvider &provider, ::ChunkSource &source, ::LevelChunk &chunk,
                              int distance)
 {
     provider.onChunkLoaded(source, chunk, distance);
@@ -71,21 +69,16 @@ bool LeviLaminaWorldGaugeProvider::initialize(::Level &level)
         access_ = std::make_unique<bds::WorldAccess>(level);
         auto &dimension_connector = level.getDimensionManager().getOnNewDimensionCreatedConnector();
         dimension_subscription_.assign(bds::pubsub::connect<bds::pubsub::DimensionCreatedSignature>(
-            dimension_connector,
-            WorldCallbackFunction<::Dimension &>{control_, &dimensionCallbackBody}
-        ));
+            dimension_connector, WorldCallbackFunction<::Dimension &>{control_, &dimensionCallbackBody}));
 
         auto event_manager = level.getLevelChunkEventManager();
         auto &loaded_connector = event_manager->getOnChunkLoadedConnector();
         chunk_loaded_subscription_.assign(bds::pubsub::connect<bds::pubsub::ChunkLoadedSignature>(
             loaded_connector,
-            WorldCallbackFunction<::ChunkSource &, ::LevelChunk &, int>{control_, &chunkLoadedCallbackBody}
-        ));
+            WorldCallbackFunction<::ChunkSource &, ::LevelChunk &, int>{control_, &chunkLoadedCallbackBody}));
         auto &discarded_connector = event_manager->getOnChunkDiscardedConnector();
         chunk_discarded_subscription_.assign(bds::pubsub::connect<bds::pubsub::ChunkDiscardedSignature>(
-            discarded_connector,
-            WorldCallbackFunction<::LevelChunk &>{control_, &chunkDiscardedCallbackBody}
-        ));
+            discarded_connector, WorldCallbackFunction<::LevelChunk &>{control_, &chunkDiscardedCallbackBody}));
 
         initialized_ = true;
         closed_ = false;
