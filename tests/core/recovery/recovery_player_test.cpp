@@ -29,7 +29,9 @@ struct RecoveredMetadataFields {
     std::int64_t start_time_ms = 0;
 };
 
-static RecoveredMetadataFields readRecoveredMetadata(std::string_view profile)
+namespace {
+
+RecoveredMetadataFields readRecoveredMetadata(std::string_view profile)
 {
     RecoveredMetadataFields fields;
     ProtoReader data(profile);
@@ -88,6 +90,8 @@ static RecoveredMetadataFields readRecoveredMetadata(std::string_view profile)
     assert(data.valid());
     return fields;
 }
+
+}  // namespace
 
 void testRecoveryGrouping()
 {
