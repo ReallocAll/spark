@@ -16,8 +16,8 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
-#include <delayimp.h>
 #include <windows.h>
+#include <delayimp.h>
 #endif
 
 namespace {
@@ -299,8 +299,7 @@ class OverflowReader final : public Reader {
 public:
     explicit OverflowReader(std::vector<std::uint8_t> const &image)
         : image_(image), base_((std::numeric_limits<std::uintptr_t>::max)() - 0x7fffff00ULL)
-    {
-    }
+    {}
 
     [[nodiscard]] bool query(std::uintptr_t address, std::size_t size, Region &region) const noexcept override
     {
@@ -348,10 +347,10 @@ public:
     bool allow_executable = false;
     SyntheticReader reader_storage;
 
-    [[nodiscard]] bool imageRangeOwnedByHost(std::uintptr_t address, std::size_t size, std::uintptr_t current_module,
-                                             spark::levilamina::detail::HostRawImageAccess access,
-                                             std::uintptr_t &containing_module,
-                                             std::string &basename) const noexcept override
+    [[nodiscard]] bool imageRangeOwnedByHost(
+        std::uintptr_t address, std::size_t size, std::uintptr_t current_module,
+        spark::levilamina::detail::HostRawImageAccess access, std::uintptr_t &containing_module,
+        std::string &basename) const noexcept override
     {
         containing_module = 0;
         basename.clear();
@@ -405,8 +404,8 @@ void requireRejected(ImportFixture &fixture, std::string_view expected_error, ch
 {
     spark::levilamina::detail::RawTextImportCell cell;
     std::string error;
-    const bool found = spark::levilamina::detail::findRawTextDelayImport(fixture.reader, fixture.imageBase(),
-                                                                         fixture.imageBase(), cell, error);
+    const bool found = spark::levilamina::detail::findRawTextDelayImport(
+        fixture.reader, fixture.imageBase(), fixture.imageBase(), cell, error);
     require(!found, message);
     require(error == expected_error, message);
 }
@@ -476,8 +475,7 @@ int main()
             ImportFixture candidate;
             candidate.addAdjacentImport();
             require(valid(candidate), "adjacent non-target import changed the positive fixture");
-            require(validParser(candidate, candidate.parser()),
-                    "positive parser provenance changed after adjacent import");
+            require(validParser(candidate, candidate.parser()), "positive parser provenance changed after adjacent import");
             require(!validParser(candidate, candidate.adjacent()), "adjacent import cell was accepted");
         }
         {
@@ -590,9 +588,8 @@ int main()
             candidate.setDelayDirectoryRva(0x7fffffe0U);
             candidate.setDelayDirectorySize(sizeof(ImgDelayDescr));
             OverflowReader reader{candidate.image};
-            require(
-                !spark::levilamina::detail::findRawTextDelayImport(reader, reader.base(), reader.base(), cell, error),
-                "in-image RVA address overflow was accepted");
+            require(!spark::levilamina::detail::findRawTextDelayImport(reader, reader.base(), reader.base(), cell, error),
+                    "in-image RVA address overflow was accepted");
             require(error == "parser provenance RVA address overflow", "in-image RVA returned the wrong error");
         }
 
@@ -625,9 +622,9 @@ int main()
             SyntheticValidationEnvironment environment;
             environment.rule_address = reinterpret_cast<std::uintptr_t>(&host_rule);
             spark::levilamina::HostRawParameterTemplate value{.parse_rule = &host_rule};
-            require(
-                spark::levilamina::detail::validateHostRawParameterTemplateInternal(value, 0x1000, environment, error),
-                "production validator rejected a valid null parser");
+            require(spark::levilamina::detail::validateHostRawParameterTemplateInternal(
+                        value, 0x1000, environment, error),
+                    "production validator rejected a valid null parser");
             require(value.rule_module == "levilamina.dll" && value.parser_module == "null",
                     "production validator did not preserve null parser provenance");
         }
@@ -636,9 +633,9 @@ int main()
             environment.rule_address = reinterpret_cast<std::uintptr_t>(&host_rule);
             environment.allow_executable = true;
             spark::levilamina::HostRawParameterTemplate value{.parse_override = fakeParser(), .parse_rule = &host_rule};
-            require(
-                spark::levilamina::detail::validateHostRawParameterTemplateInternal(value, 0x1000, environment, error),
-                "production validator rejected a valid parser override");
+            require(spark::levilamina::detail::validateHostRawParameterTemplateInternal(
+                        value, 0x1000, environment, error),
+                    "production validator rejected a valid parser override");
             require(value.parser_module == "bedrock_server.exe", "production validator lost parser override identity");
         }
         {
@@ -646,9 +643,9 @@ int main()
             environment.rule_address = reinterpret_cast<std::uintptr_t>(&host_rule);
             spark::levilamina::HostRawParameterTemplate value{.parse_rule = &host_rule};
             host_rule.parse.get() = fakeParser();
-            require(
-                !spark::levilamina::detail::validateHostRawParameterTemplateInternal(value, 0x1000, environment, error),
-                "production validator accepted an invalid rule parser");
+            require(!spark::levilamina::detail::validateHostRawParameterTemplateInternal(
+                        value, 0x1000, environment, error),
+                    "production validator accepted an invalid rule parser");
             require(error == "host raw rule parser is outside the LL/BDS image",
                     "invalid rule parser returned the wrong error");
             host_rule.parse.get() = nullptr;
@@ -658,11 +655,10 @@ int main()
             environment.rule_address = reinterpret_cast<std::uintptr_t>(&host_rule);
             spark::levilamina::HostRawParameterTemplate value{.parse_rule = &host_rule};
             host_rule.symbol.get() = ::CommandRegistry::Symbol{::CommandRegistry::HardNonTerminal::Int};
-            require(
-                !spark::levilamina::detail::validateHostRawParameterTemplateInternal(value, 0x1000, environment, error),
-                "production validator accepted a non-RawText rule");
-            require(error == "host raw parse rule symbol is not RawText",
-                    "invalid rule symbol returned the wrong error");
+            require(!spark::levilamina::detail::validateHostRawParameterTemplateInternal(
+                        value, 0x1000, environment, error),
+                    "production validator accepted a non-RawText rule");
+            require(error == "host raw parse rule symbol is not RawText", "invalid rule symbol returned the wrong error");
             host_rule.symbol.get() = ::CommandRegistry::Symbol{::CommandRegistry::HardNonTerminal::RawText};
         }
         {
@@ -670,9 +666,9 @@ int main()
             environment.rule_address = reinterpret_cast<std::uintptr_t>(&host_rule);
             environment.allow_rule = false;
             spark::levilamina::HostRawParameterTemplate value{.parse_rule = &host_rule};
-            require(
-                !spark::levilamina::detail::validateHostRawParameterTemplateInternal(value, 0x1000, environment, error),
-                "production validator accepted a rule outside host images");
+            require(!spark::levilamina::detail::validateHostRawParameterTemplateInternal(
+                        value, 0x1000, environment, error),
+                    "production validator accepted a rule outside host images");
             require(error == "host raw parse rule is outside the LL/BDS image",
                     "invalid rule image returned the wrong error");
         }
@@ -680,13 +676,14 @@ int main()
             SyntheticValidationEnvironment environment;
             environment.rule_address = reinterpret_cast<std::uintptr_t>(&host_rule);
             spark::levilamina::HostRawParameterTemplate value;
-            require(
-                !spark::levilamina::detail::validateHostRawParameterTemplateInternal(value, 0x1000, environment, error),
-                "production validator accepted a null parse rule");
+            require(!spark::levilamina::detail::validateHostRawParameterTemplateInternal(
+                        value, 0x1000, environment, error),
+                    "production validator accepted a null parse rule");
             require(error == "host raw template has no verifiable current module or parse rule",
                     "null parse rule returned the wrong error");
             value.parse_rule = &host_rule;
-            require(!spark::levilamina::detail::validateHostRawParameterTemplateInternal(value, 0, environment, error),
+            require(!spark::levilamina::detail::validateHostRawParameterTemplateInternal(
+                        value, 0, environment, error),
                     "production validator accepted a null current module");
             require(error == "host raw template has no verifiable current module or parse rule",
                     "null current module returned the wrong error");
@@ -696,7 +693,7 @@ int main()
         return 0;
 #endif
     }
-    catch (std::exception const &exception) {
+    catch (std::exception const& exception) {
         std::fprintf(stderr, "host-raw-parameter-test: %s\n", exception.what());
         return 1;
     }

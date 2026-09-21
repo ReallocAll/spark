@@ -3,8 +3,8 @@
 #include <cstdint>
 #include <limits>
 
-#include "core/profiler/profiling_window.h"
 #include "core/util/monotonic_time.h"
+#include "core/profiler/profiling_window.h"
 
 namespace {
 

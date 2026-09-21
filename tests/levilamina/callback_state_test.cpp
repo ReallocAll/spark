@@ -81,9 +81,9 @@ void testInlineAdmissionAndCleanup()
     state->setErrorCallback([&](std::string const &) { ++errors; });
 
     require(state->invokeInline([&] {
-        require(state->isInBodyOnCurrentThread(), "inline body did not install TLS state");
-        ++runs;
-    }),
+                require(state->isInBodyOnCurrentThread(), "inline body did not install TLS state");
+                ++runs;
+            }),
             "inline body was not admitted");
     require(runs.load() == 1, "admitted inline body did not run");
     require(state->activeBodies() == 0, "admitted inline body remained active");
@@ -100,13 +100,15 @@ void testInlineAdmissionAndCleanup()
             "throwing inline body was not admitted");
     require(errors.load() == 1, "inline body exception was not reported");
     require(state->activeBodies() == 0, "throwing inline body remained active");
-    require(state->waitQuiescent(std::chrono::steady_clock::now() + kWait), "inline body cleanup did not quiesce");
+    require(state->waitQuiescent(std::chrono::steady_clock::now() + kWait),
+            "inline body cleanup did not quiesce");
 
     require(state->beginClosing() == CallbackState::CloseClaim::Owner, "inline close was not claimed");
     auto result = std::make_shared<std::atomic_int>(-1);
     auto payload = std::make_shared<SelfWaitPayload>(state, result);
     require(!state->invokeInline([payload = std::move(payload)] {}), "inline body was admitted after closing");
-    require(result->load(std::memory_order_acquire) == static_cast<int>(CallbackState::CloseClaim::SelfWaitRejected),
+    require(result->load(std::memory_order_acquire) ==
+                static_cast<int>(CallbackState::CloseClaim::SelfWaitRejected),
             "rejected inline payload destructor did not reject self-wait");
     require(runs.load() == 1, "rejected inline body ran");
     auto diagnostics = state->takeDiagnosticCallbacks();

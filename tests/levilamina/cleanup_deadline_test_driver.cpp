@@ -117,8 +117,7 @@ public:
                     cleanup_unknown = true;
                 }
             }
-        }
-        else {
+        } else {
             cleanup_query_failed = true;
             cleanup_failed = true;
             cleanup_unknown = true;
@@ -154,8 +153,7 @@ public:
         }
         if (cleanup_wait_result == WAIT_OBJECT_0 || cleanup_fallback_wait_result == WAIT_OBJECT_0) {
             cleanup_proven = true;
-        }
-        else {
+        } else {
             cleanup_failed = true;
             cleanup_unknown = true;
         }
@@ -356,9 +354,10 @@ int wmain(int argc, wchar_t **)
                      "deadline-timeout: exit=%lu pass=%d forced=%d cleanup-failed=%d unknown=%d query=%d/%d/%d "
                      "query-exit=%lu terminate=%d/%d wait=%lu fallback-wait=%lu\n",
                      static_cast<unsigned long>(timeout.observed_exit), timeout.passed ? 1 : 0,
-                     timeout.forced_cleanup ? 1 : 0, timeout.cleanup_failed ? 1 : 0, timeout.cleanup_unknown ? 1 : 0,
-                     timeout.cleanup_query_attempted ? 1 : 0, timeout.cleanup_query_succeeded ? 1 : 0,
-                     timeout.cleanup_query_failed ? 1 : 0, static_cast<unsigned long>(timeout.cleanup_query_exit),
+                     timeout.forced_cleanup ? 1 : 0, timeout.cleanup_failed ? 1 : 0,
+                     timeout.cleanup_unknown ? 1 : 0, timeout.cleanup_query_attempted ? 1 : 0,
+                     timeout.cleanup_query_succeeded ? 1 : 0, timeout.cleanup_query_failed ? 1 : 0,
+                     static_cast<unsigned long>(timeout.cleanup_query_exit),
                      timeout.cleanup_terminate_attempted ? 1 : 0, timeout.cleanup_terminate_succeeded ? 1 : 0,
                      static_cast<unsigned long>(timeout.cleanup_wait_result),
                      static_cast<unsigned long>(timeout.cleanup_fallback_wait_result));
@@ -370,9 +369,10 @@ int wmain(int argc, wchar_t **)
                      "deadline-normal: exit=%lu pass=%d forced=%d cleanup-failed=%d unknown=%d query=%d/%d/%d "
                      "query-exit=%lu terminate=%d/%d wait=%lu fallback-wait=%lu\n",
                      static_cast<unsigned long>(normal.observed_exit), normal.passed ? 1 : 0,
-                     normal.forced_cleanup ? 1 : 0, normal.cleanup_failed ? 1 : 0, normal.cleanup_unknown ? 1 : 0,
-                     normal.cleanup_query_attempted ? 1 : 0, normal.cleanup_query_succeeded ? 1 : 0,
-                     normal.cleanup_query_failed ? 1 : 0, static_cast<unsigned long>(normal.cleanup_query_exit),
+                     normal.forced_cleanup ? 1 : 0, normal.cleanup_failed ? 1 : 0,
+                     normal.cleanup_unknown ? 1 : 0, normal.cleanup_query_attempted ? 1 : 0,
+                     normal.cleanup_query_succeeded ? 1 : 0, normal.cleanup_query_failed ? 1 : 0,
+                     static_cast<unsigned long>(normal.cleanup_query_exit),
                      normal.cleanup_terminate_attempted ? 1 : 0, normal.cleanup_terminate_succeeded ? 1 : 0,
                      static_cast<unsigned long>(normal.cleanup_wait_result),
                      static_cast<unsigned long>(normal.cleanup_fallback_wait_result));

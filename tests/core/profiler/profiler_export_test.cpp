@@ -511,8 +511,8 @@ bool verifyTerminalMetadataExportWithSamples()
     const std::uint64_t lifecycle = spark::ProfilerTestAccess::allocationLifecycleDropped(allocation);
     const std::uint64_t contention = spark::ProfilerTestAccess::allocationContentionDropped(allocation);
     const auto diagnostics = spark::ProfilerTestAccess::allocationDiagnostics(allocation);
-    const std::uint64_t contention_loss =
-        diagnostics.insertion_contention_failures + diagnostics.detach_contention_attempts;
+    const std::uint64_t contention_loss = diagnostics.insertion_contention_failures +
+                                          diagnostics.detach_contention_attempts;
 #ifdef _WIN32
     const std::uint64_t expected_capture_loss = diagnostics.insertion_contention_failures;
     const bool source_accounting_valid = dropped == diagnostics.insertion_contention_failures &&
@@ -520,8 +520,8 @@ bool verifyTerminalMetadataExportWithSamples()
 #else
     const std::uint64_t expected_capture_loss = 0;
     const bool source_accounting_valid = diagnostics.insertion_contention_failures == 0 &&
-                                         diagnostics.detach_contention_attempts == 0 && dropped == 0 &&
-                                         lifecycle == 0 && contention == 0;
+                                         diagnostics.detach_contention_attempts == 0 && dropped == 0 && lifecycle == 0 &&
+                                         contention == 0;
 #endif
     const bool expected_incomplete = contention_loss != 0;
     const bool unrelated_losses_zero =
@@ -579,8 +579,7 @@ bool verifyTerminalMetadataExportWithSamples()
                      "expected_capture_loss=%llu contention_loss=%llu incomplete=%s profile_bytes=%zu\n",
                      static_cast<unsigned long long>(terminal), static_cast<unsigned long long>(pending_final),
                      static_cast<unsigned long long>(dropped), static_cast<unsigned long long>(lifecycle),
-                     static_cast<unsigned long long>(contention),
-                     static_cast<unsigned long long>(expected_capture_loss),
+                     static_cast<unsigned long long>(contention), static_cast<unsigned long long>(expected_capture_loss),
                      static_cast<unsigned long long>(contention_loss), expected_incomplete ? "true" : "false",
                      allocation_profile.size());
         const auto report_metadata = [&](const char *key, const char *type, const std::string &expected) {

@@ -6,9 +6,9 @@
 #include <map>
 #include <vector>
 
-#include "core/profiler/profiling_window.h"
 #include "core/stats/metrics_history.h"
 #include "core/stats/system_stats.h"
+#include "core/profiler/profiling_window.h"
 
 namespace spark {
 

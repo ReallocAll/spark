@@ -7,13 +7,13 @@
 
 #include "application/health/health_report.h"
 #include "core/command/arguments.h"
-#include "core/spark_constants.h"
 #include "core/stats/ping_statistics.h"
 #include "core/util/base64.h"
 #include "core/util/format.h"
 #include "core/util/monotonic_time.h"
 #include "core/ws/crypto.h"
 #include "net/bytebin.h"
+#include "core/spark_constants.h"
 
 namespace spark {
 

@@ -155,10 +155,12 @@ public:
     }
 };
 
-class WindowsHostRawParameterValidationEnvironment final : public detail::HostRawParameterValidationEnvironment {
+class WindowsHostRawParameterValidationEnvironment final
+    : public detail::HostRawParameterValidationEnvironment {
 public:
-    [[nodiscard]] bool imageRangeOwnedByHost(std::uintptr_t address, std::size_t size, std::uintptr_t current_module,
-                                             detail::HostRawImageAccess access, std::uintptr_t &containing_module,
+    [[nodiscard]] bool imageRangeOwnedByHost(std::uintptr_t address, std::size_t size,
+                                             std::uintptr_t current_module, detail::HostRawImageAccess access,
+                                             std::uintptr_t &containing_module,
                                              std::string &basename) const noexcept override
     {
         HMODULE containing = nullptr;
@@ -196,8 +198,8 @@ bool validateHostRawParameterTemplate(HostRawParameterTemplate &value, ll::sys_u
 #else
     HMODULE current = reinterpret_cast<HMODULE>(current_module);
     WindowsHostRawParameterValidationEnvironment environment;
-    return detail::validateHostRawParameterTemplateInternal(value, reinterpret_cast<std::uintptr_t>(current),
-                                                            environment, error);
+    return detail::validateHostRawParameterTemplateInternal(
+        value, reinterpret_cast<std::uintptr_t>(current), environment, error);
 #endif
 }
 

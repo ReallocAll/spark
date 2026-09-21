@@ -6,10 +6,10 @@
 #include <regex>
 #include <stdexcept>
 
-#include "core/profiler/profiling_window.h"
-#include "core/spark_constants.h"
 #include "core/util/monotonic_time.h"
 #include "native/diagnostics/ci_diagnostics.h"
+#include "core/profiler/profiling_window.h"
+#include "core/spark_constants.h"
 
 namespace spark {
 namespace {

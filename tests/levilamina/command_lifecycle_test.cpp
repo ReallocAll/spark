@@ -86,7 +86,7 @@ void testConstructionExceptionReleasesLease()
         require(lease.has_value(), "exception setup construction failed");
         throw std::runtime_error{"synthetic command construction failure"};
     }
-    catch (std::runtime_error const &) {
+    catch (std::runtime_error const&) {
     }
     require(guard.activeCommands() == 0, "construction exception leaked the command count");
     require(guard.beginCleanup(), "construction exception left cleanup blocked");

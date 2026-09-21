@@ -12,10 +12,7 @@
 
 namespace spark::levilamina {
 
-enum class HostImageAccess {
-    Readable,
-    Executable
-};
+enum class HostImageAccess { Readable, Executable };
 
 [[nodiscard]] inline bool hostImageProtectionAllowed(std::uint32_t protection, HostImageAccess access) noexcept
 {
@@ -36,21 +33,23 @@ enum class HostImageAccess {
         return base == page_execute || base == page_execute_read || base == page_execute_read_write ||
                base == page_execute_write_copy;
     }
-    return base == page_read_only || base == page_read_write || base == page_write_copy || base == page_execute_read ||
-           base == page_execute_read_write || base == page_execute_write_copy;
+    return base == page_read_only || base == page_read_write || base == page_write_copy ||
+           base == page_execute_read || base == page_execute_read_write || base == page_execute_write_copy;
 }
 
 struct HostRawParameterTemplate final {
     Bedrock::typeid_t<::CommandRegistry> type_index{};
     ::CommandParameterData::ParseFunction parse_override = nullptr;
-    ::CommandRegistry::ParamParseRule const *parse_rule = nullptr;
+    ::CommandRegistry::ParamParseRule const* parse_rule = nullptr;
     std::string rule_module;
     std::string parser_module;
 };
 
-[[nodiscard]] inline HostRawParameterTemplate copyHostRawParameterFields(::CommandParameterData const &data,
-                                                                         std::string rule_module,
-                                                                         std::string parser_module)
+[[nodiscard]] inline HostRawParameterTemplate copyHostRawParameterFields(
+    ::CommandParameterData const& data,
+    std::string rule_module,
+    std::string parser_module
+)
 {
     return HostRawParameterTemplate{
         .type_index = data.mTypeIndex,
@@ -62,10 +61,16 @@ struct HostRawParameterTemplate final {
 }
 
 [[nodiscard]] std::optional<HostRawParameterTemplate> captureHostRawParameterTemplate(
-    ::ll::command::CommandHandle &command, std::weak_ptr<ll::mod::Mod> mod, ll::sys_utils::HandleT current_module,
-    std::string &error);
+    ::ll::command::CommandHandle& command,
+    std::weak_ptr<ll::mod::Mod> mod,
+    ll::sys_utils::HandleT current_module,
+    std::string& error
+);
 
-[[nodiscard]] bool validateHostRawParameterTemplate(HostRawParameterTemplate &value,
-                                                    ll::sys_utils::HandleT current_module, std::string &error);
+[[nodiscard]] bool validateHostRawParameterTemplate(
+    HostRawParameterTemplate& value,
+    ll::sys_utils::HandleT current_module,
+    std::string& error
+);
 
 }  // namespace spark::levilamina

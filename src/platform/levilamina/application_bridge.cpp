@@ -27,9 +27,9 @@ struct ApplicationBridge::Impl final {
         TrustedViewersState trusted_viewers(data_dir / "trusted-viewers.json");
         (void)trusted_viewers.load();
 
-        app = std::make_unique<SparkApplication>(std::move(bds_executable_sha256), profileStorageDirectory(data_dir),
-                                                 data_dir / "activity.json", std::move(config),
-                                                 std::move(trusted_viewers), dispatcher, metadata_provider, notifier);
+        app = std::make_unique<SparkApplication>(
+            std::move(bds_executable_sha256), profileStorageDirectory(data_dir), data_dir / "activity.json",
+            std::move(config), std::move(trusted_viewers), dispatcher, metadata_provider, notifier);
     }
 
     std::unique_ptr<SparkApplication> app;

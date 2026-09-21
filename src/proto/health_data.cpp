@@ -1,9 +1,9 @@
 #include "proto/health_data.h"
 
-#include "core/spark_constants.h"
 #include "proto/metrics_proto.h"
 #include "proto/proto_writer.h"
 #include "proto/statistics_proto.h"
+#include "core/spark_constants.h"
 
 namespace spark {
 

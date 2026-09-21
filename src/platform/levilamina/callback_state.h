@@ -16,29 +16,17 @@ namespace spark::levilamina {
 
 class CallbackState final : public std::enable_shared_from_this<CallbackState> {
     struct TlsFrame {
-        CallbackState *state = nullptr;
-        TlsFrame *previous = nullptr;
+        CallbackState* state = nullptr;
+        TlsFrame* previous = nullptr;
     };
 
 public:
-    enum class Phase {
-        Open,
-        Closing,
-        Closed
-    };
-    enum class CloseClaim {
-        Owner,
-        AlreadyClosing,
-        AlreadyClosed,
-        SelfWaitRejected
-    };
-    enum class FatalReason {
-        Deadline,
-        SelfWait
-    };
+    enum class Phase { Open, Closing, Closed };
+    enum class CloseClaim { Owner, AlreadyClosing, AlreadyClosed, SelfWaitRejected };
+    enum class FatalReason { Deadline, SelfWait };
 
     using Submitter = std::function<void(std::function<void()>)>;
-    using Diagnostic = std::function<void(std::string const &)>;
+    using Diagnostic = std::function<void(std::string const&)>;
     using FatalHandler = std::function<void(FatalReason)>;
 
     struct DiagnosticCallbacks {
@@ -46,10 +34,10 @@ public:
         std::shared_ptr<Diagnostic> error;
 
         DiagnosticCallbacks() = default;
-        DiagnosticCallbacks(DiagnosticCallbacks const &) = delete;
-        DiagnosticCallbacks &operator=(DiagnosticCallbacks const &) = delete;
-        DiagnosticCallbacks(DiagnosticCallbacks &&other) noexcept;
-        DiagnosticCallbacks &operator=(DiagnosticCallbacks &&other) noexcept;
+        DiagnosticCallbacks(DiagnosticCallbacks const&)            = delete;
+        DiagnosticCallbacks& operator=(DiagnosticCallbacks const&) = delete;
+        DiagnosticCallbacks(DiagnosticCallbacks&& other) noexcept;
+        DiagnosticCallbacks& operator=(DiagnosticCallbacks&& other) noexcept;
         ~DiagnosticCallbacks() noexcept;
 
     private:
@@ -62,24 +50,24 @@ public:
     public:
         CleanupScope() = default;
 
-        CleanupScope(CleanupScope const &) = delete;
-        CleanupScope &operator=(CleanupScope const &) = delete;
-        CleanupScope(CleanupScope &&) = delete;
-        CleanupScope &operator=(CleanupScope &&) = delete;
+        CleanupScope(CleanupScope const&)            = delete;
+        CleanupScope& operator=(CleanupScope const&) = delete;
+        CleanupScope(CleanupScope&&)                 = delete;
+        CleanupScope& operator=(CleanupScope&&)      = delete;
         ~CleanupScope() noexcept;
 
     private:
         friend class CallbackState;
-        explicit CleanupScope(CallbackState *state) noexcept;
+        explicit CleanupScope(CallbackState* state) noexcept;
 
-        CallbackState *state_ = nullptr;
+        CallbackState* state_ = nullptr;
         TlsFrame frame_{};
     };
 
     CallbackState() = default;
 
-    CallbackState(CallbackState const &) = delete;
-    CallbackState &operator=(CallbackState const &) = delete;
+    CallbackState(CallbackState const&)            = delete;
+    CallbackState& operator=(CallbackState const&) = delete;
 
     void setSubmitter(Submitter submitter);
     void setInfoCallback(Diagnostic callback);
@@ -94,10 +82,10 @@ public:
     [[nodiscard]] CleanupScope enterCleanupScope() noexcept;
 
     [[nodiscard]] std::vector<std::function<void()>> takePendingPayloads();
-    void destroyPendingPayloads(std::vector<std::function<void()>> &payloads);
+    void destroyPendingPayloads(std::vector<std::function<void()>>& payloads);
     void releasePendingPayloads(std::size_t count);
     [[nodiscard]] DiagnosticCallbacks takeDiagnosticCallbacks();
-    void destroyDiagnosticCallbacks(DiagnosticCallbacks &callbacks) noexcept;
+    void destroyDiagnosticCallbacks(DiagnosticCallbacks& callbacks) noexcept;
     [[nodiscard]] bool waitProducer(std::chrono::steady_clock::time_point deadline);
     [[nodiscard]] bool waitQuiescent(std::chrono::steady_clock::time_point deadline);
     [[nodiscard]] bool waitClosed(std::chrono::steady_clock::time_point deadline);
@@ -127,37 +115,37 @@ private:
     class ActivityScope {
     public:
         ActivityScope() = delete;
-        ActivityScope(ActivityScope const &) = delete;
-        ActivityScope &operator=(ActivityScope const &) = delete;
-        ActivityScope(ActivityScope &&) = delete;
-        ActivityScope &operator=(ActivityScope &&) = delete;
+        ActivityScope(ActivityScope const&)            = delete;
+        ActivityScope& operator=(ActivityScope const&) = delete;
+        ActivityScope(ActivityScope&&)                 = delete;
+        ActivityScope& operator=(ActivityScope&&)      = delete;
         ~ActivityScope() noexcept;
 
         void release() noexcept;
 
     private:
         friend class CallbackState;
-        ActivityScope(CallbackState *state, std::size_t count) noexcept;
+        ActivityScope(CallbackState* state, std::size_t count) noexcept;
 
-        CallbackState *state_;
+        CallbackState* state_;
         TlsFrame frame_{};
         std::size_t count_;
         bool released_ = false;
     };
 
-    void invokeSlot(std::shared_ptr<WorkSlot> const &slot);
-    [[nodiscard]] bool cancelSlotLocked(std::shared_ptr<WorkSlot> const &slot, std::function<void()> &payload);
+    void invokeSlot(std::shared_ptr<WorkSlot> const& slot);
+    [[nodiscard]] bool cancelSlotLocked(std::shared_ptr<WorkSlot> const& slot, std::function<void()>& payload);
     [[nodiscard]] ActivityScope adoptActive(std::size_t count) noexcept;
     void releaseActive(std::size_t count) noexcept;
     void reserveActiveLocked(std::size_t count) noexcept;
-    void destroySubmitter(std::shared_ptr<Submitter> &submitter, bool reserved) noexcept;
-    void destroyDiagnostic(std::shared_ptr<Diagnostic> &callback, bool reserved) noexcept;
-    void destroyFatalHandler(std::shared_ptr<FatalHandler> &handler, bool reserved) noexcept;
+    void destroySubmitter(std::shared_ptr<Submitter>& submitter, bool reserved) noexcept;
+    void destroyDiagnostic(std::shared_ptr<Diagnostic>& callback, bool reserved) noexcept;
+    void destroyFatalHandler(std::shared_ptr<FatalHandler>& handler, bool reserved) noexcept;
     void report(std::shared_ptr<Diagnostic> callback, std::string message) noexcept;
-    void pushTls(TlsFrame &frame) noexcept;
-    void popTls(TlsFrame &frame) noexcept;
+    void pushTls(TlsFrame& frame) noexcept;
+    void popTls(TlsFrame& frame) noexcept;
     [[nodiscard]] bool isActiveOnCurrentThread() const noexcept;
-    static TlsFrame *&tlsTop() noexcept;
+    static TlsFrame*& tlsTop() noexcept;
 
     mutable std::mutex mutex_;
     std::condition_variable condition_;

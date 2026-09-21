@@ -48,10 +48,7 @@ public:
     [[nodiscard]] virtual bool read(std::uintptr_t address, void *destination, std::size_t size) const noexcept = 0;
 };
 
-enum class HostRawImageAccess {
-    Readable,
-    Executable
-};
+enum class HostRawImageAccess { Readable, Executable };
 
 class HostRawParameterValidationEnvironment {
 public:
@@ -81,10 +78,9 @@ struct RawTextImportCell final {
                                                    std::uintptr_t spark_module, std::string &provenance,
                                                    std::string &error);
 
-[[nodiscard]] bool validateHostRawParameterTemplateInternal(HostRawParameterTemplate &value,
-                                                            std::uintptr_t current_module,
-                                                            HostRawParameterValidationEnvironment const &environment,
-                                                            std::string &error);
+[[nodiscard]] bool validateHostRawParameterTemplateInternal(
+    HostRawParameterTemplate &value, std::uintptr_t current_module,
+    HostRawParameterValidationEnvironment const &environment, std::string &error);
 
 }  // namespace detail
 }  // namespace spark::levilamina

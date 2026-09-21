@@ -3,9 +3,9 @@
 #include <limits>
 #include <string_view>
 
-#include "core/profiler/profiling_window.h"
 #include "native/sampler/sampler.h"
 #include "native/sampler/thread_info.h"
+#include "core/profiler/profiling_window.h"
 
 namespace spark {
 

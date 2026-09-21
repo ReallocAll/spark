@@ -5,11 +5,11 @@
 
 #include "application/profiler/platform_metadata_capture.h"
 #include "core/profiler/profiler.h"
-#include "core/spark_constants.h"
 #include "core/stats/ping_statistics.h"
 #include "core/stats/system_stats.h"
 #include "core/util/format.h"
 #include "proto/sampler_data.h"
+#include "core/spark_constants.h"
 
 namespace spark {
 

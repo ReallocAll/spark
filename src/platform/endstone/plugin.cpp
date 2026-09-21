@@ -21,7 +21,6 @@
 #include "core/command/arguments.h"
 #include "core/config/spark_config.h"
 #include "core/config/trusted_viewers.h"
-#include "core/spark_constants.h"
 #include "core/stats/executable_hash.h"
 #include "native/diagnostics/ci_diagnostics.h"
 #include "native/python/python_profile_bridge.h"
@@ -29,6 +28,7 @@
 #include "platform/endstone/adapters.h"
 #include "platform/endstone/papi_integration.h"
 #include "platform/endstone/python_attribution.h"
+#include "core/spark_constants.h"
 
 namespace {
 

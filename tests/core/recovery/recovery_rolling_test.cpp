@@ -9,13 +9,13 @@
 #include <thread>
 #include <vector>
 
-#include "core/profiler/profiling_window.h"
 #include "core/recovery/journal_reader.h"
 #include "core/recovery/recovery_player.h"
 #include "core/recovery/recovery_writer.h"
 #include "journal_test_cases.h"
 #include "journal_test_support.h"
 #include "native/sampler/types.h"
+#include "core/profiler/profiling_window.h"
 #include "proto/proto_reader.h"
 
 using namespace spark;                // NOLINT(google-build-using-namespace)

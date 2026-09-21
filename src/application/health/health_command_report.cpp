@@ -6,11 +6,11 @@
 
 #include "application/health/health_command.h"
 #include "application/health/health_report.h"
-#include "core/spark_constants.h"
 #include "core/util/base64.h"
 #include "core/util/format.h"
 #include "core/util/monotonic_time.h"
 #include "net/gzip.h"
+#include "core/spark_constants.h"
 
 namespace spark {
 
