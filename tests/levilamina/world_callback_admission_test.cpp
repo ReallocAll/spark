@@ -24,11 +24,11 @@ class SubscriptionBodyBase {};
 
 namespace {
 
-using spark::levilamina::CallbackState;
-using spark::levilamina::LeviLaminaWorldGaugeProvider;
 using spark::levilamina::WorldCallbackAdmission;
 using spark::levilamina::WorldCallbackControl;
 using spark::levilamina::WorldCallbackFunction;
+using spark::levilamina::CallbackState;
+using spark::levilamina::LeviLaminaWorldGaugeProvider;
 
 void require(bool condition, char const *message)
 {
@@ -63,8 +63,9 @@ void testWaiterSeesClosureRelease()
     admission.closeAdmission();
 
     std::atomic_bool quiescent{false};
-    std::thread waiter(
-        [&] { quiescent = admission.waitQuiescent(std::chrono::steady_clock::now() + std::chrono::seconds{1}); });
+    std::thread waiter([&] {
+        quiescent = admission.waitQuiescent(std::chrono::steady_clock::now() + std::chrono::seconds{1});
+    });
     std::this_thread::sleep_for(std::chrono::milliseconds{10});
     require(!quiescent.load(), "waiter ignored an active callback closure");
     lease.release();
@@ -148,7 +149,8 @@ void testCallableCopiesAreOwnedUntilDestroyed()
     require(control->liveWrappers() == 3, "partial callback publication was not counted");
 
     control->closeAdmission();
-    require(!control->waitQuiescent(std::chrono::steady_clock::now()), "close ignored host-held callback copies");
+    require(!control->waitQuiescent(std::chrono::steady_clock::now()),
+            "close ignored host-held callback copies");
     published(4);
     require(calls.load(std::memory_order_relaxed) == 5, "closed callback executed provider body");
 
@@ -197,7 +199,8 @@ void testDistinctWrapperAssignmentsTransferOwnership()
             "moved-to wrapper did not retain callback behavior");
 
     new_control->closeAdmission();
-    require(!new_control->waitQuiescent(std::chrono::steady_clock::now()), "live moved-to wrapper did not block close");
+    require(!new_control->waitQuiescent(std::chrono::steady_clock::now()),
+            "live moved-to wrapper did not block close");
     second = Callback{};
     require(new_control->liveWrappers() == 0, "moved-to wrapper ownership was not released");
     require(new_control->waitQuiescent(std::chrono::steady_clock::now()),
@@ -240,7 +243,8 @@ void testPublicationExceptionUnwindsTemporaryWrapper()
             "retained publication copies did not block close");
     retained_copy = {};
     require(control->liveWrappers() == 1, "retained publication copy was not released");
-    require(!control->waitQuiescent(std::chrono::steady_clock::now()), "first publication was released unexpectedly");
+    require(!control->waitQuiescent(std::chrono::steady_clock::now()),
+            "first publication was released unexpectedly");
     first_published = {};
     require(control->liveWrappers() == 0, "first publication ownership was not released");
     require(control->waitQuiescent(std::chrono::steady_clock::now()),
@@ -251,11 +255,17 @@ void testPublicationExceptionUnwindsTemporaryWrapper()
 void testWorldCapturePolicies()
 {
     int chunk = 0;
-    require(!spark::levilamina::bds::detail::floorChunkCoordinate(std::numeric_limits<float>::quiet_NaN(), chunk),
+    require(!spark::levilamina::bds::detail::floorChunkCoordinate(
+                std::numeric_limits<float>::quiet_NaN(), chunk
+            ),
             "NaN chunk coordinate was accepted");
-    require(!spark::levilamina::bds::detail::floorChunkCoordinate(std::numeric_limits<float>::infinity(), chunk),
+    require(!spark::levilamina::bds::detail::floorChunkCoordinate(
+                std::numeric_limits<float>::infinity(), chunk
+            ),
             "+inf chunk coordinate was accepted");
-    require(!spark::levilamina::bds::detail::floorChunkCoordinate(-std::numeric_limits<float>::infinity(), chunk),
+    require(!spark::levilamina::bds::detail::floorChunkCoordinate(
+                -std::numeric_limits<float>::infinity(), chunk
+            ),
             "-inf chunk coordinate was accepted");
     require(spark::levilamina::bds::detail::floorChunkCoordinate(-0.1F, chunk) && chunk == -1,
             "finite chunk coordinate floor changed");
@@ -265,18 +275,20 @@ void testWorldCapturePolicies()
     require(spark::levilamina::bds::detail::isLoadedChunkState(::ChunkState::Loaded),
             "loaded chunk state was rejected");
     require(!spark::levilamina::bds::detail::dimensionCaptureInvalidates(
-                spark::levilamina::bds::DimensionRetention::ForeignLevel),
+                spark::levilamina::bds::DimensionRetention::ForeignLevel
+            ),
             "foreign dimension was treated as capture failure");
-    require(
-        spark::levilamina::bds::detail::dimensionCaptureInvalidates(spark::levilamina::bds::DimensionRetention::Failed),
-        "failed dimension capture did not invalidate");
+    require(spark::levilamina::bds::detail::dimensionCaptureInvalidates(
+                spark::levilamina::bds::DimensionRetention::Failed
+            ),
+            "failed dimension capture did not invalidate");
 }
 
 void testSubscriptionBodyTransfer()
 {
+    using spark::levilamina::bds::pubsub::moveSubscriptionBody;
     using ::Bedrock::PubSub::SubscriptionBase;
     using ::Bedrock::PubSub::Detail::SubscriptionBodyBase;
-    using spark::levilamina::bds::pubsub::moveSubscriptionBody;
 
     SubscriptionBase source;
     SubscriptionBase destination;

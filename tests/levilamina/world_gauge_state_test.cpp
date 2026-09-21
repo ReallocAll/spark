@@ -59,16 +59,16 @@ void testSnapshotReplacementAndTileAbsence()
     first.player_ids = {10, 10};
     first.chunks = {overworld, overworld};
     state.reconcile(first);
-    requireCounts(state,
-                  {.players = 1, .entities = 2, .tile_entities = 0, .chunks = 1, .tile_entities_present = false});
+    requireCounts(state, {.players = 1, .entities = 2, .tile_entities = 0, .chunks = 1,
+                          .tile_entities_present = false});
 
     WorldGaugeSnapshot replacement;
     replacement.actor_ids = {12};
     replacement.player_ids = {};
     replacement.chunks = {nether};
     state.reconcile(replacement);
-    requireCounts(state,
-                  {.players = 0, .entities = 1, .tile_entities = 0, .chunks = 1, .tile_entities_present = false});
+    requireCounts(state, {.players = 0, .entities = 1, .tile_entities = 0, .chunks = 1,
+                          .tile_entities_present = false});
 }
 
 void testCompleteTileReconciliationIsExplicit()
@@ -79,12 +79,14 @@ void testCompleteTileReconciliationIsExplicit()
     snapshot.tile_entities_complete = true;
     snapshot.tile_entities.push_back({.chunk = snapshot.chunks.front(), .count = 3});
     state.reconcile(snapshot);
-    requireCounts(state, {.players = 0, .entities = 0, .tile_entities = 3, .chunks = 1, .tile_entities_present = true});
+    requireCounts(state, {.players = 0, .entities = 0, .tile_entities = 3, .chunks = 1,
+                          .tile_entities_present = true});
 
     WorldGaugeSnapshot without_tiles;
     without_tiles.chunks = snapshot.chunks;
     state.reconcile(without_tiles);
-    requireCounts(state, {.players = 0, .entities = 0, .tile_entities = 3, .chunks = 1, .tile_entities_present = true});
+    requireCounts(state, {.players = 0, .entities = 0, .tile_entities = 3, .chunks = 1,
+                          .tile_entities_present = true});
 }
 
 }  // namespace

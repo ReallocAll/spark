@@ -14,7 +14,6 @@
 #include <utility>
 
 #include "application/command/command_sender.h"
-#include "core/spark_constants.h"
 #include "ll/api/Global.h"
 #include "ll/api/Versions.h"
 #include "ll/api/command/CommandHandle.h"
@@ -40,6 +39,7 @@
 #include "platform/levilamina/cleanup_deadline_guard.h"
 #include "platform/levilamina/command_lifecycle.h"
 #include "platform/levilamina/host_command_parameter.h"
+#include "core/spark_constants.h"
 
 struct SparkRawParameters {
     ::CommandRawText raw;
@@ -121,10 +121,10 @@ public:
     {
     }
 
-    SparkNoArgumentCommand(SparkNoArgumentCommand const &) = delete;
-    SparkNoArgumentCommand &operator=(SparkNoArgumentCommand const &) = delete;
-    SparkNoArgumentCommand(SparkNoArgumentCommand &&) = delete;
-    SparkNoArgumentCommand &operator=(SparkNoArgumentCommand &&) = delete;
+    SparkNoArgumentCommand(SparkNoArgumentCommand const&)            = delete;
+    SparkNoArgumentCommand& operator=(SparkNoArgumentCommand const&) = delete;
+    SparkNoArgumentCommand(SparkNoArgumentCommand&&)                 = delete;
+    SparkNoArgumentCommand& operator=(SparkNoArgumentCommand&&)      = delete;
 
     ~SparkNoArgumentCommand() override = default;
 
@@ -152,10 +152,10 @@ public:
     {
     }
 
-    SparkRawCommand(SparkRawCommand const &) = delete;
-    SparkRawCommand &operator=(SparkRawCommand const &) = delete;
-    SparkRawCommand(SparkRawCommand &&) = delete;
-    SparkRawCommand &operator=(SparkRawCommand &&) = delete;
+    SparkRawCommand(SparkRawCommand const&)            = delete;
+    SparkRawCommand& operator=(SparkRawCommand const&) = delete;
+    SparkRawCommand(SparkRawCommand&&)                 = delete;
+    SparkRawCommand& operator=(SparkRawCommand&&)      = delete;
 
     ~SparkRawCommand() override = default;
 
@@ -184,19 +184,22 @@ static_assert(offsetof(SparkRawCommand, parameters) == offsetof(SparkRawLayoutPr
 constexpr int kSparkRawParameterOffset =
     static_cast<int>(offsetof(SparkRawLayoutProbe, parameters) + offsetof(SparkRawParameters, raw));
 
-bool validateActiveSparkCommand(::CommandRegistry::Signature const &signature,
-                                spark::levilamina::HostRawParameterTemplate const &expected,
-                                ll::sys_utils::HandleT current_module,
-                                spark::levilamina::HostRawParameterTemplate &actual, std::string &error)
+bool validateActiveSparkCommand(
+    ::CommandRegistry::Signature const& signature,
+    spark::levilamina::HostRawParameterTemplate const& expected,
+    ll::sys_utils::HandleT current_module,
+    spark::levilamina::HostRawParameterTemplate& actual,
+    std::string& error
+)
 {
     if (signature.overloads.size() != 2) {
         error = "active spark signature does not contain exactly two overloads";
         return false;
     }
 
-    ::CommandParameterData const *raw = nullptr;
+    ::CommandParameterData const* raw = nullptr;
     bool empty = false;
-    for (auto const &overload : signature.overloads) {
+    for (auto const& overload : signature.overloads) {
         if (overload.params.empty()) {
             if (empty) {
                 error = "active spark signature contains duplicate empty overloads";
@@ -257,11 +260,12 @@ public:
     {
     }
 
-    void requiredRaw(spark::levilamina::HostRawParameterTemplate const &host)
+    void requiredRaw(spark::levilamina::HostRawParameterTemplate const& host)
     {
-        auto &data =
-            addParamImpl(host.type_index, host.parse_override, "raw", ::CommandParameterDataType::Basic, {}, {},
-                         kSparkRawParameterOffset, -1, false, ::CommandParameterOption::None, host.parse_rule);
+        auto &data = addParamImpl(
+            host.type_index, host.parse_override, "raw", ::CommandParameterDataType::Basic, {}, {},
+            kSparkRawParameterOffset, -1, false,
+            ::CommandParameterOption::None, host.parse_rule);
         static_cast<void>(data);
     }
 
@@ -523,8 +527,9 @@ bool SparkMod::registerCommand()
         throw std::runtime_error{"spark raw command registration lost its owning native mod"};
     }
     std::string host_parameter_error;
-    auto host_raw = spark::levilamina::captureHostRawParameterTemplate(command, owner_, native_owner->getHandle(),
-                                                                       host_parameter_error);
+    auto host_raw = spark::levilamina::captureHostRawParameterTemplate(
+        command, owner_, native_owner->getHandle(), host_parameter_error
+    );
     if (!host_raw.has_value()) {
         throw std::runtime_error{"spark raw command host parameter validation failed: " + host_parameter_error};
     }
@@ -563,13 +568,21 @@ bool SparkMod::registerCommand()
     }
     spark::levilamina::HostRawParameterTemplate actual_raw;
     std::string active_parameter_error;
-    if (!validateActiveSparkCommand(*active_signature, *host_raw, native_owner->getHandle(), actual_raw,
-                                    active_parameter_error)) {
+    if (!validateActiveSparkCommand(
+            *active_signature,
+            *host_raw,
+            native_owner->getHandle(),
+            actual_raw,
+            active_parameter_error
+        )) {
         throw std::runtime_error{"spark active raw parameter validation failed: " + active_parameter_error};
     }
     command_registered_ = true;
-    logger().debug("Spark raw command host rule accepted: rule_module={}, parser_module={}, symbol=RawText",
-                   actual_raw.rule_module, actual_raw.parser_module);
+    logger().debug(
+        "Spark raw command host rule accepted: rule_module={}, parser_module={}, symbol=RawText",
+        actual_raw.rule_module,
+        actual_raw.parser_module
+    );
     logger().info("Registered /spark with GameDirectors permission");
     return true;
 }
@@ -684,9 +697,11 @@ bool SparkMod::enable()
     catch (...) {
         auto exception = std::current_exception();
         return spark::levilamina::runPublicationFailurePath(
-            publication_boundary_, exception, [this] { static_cast<void>(closeResources(false)); },
+            publication_boundary_, exception,
+            [this] { static_cast<void>(closeResources(false)); },
             [this](std::exception_ptr error) { reportException("enable", error); },
-            [] { CleanupDeadlineGuard::terminateOnTimeout(); });
+            [] { CleanupDeadlineGuard::terminateOnTimeout(); }
+        );
     }
 }
 
@@ -709,9 +724,10 @@ bool SparkMod::admitRuntimeClose() const
     auto session = host_session_;
     auto lifetime = command_lifetime_;
     return state && session && session->bridge && tick_listener_ && tick_listener_.use_count() == 2 &&
-           session->tick_started.load(std::memory_order_acquire) && state->phase() == CallbackState::Phase::Open &&
-           !state->isInBodyOnCurrentThread() && lifetime && lifetime->hasObservedServerThread() &&
-           lifetime->isServerThread() && lifetime->activeCommands() == 0 && !lifetime->unsafeViolation();
+           session->tick_started.load(std::memory_order_acquire) &&
+           state->phase() == CallbackState::Phase::Open && !state->isInBodyOnCurrentThread() && lifetime &&
+           lifetime->hasObservedServerThread() && lifetime->isServerThread() && lifetime->activeCommands() == 0 &&
+           !lifetime->unsafeViolation();
 }
 
 bool SparkMod::closeResources(bool require_server_thread)

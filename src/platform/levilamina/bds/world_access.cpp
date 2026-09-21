@@ -4,13 +4,11 @@
 #include <filesystem>
 #include <map>
 #include <memory>
-#include <set>
 #include <string>
+#include <set>
 #include <utility>
 #include <vector>
 
-#include "core/metadata/behavior_packs.h"
-#include "core/util/world_region.h"
 #include "mc/deps/ecs/gamerefs_entity/GameRefsEntity.h"
 #include "mc/world/actor/Actor.h"
 #include "mc/world/actor/ActorDefinitionIdentifier.h"
@@ -23,6 +21,9 @@
 #include "mc/world/level/chunk/LevelChunk.h"
 #include "mc/world/level/dimension/Dimension.h"
 #include "mc/world/level/dimension/VanillaDimensions.h"
+
+#include "core/metadata/behavior_packs.h"
+#include "core/util/world_region.h"
 
 namespace spark::levilamina::bds {
 namespace {
@@ -136,8 +137,9 @@ ChunkKeyResult WorldAccess::chunkKeyStatus(::LevelChunk const &chunk, WorldGauge
             return ChunkKeyResult::ForeignLevel;
         }
         const auto &position = chunk.getPosition();
-        key = {
-            .dimension = canonicalDimensionName(dimension.getDimensionId().value()), .x = position.x, .z = position.z};
+        key = {.dimension = canonicalDimensionName(dimension.getDimensionId().value()),
+               .x = position.x,
+               .z = position.z};
         return ChunkKeyResult::Valid;
     }
     catch (...) {
@@ -186,8 +188,8 @@ bool WorldAccess::scan(std::string_view level_name_hint, ScanResult &result) noe
                                   const auto &identifier = actor->getActorIdentifier();
                                   const auto &canonical_name = identifier.getCanonicalName();
                                   return canonical_name.empty()
-                                           ? "actor_" + std::to_string(static_cast<int>(actor->getEntityTypeId()))
-                                           : canonical_name;
+                                             ? "actor_" + std::to_string(static_cast<int>(actor->getEntityTypeId()))
+                                                                : canonical_name;
                               }()});
         }
 
@@ -214,10 +216,13 @@ bool WorldAccess::scan(std::string_view level_name_hint, ScanResult &result) noe
                     continue;
                 }
                 const auto &actual_position = chunk->getPosition();
-                chunks.try_emplace(std::pair{actual_position.x, actual_position.z},
-                                   WorldChunk{.x = actual_position.x, .z = actual_position.z});
+                chunks.try_emplace(
+                    std::pair{actual_position.x, actual_position.z},
+                    WorldChunk{.x = actual_position.x, .z = actual_position.z}
+                );
                 result.gauges.chunks.push_back(
-                    {.dimension = dimension_name, .x = actual_position.x, .z = actual_position.z});
+                    {.dimension = dimension_name, .x = actual_position.x, .z = actual_position.z}
+                );
                 (void)position;
             }
 
