@@ -9,6 +9,7 @@
 #include "mc/world/level/DimensionManager.h"
 #include "mc/world/level/Level.h"
 #include "mc/world/level/chunk/ChunkState.h"
+#include "mc/world/level/chunk/ILevelChunkEventManagerProxy.h"
 #include "mc/world/level/chunk/LevelChunkEventManager.h"
 #include "mc/world/level/chunk/LevelChunk.h"
 #include "platform/levilamina/callback_state.h"
