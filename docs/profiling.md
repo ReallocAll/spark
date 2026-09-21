@@ -37,11 +37,16 @@ hash lets an analyst select a matching binary without uploading the binary
 contents. `--not-combined` keeps separate complete trees for selected threads
 even when they have the same name.
 
-LeviLamina currently exports its host and game version, player count, uptime,
-and common statistics, but its adapter intentionally leaves plugin-list
-metadata, world metadata, world gauges, and ping data unavailable. Endstone can
-provide those host-specific fields when the corresponding public adapter APIs
-are available.
+LeviLamina exports its host and game version, native-mod metadata, player count,
+uptime, aggregate ping, common statistics, behavior-pack metadata, and world
+metadata for the three vanilla dimensions. World entries include regions and
+loaded chunks, with entity-type counts in world metadata. World gauges report
+entity and loaded-chunk totals; actor and player IDs are used internally to
+deduplicate and reconcile observations. Chunk discard callbacks and snapshot
+reconciliation remove stale observations, while scans prune expired dimension
+references. Tile/block-entity counts and gamerules are not exposed by the LL
+adapter. Endstone provides its corresponding host-specific fields through its
+adapter.
 
 ## Execution sampling
 

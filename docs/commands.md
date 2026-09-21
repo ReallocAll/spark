@@ -22,12 +22,14 @@ path:
 /ll reactivate spark
 ```
 
-`unload` and `load` can physically remove and restore `levilamina_spark.dll`
-after a quiescent session. Stop and save a profile first when its data must be
-preserved; unloading does not export profiles automatically. `reload` and
-`reactivate` remain experimental while their combinations are being validated.
-These operations do not support arbitrary-thread reentry. If unload is refused,
-Spark cannot force it; use diagnostics or a normal server restart.
+`unload` and `load` physically remove and restore `levilamina_spark.dll` after a
+quiescent session. Before unload, Spark stops its application, drains callbacks,
+closes world and chunk subscriptions, and removes the `/spark` registration.
+The loader's `reload` and `reactivate` operations use the same lifecycle path.
+Stop and save a profile first when its data must be preserved; unloading does not
+export profiles automatically. These operations run on the server thread and do
+not support arbitrary-thread reentry. If unload is refused, the module remains
+loaded; retry the operation after the active session has become quiescent.
 
 ## Command names and aliases
 

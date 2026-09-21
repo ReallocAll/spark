@@ -4,7 +4,7 @@ spark for Bedrock is a native statistical profiler for Bedrock Dedicated Server
 (BDS). The shared application samples native execution and allocation stacks,
 aggregates them, exports spark-compatible profiles, and maintains rolling
 statistics independently of a profile session. Host adapters connect that core
-to Endstone or to the experimental LeviLamina module.
+to Endstone or to the LeviLamina module.
 
 ## Source tree
 
@@ -32,7 +32,7 @@ src/
   native/                     # sampler, symbol guesser, allocation hooks, Python bridge
   platform/
     endstone/                 # Endstone adapters and optional PlaceholderAPI integration
-    levilamina/               # experimental Windows x64 LeviLamina adapter/module
+    levilamina/               # Windows x64 LeviLamina adapter/module
   proto/                      # spark protobuf serialization
   net/                        # gzip, bytebin, WebSocket transport, profile files
 ```
@@ -40,9 +40,9 @@ src/
 `src/platform/levilamina/` contains the native module entry point in
 `spark_mod.cpp`, the host-independent application bridge in
 `application_bridge.cpp`, and typed host adapters in `adapters.cpp`. It is
-compiled only when `SPARK_BUILD_LEVILAMINA=ON`. That target is experimental,
-source-build-only Windows x64 support for BDS 1.26.20.x and LeviLamina 26.20.7;
-it does not imply parity with the Endstone adapter.
+compiled only when `SPARK_BUILD_LEVILAMINA=ON` and targets Windows x64 with
+BDS 1.26.20.x and LeviLamina 26.20.7. The adapter supplies the same shared
+application services as Endstone plus LL-native lifecycle and world access.
 
 ## Layering
 
@@ -86,11 +86,16 @@ waits for `ServerStartedEvent`, creates the bridge with LeviLamina data/config
 directories, forwards tick events, and registers the raw `/spark` command at
 `GameDirectors` permission.
 
-LeviLamina's typed metadata adapter currently supplies game/loader versions,
-player count, uptime, and no plugin or world records. `worldGaugesAvailable()`
-and `playerPingProvider()` are deliberately false/null. Endstone's adapter has
-additional public APIs for fields that are available on that host; the shared
-application does not assume those fields exist.
+LeviLamina's typed metadata adapter supplies game/loader versions, native-mod
+records, player count, uptime, aggregate ping, behavior-pack metadata, and world
+records for the three vanilla dimensions. World access tracks loaded chunks and
+entity identities for internal deduplication. World metadata includes entity-type
+counts, while gauges report entity and loaded-chunk totals. Chunk discard
+callbacks and snapshot reconciliation remove stale observations; scans prune
+expired dimension references. Tile/block-entity gauges and gamerules are not
+exposed by this adapter. Endstone's adapter has additional public APIs for fields
+that are available on that host; the shared application does not assume those
+fields exist.
 
 ## Execution sampler
 
@@ -134,10 +139,10 @@ an unclean supported session into a local profile.
 bytebin uploads away from the server tick. RSA2048-SHA256 signatures and
 `TrustedViewersState` authenticate viewer clients.
 
-Sampling, health, export, viewer, and native backend work use bounded shutdown
-waits. If quiescence is not proven before the deadline, the host bootstrap stops
-before unloading the module. A timeout is not treated as evidence that unload is
-safe.
+Sampling, health, export, viewer, native backend work, and LL world callbacks use
+bounded shutdown waits. If quiescence is not proven before the deadline, the host
+bootstrap stops before unloading the module. A timeout is not treated as evidence
+that unload is safe.
 
 ## Dependencies
 

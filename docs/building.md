@@ -90,19 +90,36 @@ Python library through `SPARK_TEST_LIBPYTHON` or
 CPython 3.11 fallback with `SPARK_TEST_LIBPYTHON_311`; it does not replace the
 required 3.12-or-newer runtime for Python attribution.
 
-## LeviLamina experimental target
+## LeviLamina target
 
-`SPARK_BUILD_LEVILAMINA` is disabled by default. It is an experimental,
-source-build-only Windows x64 target for BDS 1.26.20.x with LeviLamina 26.20.7
+`SPARK_BUILD_LEVILAMINA` is disabled by default. It is a source-built Windows
+x64 target for BDS 1.26.20.x with LeviLamina 26.20.7
 inputs. It builds one native module (`levilamina_spark.dll`, with matching
 `levilamina_spark.pdb` for Windows symbols). The module supplies server and
-native-mod metadata, aggregate player ping, uptime, TPS/MSPT, and health data;
-world metadata, world gauges, gamerules, and packs remain unavailable. Uptime
-follows the BDS process lifetime and is not reset by module unload/load. The raw
-`/spark` command requires LeviLamina's `GameDirectors` permission level.
+native-mod metadata, aggregate player ping, uptime, TPS/MSPT, and health data,
+plus validated world, region, and chunk metadata for the three vanilla dimensions,
+including entity-type data and entity/loaded-chunk gauges. Tile/block-entity counts
+and gamerules remain unavailable. Active behavior-pack metadata uses the shared
+selected-pack discovery rules. Uptime follows the BDS process lifetime and is not
+reset by module unload/load. The raw `/spark` command requires LeviLamina's
+`GameDirectors` permission level.
+
+Chunk discard callbacks and snapshot reconciliation remove stale LL observations;
+each scan prunes expired dimension references. Module unload follows the same
+cleanup boundary: Spark first closes callback admission, then disconnects world
+subscriptions, waits for admitted callbacks to quiesce, and releases world
+access.
 
 CMake does not download or prepare the LeviLamina SDK, runtime, BDS data, or
-prelink tool. Supply every external input explicitly:
+prelink tool. The repository provides a public pinned-input bootstrap at
+[`tools/levilamina/prepare-sdk.ps1`](../tools/levilamina/prepare-sdk.ps1) and
+the corresponding [`runtime-lock.json`](../tools/levilamina/runtime-lock.json)
+and [`sdk-lock.json`](../tools/levilamina/sdk-lock.json). It downloads only the
+locked public SDK, runtime, prelink, SymbolProvider, and Bedrock runtime-data
+archives; it does not download a BDS server archive. Keep its output outside
+the repository. An optional `-CacheRoot <absolute-path>` may reuse existing
+archives, which are rehashed before use. Supply every resulting build input
+explicitly:
 
 - a pinned LeviLamina 26.20.7 SDK root;
 - the matching `LeviLamina.dll` and PDB;
@@ -112,33 +129,50 @@ prelink tool. Supply every external input explicitly:
 - `llvm-dlltool`; and
 - the repository's `tools/levilamina/spark-levilamina-imports.json` allowlist.
 
+Run the bootstrap self-test and preparation step from PowerShell. The receipt
+contains the exact paths used below:
+
+```powershell
+$llRoot = Join-Path $env:TEMP ('spark-ll-levilamina-' + [Guid]::NewGuid().ToString('N'))
+pwsh -NoProfile -File tools/levilamina/prepare-sdk.ps1 -SelfTest -OutputRoot $llRoot
+pwsh -NoProfile -File tools/levilamina/prepare-sdk.ps1 -OutputRoot $llRoot
+$receipt = Get-Content -Raw -LiteralPath (Join-Path $llRoot 'setup-receipt.json') | ConvertFrom-Json
+$sdk = $receipt.paths.sdk_root
+$runtimeDll = $receipt.paths.runtime_dll
+$runtimePdb = $receipt.paths.runtime_pdb
+$runtimeData = $receipt.paths.runtime_data
+$prelink = $receipt.paths.prelink
+$symbolProvider = $receipt.paths.symbolprovider_source
+```
+
 The SDK must contain the LeviLamina headers and dependency headers checked by
 `cmake/LeviLamina.cmake`. CMake verifies the expected-lite header and
 SymbolProvider source hashes, checks every required path, and fails closed when
 an input is absent or does not match the pinned source.
 
-From a Windows x64 `clang-cl` environment, use paths appropriate to the local
-SDK and runtime layout:
+From a Windows x64 `clang-cl` environment, configure the target with those
+receipt paths:
 
 ```powershell
-$sdk = 'C:\path\to\levilamina-sdk'
-$runtime = 'C:\path\to\levilamina-runtime'
 $allowlist = (Resolve-Path 'tools/levilamina/spark-levilamina-imports.json').Path
 
 conan install . --build=missing -of build-ll
-cmake -S . -B build-ll -G Ninja `
-  "-DCMAKE_TOOLCHAIN_FILE=build-ll/build/RelWithDebInfo/generators/conan_toolchain.cmake" `
-  "-DCMAKE_BUILD_TYPE=RelWithDebInfo" `
-  '-DENDSTONE_SPARK_BUILD_PLUGIN=OFF' `
-  '-DENDSTONE_SPARK_BUILD_SELFTEST=OFF' `
-  '-DSPARK_BUILD_LEVILAMINA=ON' `
-  "-DSPARK_LL_SDK_ROOT=$sdk" `
-  "-DSPARK_LL_RUNTIME_DLL=$runtime\plugins\LeviLamina\LeviLamina.dll" `
-  "-DSPARK_LL_RUNTIME_PDB=$runtime\plugins\LeviLamina\LeviLamina.pdb" `
-  "-DSPARK_LL_RUNTIME_DATA=$sdk\runtime-data\bedrock_runtime_data" `
-  "-DSPARK_LL_PRELINK=$sdk\tools\prelink\prelink.exe" `
-  "-DSPARK_LL_SYMBOLPROVIDER_SOURCE=$sdk\sources\symbolprovider\src\SymbolProvider.cpp" `
+$configureArgs = @(
+  "-DCMAKE_TOOLCHAIN_FILE=build-ll/build/RelWithDebInfo/generators/conan_toolchain.cmake",
+  "-DCMAKE_BUILD_TYPE=RelWithDebInfo",
+  "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
+  "-DENDSTONE_SPARK_BUILD_PLUGIN=OFF",
+  "-DENDSTONE_SPARK_BUILD_SELFTEST=OFF",
+  "-DSPARK_BUILD_LEVILAMINA=ON",
+  "-DSPARK_LL_SDK_ROOT=$sdk",
+  "-DSPARK_LL_RUNTIME_DLL=$runtimeDll",
+  "-DSPARK_LL_RUNTIME_PDB=$runtimePdb",
+  "-DSPARK_LL_RUNTIME_DATA=$runtimeData",
+  "-DSPARK_LL_PRELINK=$prelink",
+  "-DSPARK_LL_SYMBOLPROVIDER_SOURCE=$symbolProvider",
   "-DSPARK_LL_IMPORT_ALLOWLIST=$allowlist"
+)
+cmake -S . -B build-ll -G Ninja $configureArgs
 cmake --build build-ll --config RelWithDebInfo
 ctest --test-dir build-ll -C RelWithDebInfo --output-on-failure
 ```
@@ -147,16 +181,23 @@ The target synthesizes a named import library from the runtime DLL/PDB and
 allowlist, runs prelink against the Bedrock runtime data, and writes the native
 module to `build-ll/bin/spark/levilamina_spark.dll` with matching
 `levilamina_spark.pdb` and `manifest.json` beside it. The manifest entry names
-the DLL basename. LL's quiescent `unload` and `load` commands can remove and
-restore this module; `reload` and `reactivate` remain experimental. Stop and
+the DLL basename. The LL loader supports quiescent `unload`, `load`, `reload`,
+and `reactivate` operations for this module. Before an unload, Spark stops its
+application, drains callbacks, closes world and chunk subscriptions, and removes
+the command registration; a refused unload leaves the module loaded. Stop and
 save a profile first when its data must be preserved because unload does not
-export profiles automatically. A refused unload cannot be forced; use
-diagnostics or a normal server restart. The generated import library, receipt,
-prelink output, map, and PDB remain in the build tree.
+export profiles automatically. The generated import library, receipt, prelink
+output, map, and PDB remain in the build tree.
 
 The LeviLamina CTest entries include the import-generator self-test, callback
-protocol test, and cleanup-deadline test. They validate build-time and lifecycle
-contracts; they do not establish full runtime feature parity with Endstone.
+protocol test, world metadata and gauge tests, and cleanup-deadline test.
+
+The [`Build`](../.github/workflows/build.yml) workflow runs the LL
+preparation and build on `windows-latest` with clang-cl 20 and uploads the DLL,
+PDB, and manifest listed above as the `levilamina-spark-<run-id>` LL build
+artifact. The [`Release`](../.github/workflows/release.yml) workflow
+publishes the same three LL files as separate versioned release assets together
+with the Endstone artifacts; it does not package them as a combined archive.
 
 ## ABI and local source reuse
 

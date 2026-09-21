@@ -11,21 +11,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Preserve the active host identity when saving profiles recovered from a crash journal.
 
-- Add an experimental Windows x64 LeviLamina 26.20.x host target with a
-  permission-gated `/spark` commands, shared configuration, TPS/MSPT and health
-  statistics, background profiling, local execution-profile saves, and clean
-  server shutdown. Full feature parity remains in progress; lifecycle modes
-  beyond quiescent unload/load remain experimental.
+- Add a Windows x64 LeviLamina 26.20.x host target with a permission-gated
+  `/spark` command, shared configuration, TPS/MSPT and health statistics,
+  background profiling, local execution-profile saves, and clean server
+  shutdown.
 
 - Build the LeviLamina target as a single `levilamina_spark.dll` with its
   matching PDB and manifest, while retaining the existing LL host adapters and
   shared profiler services.
 
-- Add LL-managed quiescent unload/load for the single LeviLamina module; reload
-  and reactivate remain experimental while their combinations are validated.
+- Add LL-managed quiescent unload, load, reload, and reactivate for the single
+  LeviLamina module, including cleanup of world and chunk subscriptions before
+  physical unload.
 
-- Expose LeviLamina native-mod metadata and aggregate player ping. World
-  metadata, world gauges, gamerules, and packs remain unavailable.
+- Expose LeviLamina native-mod metadata and aggregate player ping.
+
+- Port the Endstone v0.11.4 world, region, and chunk metadata path to LeviLamina
+  for the three vanilla dimensions, including entity-type data plus entity and
+  loaded-chunk gauges, and reuse behavior-pack discovery. Tile/block-entity counts
+  and gamerules remain unavailable.
+
+### Fixed
+
+- Avoid reporting zero world counts when a host metadata read becomes unavailable.
 
 ## [0.6.0][0.6.0] - 2026-09-17
 
