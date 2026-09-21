@@ -43,7 +43,7 @@ class WorkflowTest(unittest.TestCase):
                 scripts.append(script)
             for name, job in jobs.items():
                 if "ctest --test-dir" in job:
-                    self.assertIn(name, ("linux", "windows"))
+                    self.assertIn(name, ("linux", "windows", "levilamina"))
         return scripts
 
     def test_native_runtime_jobs_pass_selected_python_library(self):
@@ -67,12 +67,12 @@ class WorkflowTest(unittest.TestCase):
     def test_build_enforces_project_quality(self):
         workflow = (ROOT / ".github" / "workflows" / "build.yml").read_text(encoding="utf-8")
         self.assertNotIn("conanfile.txt", workflow)
-        self.assertEqual(workflow.count("conanfile.py"), 4)
+        self.assertEqual(workflow.count("conanfile.py"), 5)
         self.assertEqual(workflow.count("tools/run_clang_tidy.py"), 2)
         self.assertEqual(workflow.count("--shard ${{ matrix.shard }}"), 2)
         self.assertEqual(workflow.count("shard: [core, native, application, tests-core, selftest]"), 2)
         self.assertEqual(workflow.count("--dry-run --Werror"), 2)
-        self.assertEqual(workflow.count("CMAKE_EXPORT_COMPILE_COMMANDS"), 4)
+        self.assertEqual(workflow.count("CMAKE_EXPORT_COMPILE_COMMANDS"), 5)
         self.assertEqual(workflow.count("CMAKE_CXX_SCAN_FOR_MODULES:BOOL=OFF"), 2)
         self.assertIn("name: Build & test Linux", workflow)
         self.assertIn("name: Build & test Windows", workflow)
@@ -86,12 +86,13 @@ class WorkflowTest(unittest.TestCase):
         self.assertNotIn("conanfile.txt", workflow)
         self.assertNotIn("gh release upload", workflow)
         self.assertEqual(workflow.count("gh release create"), 1)
-        self.assertIn("needs: [release, windows, linux]", workflow)
         self.assertLess(workflow.index("  windows:"), workflow.index("  publish:"))
         self.assertLess(workflow.index("  linux:"), workflow.index("  publish:"))
         self.assertIn("ctest --test-dir build/RelWithDebInfo --output-on-failure", workflow)
         self.assertEqual(workflow.count("tools/verify_windows_artifacts.ps1"), 2)
         self.assertIn("release-windows/SHA256SUMS", workflow)
+        self.assertIn("needs: [release, windows, linux, levilamina]", workflow)
+        self.assertIn("release-levilamina/manifest.json", workflow)
         self.assertNotIn("SHA256SUMS-windows", workflow)
         self.assertIn("python tests/native/alloc/verify_linux_gateway.py elf release-linux/endstone_spark.so", workflow)
         self.assertNotIn("endstone_spark-linux-x86_64.tar.gz", workflow)
@@ -107,6 +108,9 @@ class WorkflowTest(unittest.TestCase):
                 "release-windows/endstone_spark.dll",
                 "release-windows/endstone_spark.pdb",
                 "release-linux/endstone_spark.so",
+                "release-levilamina/levilamina_spark.dll",
+                "release-levilamina/levilamina_spark.pdb",
+                "release-levilamina/manifest.json",
             ],
         )
 
