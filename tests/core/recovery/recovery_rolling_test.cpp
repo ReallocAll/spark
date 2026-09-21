@@ -33,6 +33,7 @@ void testRollingJournalRecovery()
     cfg.max_total_bytes = 1024;
     cfg.flush_interval_ms = 20;
     cfg.sync_interval_ms = 20;
+    cfg.shutdown_timeout_ms = 30000;
 
     RecoveryWriter writer(cfg);
     if (!writer.start()) {
@@ -58,7 +59,7 @@ void testRollingJournalRecovery()
     }
 
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
-    writer.stop();
+    assert(writer.stop());
 
     assert(!std::filesystem::exists(dir / "segment-0.jnl"));
     assert(std::filesystem::exists(dir / "metadata.snapshot"));
@@ -102,6 +103,7 @@ void testCorruptSnapshotWrongSession()
     cfg.max_total_bytes = 1024;
     cfg.flush_interval_ms = 20;
     cfg.sync_interval_ms = 20;
+    cfg.shutdown_timeout_ms = 30000;
 
     RecoveryWriter writer(cfg);
     assert(writer.start());
@@ -118,7 +120,7 @@ void testCorruptSnapshotWrongSession()
         writer.journalSample(sample);
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
-    writer.stop();
+    assert(writer.stop());
 
     assert(!std::filesystem::exists(dir / "segment-0.jnl"));
     assert(std::filesystem::exists(dir / "metadata.snapshot"));

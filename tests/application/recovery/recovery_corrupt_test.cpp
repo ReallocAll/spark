@@ -299,6 +299,7 @@ void testRollingSnapshotRecovery()
     cfg.max_total_bytes = 1024;
     cfg.flush_interval_ms = 20;
     cfg.sync_interval_ms = 20;
+    cfg.shutdown_timeout_ms = 30000;
     spark::RecoveryWriter writer(cfg);
     assert(writer.start());
     writer.journalSessionConfig(4000, 0, false, false, false, 1, 0, false, "Console", false, "rolling recovery", {}, 0);
@@ -315,7 +316,7 @@ void testRollingSnapshotRecovery()
         writer.journalTickEvent(static_cast<std::uint64_t>(i), 5.0);
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
-    writer.stop();
+    assert(writer.stop());
 
     assert(!std::filesystem::exists(recovery / "segment-0.jnl"));
     assert(std::filesystem::exists(recovery / "metadata.snapshot"));
