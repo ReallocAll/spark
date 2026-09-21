@@ -1,0 +1,257 @@
+{
+  "lock_version": 1,
+  "locked": true,
+  "platform": "windows-x64",
+  "runtime": {
+    "levilamina_version": "26.20.7",
+    "levilamina_commit": "bbb374245d57001c89b02d281d3b658ca3658c71",
+    "bedrock_runtime_data_version": "26.20.5-server.7",
+    "bedrock_runtime_data_sha256": "0a3cf3d3b581767c38f3d03142b8d453093be982fc2305014379a1ec44921e9f",
+    "runtime_dll_sha256": "4e65d6828107c98a859bf98ac1da93d8a5b9dc1acca15642fe31ac79f7e0d56b"
+  },
+  "archives": [
+    {
+      "id": "levilamina-source",
+      "version": "26.20.7",
+      "commit": "bbb374245d57001c89b02d281d3b658ca3658c71",
+      "file": "levilamina-source-bbb374245d57001c89b02d281d3b658ca3658c71.zip",
+      "url": "https://github.com/LiteLDev/LeviLamina/archive/bbb374245d57001c89b02d281d3b658ca3658c71.zip",
+      "sha256": "220fade30bb07aedc9126a55fe64a14040f783a2f3acdef6d5de86a437f3eae3",
+      "size": 18042115,
+      "kind": "source"
+    },
+    {
+      "id": "xmake-repo",
+      "version": "snapshot",
+      "commit": "7d52218c8ebe66ae92ce9f716f312bfd8d0e2d31",
+      "file": "xmake-repo-7d52218c8ebe66ae92ce9f716f312bfd8d0e2d31.zip",
+      "url": "https://github.com/LiteLDev/xmake-repo/archive/7d52218c8ebe66ae92ce9f716f312bfd8d0e2d31.zip",
+      "sha256": "82dcd6745bde37608eca3d778084012c9e1b1bd60fa00b37d32bc7b056a61db5",
+      "size": 108592,
+      "kind": "metadata"
+    },
+    {
+      "id": "entt",
+      "version": "3.15.0",
+      "commit": "d4014c74dc3793aba95ae354d6e23a026c2796db",
+      "file": "entt-v3.15.0.zip",
+      "url": "https://github.com/skypjack/entt/archive/d4014c74dc3793aba95ae354d6e23a026c2796db.zip",
+      "sha256": "dbdf1a444eaffc29072765e40ac6e0e0cf79337014d5423cfe7ac64a757e8cef",
+      "size": 1043887,
+      "kind": "header"
+    },
+    {
+      "id": "expected-lite",
+      "version": "0.8.0",
+      "commit": "f339d2f73730f8fee4412f5e4938717866ecef48",
+      "file": "expected-lite-v0.8.0-f339d2f73730f8fee4412f5e4938717866ecef48.zip",
+      "url": "https://github.com/martinmoene/expected-lite/archive/f339d2f73730f8fee4412f5e4938717866ecef48.zip",
+      "sha256": "0c0fe8296fc9fa322895c54cfc797115e67271e46f3a6132c45eda67078b13e0",
+      "size": 80133,
+      "kind": "header"
+    },
+    {
+      "id": "fmt",
+      "version": "11.2.0",
+      "commit": "40626af88bd7df9a5fb80be7b25ac85b122d6c21",
+      "file": "fmt-11.2.0.zip",
+      "url": "https://github.com/fmtlib/fmt/archive/40626af88bd7df9a5fb80be7b25ac85b122d6c21.zip",
+      "sha256": "9f80db8263c8607811f23db58c8eaffd85edc5f9f1f437e8279fc14875713e5f",
+      "size": 769713,
+      "kind": "header"
+    },
+    {
+      "id": "gsl",
+      "version": "4.2.0",
+      "commit": "2828399820ef4928cc89b65605dca5dc68efca6e",
+      "file": "GSL-v4.2.0.zip",
+      "url": "https://github.com/microsoft/GSL/archive/2828399820ef4928cc89b65605dca5dc68efca6e.zip",
+      "sha256": "2a9d3f83dbb1d391d673aa7cdefae961014fdacfcc23597e22b40efeb290cdab",
+      "size": 88005,
+      "kind": "header"
+    },
+    {
+      "id": "glm",
+      "version": "1.0.1",
+      "commit": "0af55ccecd98d4e5a8d1fad7de25ba429d60e863",
+      "file": "glm-1.0.1.zip",
+      "url": "https://github.com/g-truc/glm/archive/0af55ccecd98d4e5a8d1fad7de25ba429d60e863.zip",
+      "sha256": "d53f8d8a3fd3f63a5da21c64701985ed933a93064620bb1a22dcb37ddb3795d1",
+      "size": 6319607,
+      "kind": "header"
+    },
+    {
+      "id": "leveldb",
+      "version": "1.23",
+      "commit": "99b3c03b3284f5886f9ef9a4ef703d57373e61be",
+      "file": "leveldb-1.23.zip",
+      "url": "https://github.com/google/leveldb/archive/99b3c03b3284f5886f9ef9a4ef703d57373e61be.zip",
+      "sha256": "4a8e9d7fbe2a33c48b9e71ae7142ec4cacfddcb90f69421e26af13033599c19e",
+      "size": 340533,
+      "kind": "header"
+    },
+    {
+      "id": "magic_enum",
+      "version": "0.9.7",
+      "commit": "e046b69a3736d314fad813e159b1c192eaef92cd",
+      "file": "magic_enum-v0.9.7.zip",
+      "url": "https://github.com/Neargye/magic_enum/archive/e046b69a3736d314fad813e159b1c192eaef92cd.zip",
+      "sha256": "d4cd98392691c7a8bfbbf1ea4175df4cff14088ab0ad28979957b29cbb43b384",
+      "size": 245321,
+      "kind": "header"
+    },
+    {
+      "id": "nlohmann_json",
+      "version": "3.12.0",
+      "commit": "65ee68451d8eb2b5f3a30b410476ab83deb3289b",
+      "file": "nlohmann-json-v3.12.0.zip",
+      "url": "https://github.com/nlohmann/json/archive/65ee68451d8eb2b5f3a30b410476ab83deb3289b.zip",
+      "sha256": "728fe50cce95161d54353fa26d8acc09bcfefe98bdf4517ec6f58a1496cf5fe7",
+      "size": 10243783,
+      "kind": "header"
+    },
+    {
+      "id": "rapidjson",
+      "version": "2025.02.05",
+      "commit": "24b5e7a8b27f42fa16b96fc70aade9106cf7102f",
+      "file": "rapidjson-2025.02.05.zip",
+      "url": "https://github.com/Tencent/rapidjson/archive/24b5e7a8b27f42fa16b96fc70aade9106cf7102f.zip",
+      "sha256": "df07f5ddfebbc2940181039f6c939ec2764a7303ef79b17958d9792a364306bb",
+      "size": 1277585,
+      "kind": "header"
+    },
+    {
+      "id": "type_safe",
+      "version": "0.2.4",
+      "commit": "1dbea7936a1e389caa692d01bb3f5ba4b6da7d82",
+      "file": "type-safe-v0.2.4.zip",
+      "url": "https://github.com/foonathan/type_safe/archive/1dbea7936a1e389caa692d01bb3f5ba4b6da7d82.zip",
+      "sha256": "0757238cc70dcadb85eb01504b58b8e096d6c0c0734de93be67ae52d7816e9a3",
+      "size": 149539,
+      "kind": "header"
+    },
+    {
+      "id": "pcg_cpp",
+      "version": "1.0.0",
+      "commit": "428802d1a5634f96bcd0705fab379ff0113bcf13",
+      "file": "pcg-cpp-v1.0.0.zip",
+      "url": "https://github.com/imneme/pcg-cpp/archive/428802d1a5634f96bcd0705fab379ff0113bcf13.zip",
+      "sha256": "a2a92ebb20e4562e69c996bfd67fac5c170afc8681dbab4f20a1b1ba337cbc6b",
+      "size": 125767,
+      "kind": "header"
+    },
+    {
+      "id": "pfr",
+      "version": "2.1.1",
+      "commit": "294a4976bd04829dd204aaf9e9fd30338a5d3199",
+      "file": "pfr-2.1.1.zip",
+      "url": "https://github.com/boostorg/pfr/archive/294a4976bd04829dd204aaf9e9fd30338a5d3199.zip",
+      "sha256": "e1bcab63d94d482d883f430091f26348511d036dc67e395b1e0691021f56d118",
+      "size": 155479,
+      "kind": "header"
+    },
+    {
+      "id": "concurrentqueue",
+      "version": "1.0.4",
+      "commit": "6dd38b8a1dbaa7863aa907045f32308a56a6ff5d",
+      "file": "concurrentqueue-v1.0.4.zip",
+      "url": "https://github.com/cameron314/concurrentqueue/archive/6dd38b8a1dbaa7863aa907045f32308a56a6ff5d.zip",
+      "sha256": "a5010332a54be3ce6e85967d68c9b22a8254b263ffa88d8e0a2b6143d8e3052c",
+      "size": 2917787,
+      "kind": "header"
+    },
+    {
+      "id": "stb",
+      "version": "2025.03.14",
+      "commit": "f0569113c93ad095470c54bf34a17b36646bbbb5",
+      "file": "stb-2025.03.14.zip",
+      "url": "https://github.com/nothings/stb/archive/f0569113c93ad095470c54bf34a17b36646bbbb5.zip",
+      "sha256": "b62be3009cb9d4b6385bd4854bddf72d8e91f4e19d1347d6cf9589b19f70d45d",
+      "size": 1754150,
+      "kind": "header"
+    },
+    {
+      "id": "parallel-hashmap",
+      "version": "2.0.0",
+      "commit": "2ec799017610ef831f4dc29c21fb3cce7e4a19b9",
+      "file": "parallel-hashmap-v2.0.0.tar.gz",
+      "url": "https://github.com/greg7mdp/parallel-hashmap/archive/refs/tags/v2.0.0.tar.gz",
+      "sha256": "4f462f51a3468166ea4cf87c80e001dc1999093264cf55cbda3492ca39a7730b",
+      "size": 2059086,
+      "kind": "header",
+      "xmake_archive_sha256": "4f462f51a3468166ea4cf87c80e001dc1999093264cf55cbda3492ca39a7730b"
+    },
+    {
+      "id": "symbolprovider",
+      "version": "1.3.0",
+      "commit": "6c93ec45c8455992ee726d92df60316c8e731c44",
+      "file": "symbolprovider-v1.3.0.zip",
+      "url": "https://github.com/LiteLDev/SymbolProvider/archive/6c93ec45c8455992ee726d92df60316c8e731c44.zip",
+      "sha256": "e4dcf2aa1c636192f32eb1345c2a93d6f75762a229bef08245368893a55ee862",
+      "size": 5620,
+      "kind": "source"
+    },
+    {
+      "id": "prelink",
+      "version": "0.7.1",
+      "commit": null,
+      "file": "prelink-v0.7.1-windows-x64.zip",
+      "url": "https://github.com/LiteLDev/prelink-release/releases/download/v0.7.1/prelink-v0.7.1-windows-x64.zip",
+      "sha256": "186a6539b0602e386554acc66422b2daf4a587ae514ccf73fb4238df86a134f1",
+      "size": 1790495,
+      "kind": "tool"
+    },
+    {
+      "id": "bedrock-runtime-data",
+      "version": "26.20.5-server.7",
+      "commit": "ce63ffdb1f7c0d12144653959e040d77aac585a6",
+      "file": "bedrock-runtime-data-v26.20.5-server.7-windows-x64.zip",
+      "url": "https://github.com/LiteLDev/bedrock-runtime-data/releases/download/v26.20.5-server.7/bedrock-runtime-data-v26.20.5-server.7-windows-x64.zip",
+      "sha256": "0a3cf3d3b581767c38f3d03142b8d453093be982fc2305014379a1ec44921e9f",
+      "size": 33611034,
+      "kind": "runtime-data"
+    }
+  ],
+  "layouts": {
+    "levilamina_common": {
+      "archive": "levilamina-source",
+      "source_root": "src",
+      "destination": "levilamina/include/common",
+      "include_roots": ["ll", "mc"],
+      "include_extensions": [".h", ".hpp", ".in"]
+    },
+    "levilamina_server": {
+      "archive": "levilamina-source",
+      "source_root": "src-server",
+      "destination": "levilamina/include/server",
+      "include_roots": ["ll", "mc"],
+      "include_extensions": [".h", ".hpp", ".in"]
+    }
+  },
+  "dependencies": {
+    "entt": {"source": "src/entt", "destination": "dependencies/entt/include/entt"},
+    "expected-lite": {"source": "include", "destination": "dependencies/expected-lite/include", "header_sha256": "14a2a36b32bcb66e1128c721e2ade36a90d9d9ad7207ea5ea81662d5d1f41cbf", "header_path": "nonstd/expected.hpp"},
+    "fmt": {"source": "include/fmt", "destination": "dependencies/fmt/include/fmt"},
+    "gsl": {"source": "include/gsl", "destination": "dependencies/gsl/include/gsl", "extensions": [".h", ".hpp", ".in", ""]},
+    "glm": {"source": "glm", "destination": "dependencies/glm/include/glm", "extensions": [".h", ".hpp", ".inl"]},
+    "leveldb": {"source": "include/leveldb", "destination": "dependencies/leveldb/include/leveldb"},
+    "magic_enum": {"source": "include/magic_enum", "destination": "dependencies/magic_enum/include/magic_enum"},
+    "nlohmann_json": {"source": "include/nlohmann", "destination": "dependencies/nlohmann_json/include/nlohmann"},
+    "rapidjson": {"source": "include/rapidjson", "destination": "dependencies/rapidjson/include/rapidjson"},
+    "type_safe": {"source": "include/type_safe", "destination": "dependencies/type_safe/include/type_safe"},
+    "pcg_cpp": {"source": "include", "destination": "dependencies/pcg_cpp/include/pcg_cpp"},
+    "pfr": {"source": "include/boost", "destination": "dependencies/pfr/include/boost"},
+    "concurrentqueue": {"source": ".", "destination": "dependencies/concurrentqueue/include", "files": ["concurrentqueue.h", "blockingconcurrentqueue.h", "lightweightsemaphore.h"]},
+    "stb": {"source": ".", "destination": "dependencies/stb/include/stb", "files_glob": ["*.h", "*.c"]},
+    "parallel-hashmap": {"source": "parallel_hashmap", "destination": "dependencies/parallel-hashmap/include/parallel_hashmap"}
+  },
+  "compiled_inputs": {
+    "runtime_dll": "build-inputs/levilamina/LeviLamina.dll",
+    "runtime_dll_sha256": "4e65d6828107c98a859bf98ac1da93d8a5b9dc1acca15642fe31ac79f7e0d56b",
+    "unresolved": [
+      "LL import library is intentionally not synthesized in this preparation step",
+      "symbolprovider source is staged for later ABI review; no compiled library is claimed",
+      "fmt, leveldb, cpr, mimalloc, trampoline, demangler, libhat, and other non-header LL dependencies have no compiled SDK library in this staging; resolve them in the configured target build or use verified runtime exports"
+    ]
+  }
+}
