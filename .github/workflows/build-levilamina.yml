@@ -54,7 +54,6 @@ jobs:
           if ($version -notmatch "clang version 20\.") {
             throw "clang-cl 20 is required"
           }
-          & (Join-Path $llvmBin "llvm-dlltool.exe") --version
 
       - name: Set up Python
         uses: actions/setup-python@v6
