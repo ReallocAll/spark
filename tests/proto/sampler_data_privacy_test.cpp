@@ -42,20 +42,20 @@ std::vector<std::string> serializedMethods(std::string_view profile)
 int main()
 {
     const std::vector<MethodCase> cases = {
-        {R"(lambda at C:\Users\Alice\src\bedrock.cpp:12:34')", R"(lambda at bedrock.cpp:12:34')"},
-        {R"(lambda at D:/Build/src/forward.cpp:22:3')", R"(lambda at forward.cpp:22:3')"},
-        {R"(lambda at C:\Users\O'Connor\src\server.cpp:17:5')", R"(lambda at server.cpp:17:5')"},
-        {R"(lambda at \\server\share\src\server.cpp:56:7')", R"(lambda at server.cpp:56:7')"},
-        {R"(lambda at /home/alice/src/server.cpp:89:10')", R"(lambda at server.cpp:89:10')"},
-        {R"(lambda at /home/O'Connor/src/server.cpp:27:9')", R"(lambda at server.cpp:27:9')"},
-        {R"(call lambda at C:\Users\Alice\one.cpp:1:2' + lambda at /home/alice/two.cpp:3:4')",
-         R"(call lambda at one.cpp:1:2' + lambda at two.cpp:3:4')"},
-        {"ordinary /home/alice/source.cpp", "ordinary /home/alice/source.cpp"},
-        {R"(lambda at C:\Users\Alice\bad.cpp:12:x')", R"(lambda at C:\Users\Alice\bad.cpp:12:x')"},
-        {R"(prefix lambda at C:\Users\Alice\bad.cpp:12:x' then lambda at /tmp/good.cpp:7:8')",
-         R"(prefix lambda at C:\Users\Alice\bad.cpp:12:x' then lambda at good.cpp:7:8')"},
-        {R"(lambda at /tmp/zero.cpp:0:2')", R"(lambda at /tmp/zero.cpp:0:2')"},
-        {R"(lambda at src/relative.cpp:4:5')", R"(lambda at src/relative.cpp:4:5')"},
+        {.input = R"(lambda at C:\Users\Alice\src\bedrock.cpp:12:34')", .expected = R"(lambda at bedrock.cpp:12:34')"},
+        {.input = R"(lambda at D:/Build/src/forward.cpp:22:3')", .expected = R"(lambda at forward.cpp:22:3')"},
+        {.input = R"(lambda at C:\Users\O'Connor\src\server.cpp:17:5')", .expected = R"(lambda at server.cpp:17:5')"},
+        {.input = R"(lambda at \\server\share\src\server.cpp:56:7')", .expected = R"(lambda at server.cpp:56:7')"},
+        {.input = R"(lambda at /home/alice/src/server.cpp:89:10')", .expected = R"(lambda at server.cpp:89:10')"},
+        {.input = R"(lambda at /home/O'Connor/src/server.cpp:27:9')", .expected = R"(lambda at server.cpp:27:9')"},
+        {.input = R"(call lambda at C:\Users\Alice\one.cpp:1:2' + lambda at /home/alice/two.cpp:3:4')",
+         .expected = R"(call lambda at one.cpp:1:2' + lambda at two.cpp:3:4')"},
+        {.input = "ordinary /home/alice/source.cpp", .expected = "ordinary /home/alice/source.cpp"},
+        {.input = R"(lambda at C:\Users\Alice\bad.cpp:12:x')", .expected = R"(lambda at C:\Users\Alice\bad.cpp:12:x')"},
+        {.input = R"(prefix lambda at C:\Users\Alice\bad.cpp:12:x' then lambda at /tmp/good.cpp:7:8')",
+         .expected = R"(prefix lambda at C:\Users\Alice\bad.cpp:12:x' then lambda at good.cpp:7:8')"},
+        {.input = R"(lambda at /tmp/zero.cpp:0:2')", .expected = R"(lambda at /tmp/zero.cpp:0:2')"},
+        {.input = R"(lambda at src/relative.cpp:4:5')", .expected = R"(lambda at src/relative.cpp:4:5')"},
     };
 
     spark::ModuleTable modules;
@@ -65,7 +65,7 @@ int main()
         const spark::FrameKey frame{.module = modules.intern("bedrock_server"),
                                     .rva = static_cast<std::uint64_t>(i + 1),
                                     .raw_address = static_cast<std::uint64_t>(i + 1)};
-        const std::uint64_t weight = static_cast<std::uint64_t>(i + 1);
+        const auto weight = static_cast<std::uint64_t>(i + 1);
         tree.log({frame}, static_cast<std::int32_t>(i), weight);
         resolved.emplace(frame, spark::ResolvedFrame{.class_name = "bedrock_server", .method_name = cases[i].input});
     }

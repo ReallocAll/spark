@@ -14,7 +14,7 @@ namespace spark {
 
 namespace {
 
-constexpr std::string_view kLambdaSourceMarker = "lambda at ";
+constexpr std::string_view KLambdaSourceMarker = "lambda at ";
 
 bool isDecimalDigit(char ch)
 {
@@ -57,12 +57,12 @@ std::string sanitizeNativeMethodName(std::string_view method_name)
     std::size_t copied = 0;
     std::string sanitized;
     while (true) {
-        const std::size_t marker = method_name.find(kLambdaSourceMarker, search);
+        const std::size_t marker = method_name.find(KLambdaSourceMarker, search);
         if (marker == std::string_view::npos) {
             break;
         }
-        const std::size_t path_start = marker + kLambdaSourceMarker.size();
-        const std::size_t next_marker = method_name.find(kLambdaSourceMarker, path_start);
+        const std::size_t path_start = marker + KLambdaSourceMarker.size();
+        const std::size_t next_marker = method_name.find(KLambdaSourceMarker, path_start);
         std::size_t candidate = path_start;
         bool closed = false;
         while (true) {

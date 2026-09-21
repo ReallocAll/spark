@@ -29,7 +29,7 @@ struct RecoveredMetadataFields {
     std::int64_t start_time_ms = 0;
 };
 
-RecoveredMetadataFields readRecoveredMetadata(std::string_view profile)
+static RecoveredMetadataFields readRecoveredMetadata(std::string_view profile)
 {
     RecoveredMetadataFields fields;
     ProtoReader data(profile);
