@@ -1,17 +1,17 @@
 #include "platform/levilamina/host_parser_provenance.h"
 
-#include "platform/levilamina/host_command_parameter.h"
+#include <delayimp.h>
+#include <windows.h>
 
 #include <bit>
-#include <windows.h>
-#include <delayimp.h>
-
 #include <cstdint>
 #include <cstring>
 #include <limits>
 #include <string_view>
 #include <type_traits>
 #include <utility>
+
+#include "platform/levilamina/host_command_parameter.h"
 
 namespace spark::levilamina::detail {
 
@@ -190,7 +190,7 @@ bool validateParser(::CommandParameterData::ParseFunction parser, std::uintptr_t
     const auto address = std::bit_cast<std::uintptr_t>(parser);
     std::uintptr_t parser_module = 0;
     if (environment.imageRangeOwnedByHost(address, 1, current_module, HostRawImageAccess::Executable, parser_module,
-                                           basename)) {
+                                          basename)) {
         return true;
     }
     const auto loaded_ll = environment.loadedLeviLamina();
@@ -398,8 +398,8 @@ bool findRawTextDelayImport(BoundedImageReader const &reader, std::uintptr_t imp
     }
     if (!descriptor_terminated) {
         return setError(error, delay_directory.Size / sizeof(ImgDelayDescr) > kMaxDelayDescriptors
-                               ? "parser provenance delay-import descriptor bound exhausted"
-                               : "parser provenance delay-import descriptor terminator is missing");
+                                   ? "parser provenance delay-import descriptor bound exhausted"
+                                   : "parser provenance delay-import descriptor terminator is missing");
     }
     if (state.matches != 1) {
         return setError(error, state.matches == 0 ? "parser provenance exact RawText import is missing"
@@ -428,9 +428,9 @@ bool validateRawTextParserProvenance(BoundedImageReader const &reader, std::uint
     return true;
 }
 
-bool validateHostRawParameterTemplateInternal(
-    HostRawParameterTemplate &value, std::uintptr_t current_module,
-    HostRawParameterValidationEnvironment const &environment, std::string &error)
+bool validateHostRawParameterTemplateInternal(HostRawParameterTemplate &value, std::uintptr_t current_module,
+                                              HostRawParameterValidationEnvironment const &environment,
+                                              std::string &error)
 {
     error.clear();
     if (current_module == 0 || value.parse_rule == nullptr) {
@@ -439,8 +439,8 @@ bool validateHostRawParameterTemplateInternal(
     std::uintptr_t rule_module_handle = 0;
     std::string rule_module;
     if (!environment.imageRangeOwnedByHost(reinterpret_cast<std::uintptr_t>(value.parse_rule),
-                                            sizeof(::CommandRegistry::ParamParseRule), current_module,
-                                            HostRawImageAccess::Readable, rule_module_handle, rule_module)) {
+                                           sizeof(::CommandRegistry::ParamParseRule), current_module,
+                                           HostRawImageAccess::Readable, rule_module_handle, rule_module)) {
         return setError(error, "host raw parse rule is outside the LL/BDS image");
     }
     if (value.parse_rule->symbol.get() != ::CommandRegistry::Symbol{::CommandRegistry::HardNonTerminal::RawText}) {

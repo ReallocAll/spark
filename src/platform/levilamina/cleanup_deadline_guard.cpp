@@ -1,7 +1,7 @@
 #include "platform/levilamina/cleanup_deadline_guard.h"
 
-#include <cstdlib>
 #include <cstdint>
+#include <cstdlib>
 #include <exception>
 #include <limits>
 
@@ -16,7 +16,11 @@
 namespace spark::levilamina {
 
 struct CleanupDeadlineGuard::Control {
-    enum class State { Dormant, Armed, Completed };
+    enum class State {
+        Dormant,
+        Armed,
+        Completed
+    };
 
     mutable std::mutex mutex;
     std::condition_variable condition;
@@ -45,10 +49,8 @@ constexpr auto kDormantCancellationTimeout = std::chrono::seconds{5};
 #endif
 }
 
-[[nodiscard]] bool waitForNativeThreadUntil(
-    std::thread& thread,
-    CleanupDeadlineGuard::Clock::time_point deadline
-) noexcept
+[[nodiscard]] bool waitForNativeThreadUntil(std::thread &thread,
+                                            CleanupDeadlineGuard::Clock::time_point deadline) noexcept
 {
 #ifdef _WIN32
     const HANDLE native_handle = reinterpret_cast<HANDLE>(thread.native_handle());
@@ -68,10 +70,10 @@ constexpr auto kDormantCancellationTimeout = std::chrono::seconds{5};
         }
 
         const auto timeout_count = timeout.count();
-        const auto wait_milliseconds = static_cast<DWORD>(
-            timeout_count > static_cast<std::int64_t>((std::numeric_limits<DWORD>::max)() - 1)
-                ? (std::numeric_limits<DWORD>::max)() - 1
-                : timeout_count);
+        const auto wait_milliseconds =
+            static_cast<DWORD>(timeout_count > static_cast<std::int64_t>((std::numeric_limits<DWORD>::max)() - 1)
+                                   ? (std::numeric_limits<DWORD>::max)() - 1
+                                   : timeout_count);
         const DWORD result = ::WaitForSingleObject(native_handle, wait_milliseconds);
         if (result == WAIT_OBJECT_0) {
             return CleanupDeadlineGuard::Clock::now() < deadline;
@@ -101,9 +103,8 @@ CleanupDeadlineGuard::CleanupDeadlineGuard() : control_(std::make_shared<Control
             }
 
             const auto deadline = control->deadline;
-            if (!control->condition.wait_until(lock, deadline, [&] {
-                    return control->state == Control::State::Completed;
-                })) {
+            if (!control->condition.wait_until(lock, deadline,
+                                               [&] { return control->state == Control::State::Completed; })) {
                 lock.unlock();
                 terminateOnTimeoutImpl();
             }

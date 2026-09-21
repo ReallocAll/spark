@@ -20,16 +20,16 @@
 #endif
 
 #include "core/profiler/profile_mode.h"
+#include "core/profiler/profiling_window.h"
 #include "core/profiler/thread_grouper.h"
 #include "core/recovery/journal_reader.h"
+#include "core/spark_constants.h"
 #include "core/util/monotonic_time.h"
 #include "native/sampler/call_tree.h"
 #include "native/sampler/sampler.h"
 #include "native/sampler/types.h"
 #include "native/symbol/symbolicate.h"
-#include "core/profiler/profiling_window.h"
 #include "proto/sampler_data.h"
-#include "core/spark_constants.h"
 
 namespace spark {
 

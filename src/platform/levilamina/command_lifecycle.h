@@ -24,13 +24,8 @@ private:
 };
 
 template <typename CleanupFn, typename ReportFn, typename FailClosedFn>
-[[nodiscard]] bool runPublicationFailurePath(
-    PublicationBoundary const &boundary,
-    std::exception_ptr exception,
-    CleanupFn &&cleanup,
-    ReportFn &&report,
-    FailClosedFn &&fail_closed
-)
+[[nodiscard]] bool runPublicationFailurePath(PublicationBoundary const &boundary, std::exception_ptr exception,
+                                             CleanupFn &&cleanup, ReportFn &&report, FailClosedFn &&fail_closed)
 {
     const auto safe_report = [&] {
         try {

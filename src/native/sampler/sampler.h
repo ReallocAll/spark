@@ -16,13 +16,13 @@
 
 #include <moodycamel/concurrentqueue.h>
 
+#include "core/profiler/profiling_window.h"
 #include "native/python/python_attribution.h"
 #include "native/sampler/call_tree.h"
 #include "native/sampler/heartbeat.h"
 #include "native/sampler/recovery_sink.h"
 #include "native/sampler/thread_selector.h"
 #include "native/sampler/types.h"
-#include "core/profiler/profiling_window.h"
 
 namespace spark {
 

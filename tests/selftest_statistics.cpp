@@ -49,6 +49,7 @@
 #include "native/alloc/elf_import_hooks.h"
 #endif
 #include "core/profiler/profiler.h"
+#include "core/spark_constants.h"
 #include "core/stats/executable_hash.h"
 #include "core/stats/statistics_service.h"
 #include "core/stats/tick_monitor.h"
@@ -61,7 +62,6 @@
 #include "net/profile_file.h"
 #include "proto/sampler_data.h"
 #include "selftest_internal.h"
-#include "core/spark_constants.h"
 
 namespace spark::selftest {
 

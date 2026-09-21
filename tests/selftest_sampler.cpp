@@ -12,12 +12,12 @@
 #include <vector>
 
 #include "core/profiler/profiler.h"
+#include "core/spark_constants.h"
 #include "native/sampler/sampler.h"
 #include "native/sampler/thread_info.h"
 #include "native/sampler/types.h"
 #include "proto/sampler_data.h"
 #include "selftest_internal.h"
-#include "core/spark_constants.h"
 
 namespace spark {
 

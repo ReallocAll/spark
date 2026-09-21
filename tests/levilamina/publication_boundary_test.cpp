@@ -5,8 +5,8 @@
 #include <string_view>
 #include <vector>
 
-#include "platform/levilamina/command_lifecycle.h"
 #include "platform/levilamina/cleanup_deadline_guard.h"
+#include "platform/levilamina/command_lifecycle.h"
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -72,12 +72,8 @@ int runChildMode(wchar_t const *mode)
     }
     catch (...) {
         const bool returned = spark::levilamina::runPublicationFailurePath(
-            boundary,
-            std::current_exception(),
-            [] {},
-            [](std::exception_ptr) {},
-            [] { spark::levilamina::CleanupDeadlineGuard::terminateOnTimeout(); }
-        );
+            boundary, std::current_exception(), [] {}, [](std::exception_ptr) {},
+            [] { spark::levilamina::CleanupDeadlineGuard::terminateOnTimeout(); });
         return returned ? 1 : 2;
     }
     return 3;
@@ -92,9 +88,8 @@ int wmain(int argc, wchar_t **argv)
 {
     try {
         if (argc == 2) {
-            if (argv[1] == nullptr ||
-                (std::wstring_view{argv[1]} != L"--first-factory" &&
-                 std::wstring_view{argv[1]} != L"--second-factory")) {
+            if (argv[1] == nullptr || (std::wstring_view{argv[1]} != L"--first-factory" &&
+                                       std::wstring_view{argv[1]} != L"--second-factory")) {
                 return 64;
             }
             return runChildMode(argv[1]);
@@ -106,12 +101,9 @@ int wmain(int argc, wchar_t **argv)
         bool cleanup_called = false;
         bool report_called = false;
         require(!spark::levilamina::runPublicationFailurePath(
-                    prepublication,
-                    std::exception_ptr{},
-                    [&] { cleanup_called = true; },
+                    prepublication, std::exception_ptr{}, [&] { cleanup_called = true; },
                     [&](std::exception_ptr) { report_called = true; },
-                    [] { throw std::runtime_error{"unexpected pre-publication fail-closed"}; }
-                ),
+                    [] { throw std::runtime_error{"unexpected pre-publication fail-closed"}; }),
                 "pre-publication failure did not return false");
         require(cleanup_called && report_called, "pre-publication failure did not run cleanup/report");
 
@@ -130,10 +122,8 @@ int wmain(int argc, wchar_t **argv)
         std::fprintf(stderr, "publication-boundary: first-exit=%lu second-exit=%lu expected=%lu\n",
                      static_cast<unsigned long>(first_exit), static_cast<unsigned long>(second_exit),
                      static_cast<unsigned long>(kFailClosedExit));
-        require(first_exit == kFailClosedExit,
-                "first-factory failure returned without controlled termination");
-        require(second_exit == kFailClosedExit,
-                "second-factory failure returned without controlled termination");
+        require(first_exit == kFailClosedExit, "first-factory failure returned without controlled termination");
+        require(second_exit == kFailClosedExit, "second-factory failure returned without controlled termination");
         return 0;
     }
     catch (...) {

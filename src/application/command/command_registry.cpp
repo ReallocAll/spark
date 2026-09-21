@@ -5,8 +5,8 @@
 #include <exception>
 #include <utility>
 
-#include "core/util/format.h"
 #include "core/spark_constants.h"
+#include "core/util/format.h"
 
 namespace spark {
 namespace {

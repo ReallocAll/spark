@@ -15,8 +15,8 @@ public:
     CleanupDeadlineGuard();
     ~CleanupDeadlineGuard();
 
-    CleanupDeadlineGuard(CleanupDeadlineGuard const&)            = delete;
-    CleanupDeadlineGuard& operator=(CleanupDeadlineGuard const&) = delete;
+    CleanupDeadlineGuard(CleanupDeadlineGuard const &) = delete;
+    CleanupDeadlineGuard &operator=(CleanupDeadlineGuard const &) = delete;
 
     void arm(std::chrono::steady_clock::duration timeout);
     [[nodiscard]] Clock::time_point deadline() const;

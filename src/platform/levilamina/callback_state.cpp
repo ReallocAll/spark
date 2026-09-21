@@ -7,7 +7,11 @@ namespace spark::levilamina {
 namespace {
 
 struct WorkSlotState {
-    enum class Status { Pending, Claimed, Cancelled };
+    enum class Status {
+        Pending,
+        Claimed,
+        Cancelled
+    };
 };
 
 }  // namespace
@@ -21,14 +25,13 @@ struct CallbackState::WorkSlot {
     std::function<void()> body;
 };
 
-CallbackState::DiagnosticCallbacks::DiagnosticCallbacks(DiagnosticCallbacks&& other) noexcept
-    : info(std::move(other.info)),
-      error(std::move(other.error)),
-      owner_(std::move(other.owner_)),
+CallbackState::DiagnosticCallbacks::DiagnosticCallbacks(DiagnosticCallbacks &&other) noexcept
+    : info(std::move(other.info)), error(std::move(other.error)), owner_(std::move(other.owner_)),
       reserved_activity_(std::exchange(other.reserved_activity_, 0))
-{}
+{
+}
 
-CallbackState::DiagnosticCallbacks& CallbackState::DiagnosticCallbacks::operator=(DiagnosticCallbacks&& other) noexcept
+CallbackState::DiagnosticCallbacks &CallbackState::DiagnosticCallbacks::operator=(DiagnosticCallbacks &&other) noexcept
 {
     if (this == &other) {
         return *this;
@@ -50,7 +53,7 @@ CallbackState::DiagnosticCallbacks::~DiagnosticCallbacks() noexcept
     }
 }
 
-CallbackState::CleanupScope::CleanupScope(CallbackState* state) noexcept : state_(state)
+CallbackState::CleanupScope::CleanupScope(CallbackState *state) noexcept : state_(state)
 {
     if (state_ != nullptr) {
         frame_.state = state_;
@@ -65,7 +68,7 @@ CallbackState::CleanupScope::~CleanupScope() noexcept
     }
 }
 
-CallbackState::ActivityScope::ActivityScope(CallbackState* state, std::size_t count) noexcept
+CallbackState::ActivityScope::ActivityScope(CallbackState *state, std::size_t count) noexcept
     : state_(state), count_(count)
 {
     frame_.state = state;
@@ -373,7 +376,7 @@ std::vector<std::function<void()>> CallbackState::takePendingPayloads()
     std::vector<std::function<void()>> payloads;
     std::lock_guard lock(mutex_);
     payloads.reserve(static_cast<std::size_t>(pending_work_slots_));
-    for (auto const& slot : pending_) {
+    for (auto const &slot : pending_) {
         if (slot->status == WorkSlot::Status::Pending) {
             static_cast<void>(cancelSlotLocked(slot, payloads.emplace_back()));
         }
@@ -383,7 +386,7 @@ std::vector<std::function<void()>> CallbackState::takePendingPayloads()
     return payloads;
 }
 
-void CallbackState::destroyPendingPayloads(std::vector<std::function<void()>>& payloads)
+void CallbackState::destroyPendingPayloads(std::vector<std::function<void()>> &payloads)
 {
     const auto count = payloads.size();
     if (count == 0) {
@@ -432,7 +435,7 @@ CallbackState::DiagnosticCallbacks CallbackState::takeDiagnosticCallbacks()
     return callbacks;
 }
 
-void CallbackState::destroyDiagnosticCallbacks(DiagnosticCallbacks& callbacks) noexcept
+void CallbackState::destroyDiagnosticCallbacks(DiagnosticCallbacks &callbacks) noexcept
 {
     auto owner = callbacks.owner_;
     if (!owner) {
@@ -498,9 +501,7 @@ bool CallbackState::waitProducer(std::chrono::steady_clock::time_point deadline)
 bool CallbackState::waitQuiescent(std::chrono::steady_clock::time_point deadline)
 {
     std::unique_lock lock(mutex_);
-    return condition_.wait_until(lock, deadline, [this] {
-        return active_bodies_ == 0 && pending_work_slots_ == 0;
-    });
+    return condition_.wait_until(lock, deadline, [this] { return active_bodies_ == 0 && pending_work_slots_ == 0; });
 }
 
 bool CallbackState::waitClosed(std::chrono::steady_clock::time_point deadline)
@@ -509,7 +510,7 @@ bool CallbackState::waitClosed(std::chrono::steady_clock::time_point deadline)
     return condition_.wait_until(lock, deadline, [this] { return phase_ == Phase::Closed; });
 }
 
-void CallbackState::invokeSlot(std::shared_ptr<WorkSlot> const& slot)
+void CallbackState::invokeSlot(std::shared_ptr<WorkSlot> const &slot)
 {
     std::function<void()> body;
     std::function<void()> cancelled_payload;
@@ -625,7 +626,7 @@ void CallbackState::reportException(std::exception_ptr exception) noexcept
     try {
         std::rethrow_exception(exception);
     }
-    catch (std::exception const& error) {
+    catch (std::exception const &error) {
         reportError(std::string{"dispatcher body failed: "} + error.what());
     }
     catch (...) {
@@ -669,7 +670,10 @@ bool CallbackState::isProducerThread() const
     return producer_started_ && producer_thread_ == std::this_thread::get_id();
 }
 
-bool CallbackState::isInBodyOnCurrentThread() const { return isActiveOnCurrentThread(); }
+bool CallbackState::isInBodyOnCurrentThread() const
+{
+    return isActiveOnCurrentThread();
+}
 
 CallbackState::Phase CallbackState::phase() const
 {
@@ -717,7 +721,7 @@ void CallbackState::reserveActiveLocked(std::size_t count) noexcept
     active_bodies_ += static_cast<std::uint64_t>(count);
 }
 
-void CallbackState::destroySubmitter(std::shared_ptr<Submitter>& submitter, bool reserved) noexcept
+void CallbackState::destroySubmitter(std::shared_ptr<Submitter> &submitter, bool reserved) noexcept
 {
     if (!submitter) {
         return;
@@ -731,7 +735,7 @@ void CallbackState::destroySubmitter(std::shared_ptr<Submitter>& submitter, bool
     destroy_scope.release();
 }
 
-void CallbackState::destroyDiagnostic(std::shared_ptr<Diagnostic>& callback, bool reserved) noexcept
+void CallbackState::destroyDiagnostic(std::shared_ptr<Diagnostic> &callback, bool reserved) noexcept
 {
     if (!callback) {
         return;
@@ -745,7 +749,7 @@ void CallbackState::destroyDiagnostic(std::shared_ptr<Diagnostic>& callback, boo
     destroy_scope.release();
 }
 
-void CallbackState::destroyFatalHandler(std::shared_ptr<FatalHandler>& handler, bool reserved) noexcept
+void CallbackState::destroyFatalHandler(std::shared_ptr<FatalHandler> &handler, bool reserved) noexcept
 {
     if (!handler) {
         return;
@@ -759,7 +763,7 @@ void CallbackState::destroyFatalHandler(std::shared_ptr<FatalHandler>& handler, 
     destroy_scope.release();
 }
 
-bool CallbackState::cancelSlotLocked(std::shared_ptr<WorkSlot> const& slot, std::function<void()>& payload)
+bool CallbackState::cancelSlotLocked(std::shared_ptr<WorkSlot> const &slot, std::function<void()> &payload)
 {
     if (slot->status != WorkSlot::Status::Pending) {
         return false;
@@ -772,19 +776,19 @@ bool CallbackState::cancelSlotLocked(std::shared_ptr<WorkSlot> const& slot, std:
     return true;
 }
 
-void CallbackState::pushTls(TlsFrame& frame) noexcept
+void CallbackState::pushTls(TlsFrame &frame) noexcept
 {
     frame.previous = tlsTop();
     tlsTop() = &frame;
 }
 
-void CallbackState::popTls(TlsFrame& frame) noexcept
+void CallbackState::popTls(TlsFrame &frame) noexcept
 {
     if (tlsTop() == &frame) {
         tlsTop() = frame.previous;
     }
     else {
-        auto* current = tlsTop();
+        auto *current = tlsTop();
         while (current != nullptr && current->previous != &frame) {
             current = current->previous;
         }
@@ -798,7 +802,7 @@ void CallbackState::popTls(TlsFrame& frame) noexcept
 
 bool CallbackState::isActiveOnCurrentThread() const noexcept
 {
-    for (auto* frame = tlsTop(); frame != nullptr; frame = frame->previous) {
+    for (auto *frame = tlsTop(); frame != nullptr; frame = frame->previous) {
         if (frame->state == this) {
             return true;
         }
@@ -806,9 +810,9 @@ bool CallbackState::isActiveOnCurrentThread() const noexcept
     return false;
 }
 
-CallbackState::TlsFrame*& CallbackState::tlsTop() noexcept
+CallbackState::TlsFrame *&CallbackState::tlsTop() noexcept
 {
-    thread_local TlsFrame* top = nullptr;
+    thread_local TlsFrame *top = nullptr;
     return top;
 }
 

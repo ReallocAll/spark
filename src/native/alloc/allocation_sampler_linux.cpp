@@ -44,6 +44,7 @@
 #include "native/alloc/allocation_diagnostics_test_access.h"
 #include "native/alloc/allocation_lifecycle_test_access.h"
 #endif
+#include "core/profiler/profiling_window.h"
 #include "native/alloc/allocation_quiescence.h"
 #include "native/alloc/bounded_event_queue.h"
 #include "native/alloc/byte_sampler.h"
@@ -52,7 +53,6 @@
 #include "native/alloc/linux_owned_thread.h"
 #include "native/alloc/stable_shard_snapshot.h"
 #include "native/sampler/thread_info.h"
-#include "core/profiler/profiling_window.h"
 
 namespace spark {
 namespace {

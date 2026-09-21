@@ -5,14 +5,14 @@
 
 #include "application/profiler/live_statistics_payload.h"
 #include "application/profiler/platform_metadata_capture.h"
+#include "core/profiler/profiling_window.h"
+#include "core/spark_constants.h"
 #include "core/stats/system_stats.h"
 #include "core/util/base64.h"
 #include "core/util/format.h"
 #include "core/util/monotonic_time.h"
 #include "net/bytebin.h"
 #include "net/gzip.h"
-#include "core/profiler/profiling_window.h"
-#include "core/spark_constants.h"
 
 namespace spark {
 

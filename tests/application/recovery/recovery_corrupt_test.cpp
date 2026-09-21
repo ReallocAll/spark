@@ -349,8 +349,8 @@ void testRecoveryUsesCurrentPlatformIdentity()
     cfg.sync_interval_ms = 20;
     spark::RecoveryWriter writer(cfg);
     assert(writer.start());
-    writer.journalSessionConfig(4000, 0, false, false, false, 1, 0, false, "Console", false, "identity recovery",
-                                {}, 0);
+    writer.journalSessionConfig(4000, 0, false, false, false, 1, 0, false, "Console", false, "identity recovery", {},
+                                0);
     writer.journalModuleDef(0, "bedrock_server");
     writer.journalThreadDef(1, 100, "Server thread");
     spark::Sample sample;
