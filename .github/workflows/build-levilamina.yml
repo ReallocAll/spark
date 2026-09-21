@@ -146,26 +146,29 @@ jobs:
         run: |
           $artifactRoot = (Resolve-Path -LiteralPath "build-ll/bin/spark").Path
           $expected = @("levilamina_spark.dll", "levilamina_spark.pdb", "manifest.json")
-          $actual = @(Get-ChildItem -LiteralPath $artifactRoot -File | Select-Object -ExpandProperty Name | Sort-Object)
-          if (@($actual | Where-Object { $expected -notcontains $_ }).Count -ne 0) {
-            throw "unexpected files are present in the upload directory"
-          }
-          if (@($expected | Where-Object { $actual -notcontains $_ }).Count -ne 0) {
-            throw "one or more required artifacts are missing"
-          }
           foreach ($name in $expected) {
-            if (-not (Test-Path -LiteralPath (Join-Path $artifactRoot $name) -PathType Leaf)) {
+            $sourcePath = Join-Path $artifactRoot $name
+            if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
               throw "required artifact is missing: $name"
             }
+          }
+          $artifactStage = Join-Path $env:RUNNER_TEMP "spark-ll-artifacts"
+          if (Test-Path -LiteralPath $artifactStage) {
+            throw "artifact staging directory already exists: $artifactStage"
+          }
+          New-Item -ItemType Directory -Path $artifactStage | Out-Null
+          foreach ($name in $expected) {
+            Copy-Item -LiteralPath (Join-Path $artifactRoot $name) -Destination (Join-Path $artifactStage $name)
+          }
+          $staged = @(Get-ChildItem -LiteralPath $artifactStage -File | Select-Object -ExpandProperty Name | Sort-Object)
+          if ($staged.Count -ne $expected.Count -or @($staged | Where-Object { $expected -notcontains $_ }).Count -ne 0 -or @($expected | Where-Object { $staged -notcontains $_ }).Count -ne 0) {
+            throw "artifact staging set does not match the expected files"
           }
 
       - name: Upload LeviLamina artifacts
         uses: actions/upload-artifact@v7
         with:
           name: levilamina-spark-${{ github.run_id }}
-          path: |
-            build-ll/bin/spark/levilamina_spark.dll
-            build-ll/bin/spark/levilamina_spark.pdb
-            build-ll/bin/spark/manifest.json
+          path: ${{ runner.temp }}/spark-ll-artifacts
           if-no-files-found: error
           retention-days: 14
