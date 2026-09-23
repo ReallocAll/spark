@@ -126,11 +126,11 @@ class WorkflowTest(unittest.TestCase):
         self.assertIn('VALUE "ProductVersion", "@PROJECT_VERSION@.0\\0"', resource)
         self.assertNotIn("0.5.3", resource)
 
-    def test_cmake_uses_pinned_official_dependency_defaults(self):
+    def test_cmake_uses_official_dependency_defaults(self):
         cmake = (ROOT / "cmake" / "Endstone.cmake").read_text(encoding="utf-8")
         expected = {
             "ENDSTONE_SPARK_ENDSTONE_GIT_REPOSITORY": "https://github.com/EndstoneMC/endstone.git",
-            "ENDSTONE_SPARK_ENDSTONE_GIT_TAG": "v0.11.11",
+            "ENDSTONE_SPARK_ENDSTONE_GIT_TAG": "v0.11",
             "ENDSTONE_SPARK_PAPI_GIT_REPOSITORY": "https://github.com/EndstoneMC/papi.git",
             "ENDSTONE_SPARK_PAPI_GIT_TAG": "v0.1.0",
         }
