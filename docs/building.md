@@ -3,7 +3,7 @@
 The repository builds the shared profiler and application layers on their own,
 the Endstone plugin on Windows or Linux, and an isolated LeviLamina module on
 Windows x64. The normal build uses CMake, Ninja, Conan 2, and Clang. The first
-configure may fetch the pinned public Endstone API and PlaceholderAPI headers,
+configure may fetch the public Endstone API branch and pinned PlaceholderAPI headers,
 so network access is required unless those sources are supplied locally.
 
 For host setup, follow Endstone's [installation guide](https://endstone.dev/latest/getting-started/installation/)
@@ -39,8 +39,8 @@ cmake --build build
 ```
 
 On Windows, run from an environment where `clang-cl` can find the MSVC
-toolchain and Windows SDK. The plugin build fetches the pinned Endstone v0.11.11
-public API and Endstone PAPI headers v0.1.0. It produces
+toolchain and Windows SDK. The plugin build fetches the Endstone `v0.11` branch
+for its public API and Endstone PAPI headers v0.1.0. It produces
 `endstone_spark.dll` on Windows and `endstone_spark.so` on Linux.
 
 The equivalent generated-preset commands are:
