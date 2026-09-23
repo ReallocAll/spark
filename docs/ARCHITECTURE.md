@@ -1,129 +1,154 @@
 # Architecture
 
-Endstone Spark is a native statistical profiler for Minecraft Bedrock Dedicated Server (BDS). It samples native execution and allocation call stacks, aggregates them into spark-compatible profiles, and uploads or saves them. The plugin also maintains a 15-minute rolling history for TPS, MSPT, CPU, player counts, and world gauges.
+spark for Bedrock is a native statistical profiler for Bedrock Dedicated Server
+(BDS). The shared application samples native execution and allocation stacks,
+aggregates them, exports spark-compatible profiles, and maintains rolling
+statistics independently of a profile session. Host adapters connect that core
+to Endstone or to the LeviLamina module.
 
-## Source Tree
+## Source tree
 
-```
+```text
 src/
-  application/                # platform-independent business orchestration
-    activity/                 #   /spark activity command
-    command/                  #   command registry, sender interface
-    health/                   #   /spark health command
-    placeholder/              #   Spark placeholder formatting and dispatch
-    profiler/                 #   profiler service, profile exporter
-    tick_monitor/             #   /spark tickmonitor command
+  application/                # host-independent orchestration and commands
+    activity/                 #   activity log command
+    command/                  #   command registry and sender interface
+    health/                   #   TPS, ping, health, and dashboard commands
+    placeholder/              #   Endstone PlaceholderAPI formatting
+    profiler/                 #   profiler service, export, and live viewer
+    tick_monitor/             #   long-tick monitor
     spark_application.h/.cpp  #   central application container
-    platform_capabilities.h   #   MainThreadDispatcher, ProfileMetadataProvider, ResultNotifier
-
-  core/                       # platform-independent services (no Endstone includes)
+    platform_capabilities.h   #   dispatcher, metadata, and notifier interfaces
+  core/                       # host-independent services
     activity/                 #   bounded activity log
-    command/                  #   flag/argument parsing
-    config/                   #   TOML config, trusted-viewer state
-    metadata/                 #   server.properties allowlist parser
-    profiler/                 #   profiler orchestration, thread grouper
-    recovery/                 #   crash-safe journal: writer, reader, player, watchdog
-    stats/                    #   rolling statistics, tick monitor, system/ping/network stats
-    util/                     #   base64, formatting, world region grouping
-    ws/                       #   crypto (RSA2048), WebSocket protocol, live viewer socket
-
-  native/                     # native backend (no Endstone includes)
-    sampler/                  #   execution sampler, call tree, capture, thread selection
-    symbol/                   #   symbolication, symbol guesser (DWARF + PE64)
-    alloc/                    #   allocation hooks, bounded queue, thread filter
-    python/                   #   bounded Python shadow-stack attribution support
-
+    command/                  #   argument and flag parsing
+    config/                   #   TOML config and trusted viewers
+    metadata/                 #   safe server.properties and behavior-pack data
+    profiler/                 #   profile orchestration and grouping
+    recovery/                 #   journal, replay, and stall watchdog
+    stats/                    #   rolling metrics, network, ping, and system data
+    ws/                       #   crypto, WebSocket protocol, and live viewer
+    spark_constants.h         #   project version
+  native/                     # sampler, symbol guesser, allocation hooks, Python bridge
   platform/
-    endstone/                 # Endstone adapters and optional PAPI integration
-
+    endstone/                 # Endstone adapters and optional PlaceholderAPI integration
+    levilamina/               # Windows x64 LeviLamina adapter/module
   proto/                      # spark protobuf serialization
-  net/                        # gzip, bytebin upload, WebSocket transport, profile persistence
-  plugin.cpp                  # Endstone plugin lifecycle (thin bootstrap)
-  spark_constants.h           # version string
+  net/                        # gzip, bytebin, WebSocket transport, profile files
 ```
 
-## CMake Structure
+`src/platform/levilamina/` contains the native module entry point in
+`spark_mod.cpp`, the host-independent application bridge in
+`application_bridge.cpp`, and typed host adapters in `adapters.cpp`. It is
+compiled only when `SPARK_BUILD_LEVILAMINA=ON` and targets Windows x64 with
+BDS 1.26.20.x and LeviLamina 26.20.7. The adapter supplies the same shared
+application services as Endstone plus LL-native lifecycle and world access.
 
-Layered targets enforce dependency direction:
+## Layering
 
-```
-spark_profiling_time (static) <- monotonic clock and profiling-window alignment
-                                NO Endstone dependency
+The CMake targets enforce dependency direction:
 
-spark_native (static)        <- native/sampler, native/symbol, native/alloc
-                               links: spark_profiling_time, cpptrace, concurrentqueue,
-                                      distorm
-                               NO Endstone dependency
-
-spark_core (static)          <- core/, proto/, net/
-                               links: spark_native, zlib, curl, tomlplusplus, OpenSSL (Linux)
-                               NO Endstone dependency
-
-spark_application (static)   <- application/
-                               links: spark_core
-                               NO Endstone dependency
-
-spark_papi_integration       <- platform/endstone/papi_integration
-                               links: spark_application, public PAPI headers
-
-spark (endstone_add_plugin)  <- platform/endstone/, plugin.cpp
-                               links: spark_application, spark_papi_integration
-                               Endstone API only here
+```text
+spark_profiling_time  <- monotonic clocks and profiling-window alignment
+spark_native          <- sampler, symbol guesser, allocation hooks
+spark_core            <- config, profiler, statistics, recovery, proto, network
+spark_application     <- commands, services, export, host capability interfaces
+spark_papi_integration <- optional Endstone PlaceholderAPI adapter
+spark                 <- Endstone adapters and src/platform/endstone/plugin.cpp
+spark_levilamina      <- LeviLamina module objects, bridge, and host SDK inputs
 ```
 
-Dependency direction (enforced by CMake target structure):
+`src/core/profiler/profiling_window.h` is the small shared interface compiled by
+`spark_profiling_time` and consumed by native sampling code. Native code may
+include this one header by exact path; the shared header itself has no project
+internal includes.
 
-```
-platform/endstone -> application -> core -> native -> profiling_time
-```
+The shared path is `platform adapter -> application -> core -> native ->
+profiling_time`. `spark_application`, `spark_core`, and `spark_native` do not
+include host SDK headers. Endstone's API is confined to `src/platform/endstone/`;
+LeviLamina's SDK is confined to `src/platform/levilamina/`
+and its isolated CMake target.
 
-## Key Components
+## Application and host boundaries
 
-### Application Layer (`application/`)
+`SparkApplication` owns the profiler service, health service, activity log, tick
+monitor, statistics service, recovery journal, and trusted viewer state. It
+receives three host capabilities:
 
-`SparkApplication` owns all platform-independent services and dispatches ticks and commands. `ProfilerService` manages profiler sessions, background profiling, live viewer connections, and background export. Three capability interfaces (`MainThreadDispatcher`, `ProfileMetadataProvider`, `ResultNotifier`) abstract platform dependencies.
+- `MainThreadDispatcher` posts work back to the host's server thread.
+- `ProfileMetadataProvider` supplies version, player, resource, and host metadata.
+- `ResultNotifier` delivers command and background-operation results.
 
-### Execution Sampler (`native/sampler/`)
+The Endstone bootstrap in `src/platform/endstone/plugin.cpp` constructs those adapters, starts the
+application, schedules tick forwarding, and registers the optional PAPI
+expansion. The LeviLamina bootstrap in `src/platform/levilamina/spark_mod.cpp`
+waits for `ServerStartedEvent`, creates the bridge with LeviLamina data/config
+directories, forwards tick events, and registers the raw `/spark` command at
+`GameDirectors` permission.
 
-Captures native thread stacks at a bounded interval. Linux uses `SIGPROF` with cpptrace's safe raw-trace path; Windows suspends the target thread and walks it with `StackWalk64`, retrying `ResumeThread` up to 32 times after each capture. If all retries fail while the target remains alive, the process is terminated before BDS can remain suspended. Samples are enqueued to a lock-free queue and aggregated on a background thread.
+LeviLamina's typed metadata adapter supplies game/loader versions, native-mod
+records, player count, uptime, aggregate ping, behavior-pack metadata, and world
+records for the three vanilla dimensions. World access tracks loaded chunks and
+entity identities for internal deduplication. World metadata includes entity-type
+counts, while gauges report entity and loaded-chunk totals. Chunk discard
+callbacks and snapshot reconciliation remove stale observations; scans prune
+expired dimension references. Tile/block-entity gauges and gamerules are not
+exposed by this adapter. Endstone's adapter has additional public APIs for fields
+that are available on that host; the shared application does not assume those
+fields exist.
 
-### Allocation Profiler (`native/alloc/`)
+## Execution sampler
 
-Samples allocation stacks by requested bytes on Linux x86-64 by redirecting supported ELF allocator imports and on Windows x64 through Spark-owned `WindowsAllocationIatHooks` and process-lifetime Permanent-IAT gateways. The Windows backend patches supported UCRT and heap import slots to permanent gateways whose handler admission can be closed and drained before plugin unload; the gateways then fall through to the original allocator without retaining pointers into unloaded Spark code. Refresh rescans loaded modules so newly loaded importers receive the same ownership-checked IAT treatment. Hook callbacks enqueue bounded records for later processing. Live exports deep-copy cumulative aggregator state or rebuild a temporary retained tree from the authoritative live index without stopping hooks. The hook path is free of allocations, string construction, and unbounded containers.
+The sampler captures selected native thread stacks at a bounded interval. Linux
+uses `SIGPROF` with cpptrace's safe raw-trace path. Windows suspends a target,
+walks it with `StackWalk64`, and retries `ResumeThread` up to 32 times. If a live
+target cannot be restored, the process is terminated before it can remain
+suspended. Captures enter bounded queues and are aggregated on a background
+thread.
 
-### Symbol Guesser (`native/symbol/`)
+## Allocation profiler
 
-Unresolved frames in the BDS main executable may receive conservative runtime guesses from unwind metadata, RTTI, vtables, thunks, and decoded string references. The guesser runs at export time (not on the sampling hot path) and produces deterministic labels that retain the original RVA and identify their evidence source.
+Allocation sampling redirects supported allocator imports on Linux x86-64 and
+Windows x64. Hook callbacks are reentrancy-safe, bounded, and free of blocking,
+symbolization, and unbounded allocation. Linux gateway code is process-lifetime
+code; Windows uses Spark-owned Permanent-IAT gateways. Export reports hook
+coverage, queue pressure, lifecycle drops, and incomplete data explicitly.
 
-### Statistics Service (`core/stats/`)
+## Symbolization
 
-Maintains bounded rolling TPS, MSPT, CPU, player-count, and world-gauge histories independently of an active profile. `/spark tps`, `/spark health`, profile metadata, and per-second Viewer windows all read from this shared service.
+Resolved platform symbols take priority. Unresolved frames in the BDS main
+executable may receive deterministic runtime guesses from unwind metadata, RTTI,
+vtables, thunks, and decoded string references. Guesses retain their RVA and
+identify evidence strength. The running executable is the product-time source;
+debug databases and IDA data are not runtime dependencies.
 
-### Crash Recovery (`core/recovery/`)
+## Statistics and recovery
 
-`RecoveryWriter` journals module, thread, sample, and tick records to segmented files via a bounded lock-free queue. `StallWatchdog` monitors the main-thread heartbeat on an independent thread and journals stall begin/end events. On startup, `RecoveryPlayer` replays an unclean supported session and exports a recovered profile.
+The statistics service keeps bounded rolling TPS, MSPT, CPU, player-count, ping,
+network, and host-gauge histories independently of profiling. Commands, profile
+metadata, health reports, and live viewer windows read the same snapshots.
 
-### Live Viewer (`core/ws/`)
+`RecoveryWriter` journals module, thread, sample, and tick records through a
+bounded queue. `StallWatchdog` records main-thread stall begin/end events without
+calling host APIs or stopping a profile. On startup, `RecoveryPlayer` can replay
+an unclean supported session into a local profile.
 
-`ViewerSocket` manages a WebSocket connection to the spark live viewer, uploading initial sampler data and pushing payload IDs on window rotation. RSA2048-SHA256 signing (`Crypto`) authenticates viewer clients; `TrustedViewersState` persists approved public keys separately from the user-owned config file.
+## Live viewer and shutdown
 
-### Platform Adapter (`platform/endstone/`)
+`ViewerSocket` manages the WebSocket relay, while export workers perform gzip and
+bytebin uploads away from the server tick. RSA2048-SHA256 signatures and
+`TrustedViewersState` authenticate viewer clients.
 
-Thin Endstone implementations of the capability interfaces and `CommandSender`. `plugin.cpp` creates adapters and delegates to `SparkApplication`.
-
-The optional PAPI adapter constructs a provider-owned `spark` expansion from
-PAPI's public headers. It reads targeted rolling values on the server thread and
-unregisters before Spark application teardown. A soft dependency gives PAPI first
-enable order when installed; no PAPI binary is linked into Spark.
-
-## Platform Safety
-
-- Sampling stays off the BDS tick hot path except for the minimum bounded capture.
-- Linux signal-handler code remains async-signal-safe.
-- Windows thread suspension and stack walking restore target-thread state on normal and recoverable failure paths; a bounded retry failure is fatal and terminates the process before unload.
-- Allocation hooks remain reentrancy-safe and never block allocator threads.
-- Plugin shutdown uses bounded waits for health, export, viewer, and native backend work. If quiescence is not proven before a deadline, shutdown reports failure and the bootstrap aborts before unloading the plugin; this is a fail-closed policy, not a guarantee that timed-out work is safe to unload.
+Sampling, health, export, viewer, native backend work, and LL world callbacks use
+bounded shutdown waits. If quiescence is not proven before the deadline, the host
+bootstrap stops before unloading the module. A timeout is not treated as evidence
+that unload is safe.
 
 ## Dependencies
 
-Conan supplies cpptrace, concurrentqueue, zlib, expected-lite, libcurl, tomlplusplus, and nlohmann_json. Linux additionally requires OpenSSL for crypto. When `ENDSTONE_SPARK_BUILD_PLUGIN=ON`, CMake fetches Endstone's public plugin API and pinned public PAPI headers; plugin-off builds do not fetch either host SDK. CMake also directly fetches the pinned distorm revision used for strict x86-64 instruction-boundary decoding. Windows allocation hooking is implemented entirely by Spark-owned `WindowsAllocationIatHooks` and Permanent-IAT gateways.
+Conan supplies cpptrace, concurrentqueue, zlib, expected-lite, libcurl,
+tomlplusplus, and nlohmann_json. Linux also uses OpenSSL and libc++/libc++abi.
+CMake fetches the pinned distorm decoder for strict x86-64 instruction-boundary
+decoding. Endstone builds fetch its pinned public API and PAPI headers. The
+LeviLamina target uses explicitly supplied SDK/runtime/prelink inputs and does
+not fetch or package those external host files.

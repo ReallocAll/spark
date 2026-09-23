@@ -130,7 +130,7 @@ struct ProfileMetadata {
     std::int32_t number_of_ticks = 0;
     std::string endstone_version;
     std::string minecraft_version;
-    std::string engine_version;  // e.g. "endstone-spark 0.1.0"
+    std::string engine_version;  // e.g. "spark for Bedrock 0.1.0"
     std::string comment;
     std::string creator_name = "Console";
     bool creator_is_player = false;
@@ -156,6 +156,8 @@ struct ProfileMetadata {
     std::unordered_map<PythonCodeId, PythonCodeMetadata> python_codes;
     WorldInfo world;
     std::string socket_channel_info_proto;  // field 8: SocketChannelInfo (empty for non-live)
+    std::string platform_name = "Endstone";
+    std::string platform_brand = "Endstone";
 };
 
 // Collect every distinct frame key present in the tree (for batch symbolication).

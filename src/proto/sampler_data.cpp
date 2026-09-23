@@ -4,15 +4,134 @@
 #include <set>
 #include <unordered_set>
 
-#include "profiling_window.h"
+#include "core/profiler/profiling_window.h"
 #include "proto/metrics_proto.h"
 #include "proto/proto_writer.h"
 #include "proto/statistics_proto.h"
-#include "spark_constants.h"
+#include "core/spark_constants.h"
 
 namespace spark {
 
 namespace {
+
+constexpr std::string_view KLambdaSourceMarker = "lambda at ";
+
+bool isDecimalDigit(char ch)
+{
+    return ch >= '0' && ch <= '9';
+}
+
+bool isPositiveDecimal(std::string_view value)
+{
+    if (value.empty()) {
+        return false;
+    }
+    bool nonzero = false;
+    for (const char ch : value) {
+        if (!isDecimalDigit(ch)) {
+            return false;
+        }
+        nonzero = nonzero || ch != '0';
+    }
+    return nonzero;
+}
+
+bool isSeparator(char ch)
+{
+    return ch == '/' || ch == '\\';
+}
+
+bool isAbsoluteSourcePath(std::string_view path)
+{
+    const bool drive_path = path.size() >= 3 &&
+                            ((path[0] >= 'a' && path[0] <= 'z') || (path[0] >= 'A' && path[0] <= 'Z')) &&
+                            path[1] == ':' && isSeparator(path[2]);
+    const bool unc_path = path.size() >= 2 && isSeparator(path[0]) && isSeparator(path[1]);
+    const bool posix_path = !path.empty() && path[0] == '/';
+    return drive_path || unc_path || posix_path;
+}
+
+std::string sanitizeNativeMethodName(std::string_view method_name)
+{
+    std::size_t search = 0;
+    std::size_t copied = 0;
+    std::string sanitized;
+    while (true) {
+        const std::size_t marker = method_name.find(KLambdaSourceMarker, search);
+        if (marker == std::string_view::npos) {
+            break;
+        }
+        const std::size_t path_start = marker + KLambdaSourceMarker.size();
+        const std::size_t next_marker = method_name.find(KLambdaSourceMarker, path_start);
+        std::size_t candidate = path_start;
+        bool closed = false;
+        while (true) {
+            const std::size_t apostrophe = method_name.find('\'', candidate);
+            if (apostrophe == std::string_view::npos ||
+                (next_marker != std::string_view::npos && next_marker < apostrophe)) {
+                break;
+            }
+
+            std::size_t column_start = apostrophe;
+            while (column_start > path_start && isDecimalDigit(method_name[column_start - 1])) {
+                --column_start;
+            }
+            if (column_start == apostrophe || column_start == path_start || method_name[column_start - 1] != ':') {
+                candidate = apostrophe + 1;
+                continue;
+            }
+            const std::size_t line_end = column_start - 1;
+            std::size_t line_start = line_end;
+            while (line_start > path_start && isDecimalDigit(method_name[line_start - 1])) {
+                --line_start;
+            }
+            if (line_start == line_end || line_start == path_start || method_name[line_start - 1] != ':') {
+                candidate = apostrophe + 1;
+                continue;
+            }
+            const std::size_t path_end = line_start - 1;
+            const std::string_view path = method_name.substr(path_start, path_end - path_start);
+            if (!isPositiveDecimal(method_name.substr(line_start, line_end - line_start)) ||
+                !isPositiveDecimal(method_name.substr(column_start, apostrophe - column_start))) {
+                candidate = apostrophe + 1;
+                continue;
+            }
+            closed = true;
+            if (!isAbsoluteSourcePath(path)) {
+                search = apostrophe + 1;
+                break;
+            }
+
+            const std::size_t separator = path.find_last_of("/\\");
+            if (separator == std::string_view::npos || separator + 1 == path.size()) {
+                search = apostrophe + 1;
+                break;
+            }
+            if (sanitized.empty()) {
+                sanitized.reserve(method_name.size());
+            }
+            sanitized.append(method_name.substr(copied, path_start - copied));
+            sanitized.append(path.substr(separator + 1));
+            sanitized.append(method_name.substr(path_end, apostrophe - path_end + 1));
+            copied = apostrophe + 1;
+            search = copied;
+            break;
+        }
+        if (closed) {
+            continue;
+        }
+        if (next_marker != std::string_view::npos) {
+            search = next_marker;
+            continue;
+        }
+        break;
+    }
+    if (sanitized.empty()) {
+        return std::string(method_name);
+    }
+    sanitized.append(method_name.substr(copied));
+    return sanitized;
+}
 
 bool frozenModuleName(std::string_view name)
 {
@@ -138,7 +257,7 @@ int emitNode(const CallTree::Node *node, const std::vector<std::int32_t> &window
         auto it = resolved.find(node->key);
         if (it != resolved.end()) {
             w.string(3, it->second.class_name);
-            w.string(4, it->second.method_name);
+            w.string(4, sanitizeNativeMethodName(it->second.method_name));
             if (it->second.line >= 0) {
                 w.int32(6, it->second.line);
             }
@@ -219,13 +338,13 @@ std::string buildMetadata(const ProfileMetadata &m)
         std::string p;
         ProtoWriter pw(p);
         pw.varint(1, 0);  // type = SERVER
-        pw.string(2, "Endstone");
+        pw.string(2, m.platform_name.empty() ? "Endstone" : m.platform_name);
         pw.string(3, m.endstone_version);
         if (!m.minecraft_version.empty()) {
             pw.string(4, m.minecraft_version);
         }
         pw.int32(7, kSparkFormatVersion);  // spark_version (gates viewer feature support)
-        pw.string(8, "Endstone");          // brand
+        pw.string(8, m.platform_brand.empty() ? "Endstone" : m.platform_brand);  // brand
         w.message(7, p);
     }
     w.int64(11, m.end_time_ms);

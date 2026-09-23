@@ -26,7 +26,7 @@ namespace spark {
 
 // Central application container. Owns all platform-independent services
 // and wires them to platform capabilities injected by the bootstrap.
-// The Endstone plugin creates this object and delegates commands and ticks to it.
+// The platform bootstrap creates this object and delegates commands and ticks to it.
 class SparkApplication {
 public:
     SparkApplication(std::string bds_executable_sha256, const std::filesystem::path &profile_storage_dir,

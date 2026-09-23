@@ -14,7 +14,7 @@
 #include "core/profiler/thread_grouper.h"
 #include "core/util/monotonic_time.h"
 #include "proto/sampler_data.h"
-#include "spark_constants.h"
+#include "core/spark_constants.h"
 #ifdef _WIN32
 #include "native/symbol/symbol_guess_windows.h"
 #elif defined(__linux__) && defined(__x86_64__)
@@ -363,16 +363,20 @@ std::string Profiler::exportData(const ExportContext &ctx, const AllocationSnaps
     if (owned_ctx != nullptr) {
         meta.endstone_version = std::move(owned_ctx->endstone_version);
         meta.minecraft_version = std::move(owned_ctx->minecraft_version);
+        meta.platform_name = std::move(owned_ctx->platform_name);
+        meta.platform_brand = std::move(owned_ctx->platform_brand);
     }
     else {
         meta.endstone_version = ctx.endstone_version;
         meta.minecraft_version = ctx.minecraft_version;
+        meta.platform_name = ctx.platform_name;
+        meta.platform_brand = ctx.platform_brand;
     }
     if (mode_ == ProfileMode::Allocation) {
-        meta.engine_version = std::string("endstone-spark ") + kVersion + " " + AllocationSampler::backendId();
+        meta.engine_version = std::string("spark for Bedrock ") + kVersion + " " + AllocationSampler::backendId();
     }
     else {
-        meta.engine_version = std::string("endstone-spark ") + kVersion;
+        meta.engine_version = std::string("spark for Bedrock ") + kVersion;
     }
     if (!ctx.comment.empty()) {
         if (owned_ctx != nullptr) {

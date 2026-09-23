@@ -43,7 +43,7 @@ class WorkflowTest(unittest.TestCase):
                 scripts.append(script)
             for name, job in jobs.items():
                 if "ctest --test-dir" in job:
-                    self.assertIn(name, ("linux", "windows"))
+                    self.assertIn(name, ("linux", "windows", "levilamina"))
         return scripts
 
     def test_native_runtime_jobs_pass_selected_python_library(self):
@@ -67,12 +67,12 @@ class WorkflowTest(unittest.TestCase):
     def test_build_enforces_project_quality(self):
         workflow = (ROOT / ".github" / "workflows" / "build.yml").read_text(encoding="utf-8")
         self.assertNotIn("conanfile.txt", workflow)
-        self.assertEqual(workflow.count("conanfile.py"), 4)
+        self.assertEqual(workflow.count("conanfile.py"), 5)
         self.assertEqual(workflow.count("tools/run_clang_tidy.py"), 2)
         self.assertEqual(workflow.count("--shard ${{ matrix.shard }}"), 2)
         self.assertEqual(workflow.count("shard: [core, native, application, tests-core, selftest]"), 2)
         self.assertEqual(workflow.count("--dry-run --Werror"), 2)
-        self.assertEqual(workflow.count("CMAKE_EXPORT_COMPILE_COMMANDS"), 4)
+        self.assertEqual(workflow.count("CMAKE_EXPORT_COMPILE_COMMANDS"), 5)
         self.assertEqual(workflow.count("CMAKE_CXX_SCAN_FOR_MODULES:BOOL=OFF"), 2)
         self.assertIn("name: Build & test Linux", workflow)
         self.assertIn("name: Build & test Windows", workflow)
@@ -86,12 +86,13 @@ class WorkflowTest(unittest.TestCase):
         self.assertNotIn("conanfile.txt", workflow)
         self.assertNotIn("gh release upload", workflow)
         self.assertEqual(workflow.count("gh release create"), 1)
-        self.assertIn("needs: [release, windows, linux]", workflow)
         self.assertLess(workflow.index("  windows:"), workflow.index("  publish:"))
         self.assertLess(workflow.index("  linux:"), workflow.index("  publish:"))
         self.assertIn("ctest --test-dir build/RelWithDebInfo --output-on-failure", workflow)
         self.assertEqual(workflow.count("tools/verify_windows_artifacts.ps1"), 2)
         self.assertIn("release-windows/SHA256SUMS", workflow)
+        self.assertIn("needs: [release, windows, linux, levilamina]", workflow)
+        self.assertIn("release-levilamina/manifest.json", workflow)
         self.assertNotIn("SHA256SUMS-windows", workflow)
         self.assertIn("python tests/native/alloc/verify_linux_gateway.py elf release-linux/endstone_spark.so", workflow)
         self.assertNotIn("endstone_spark-linux-x86_64.tar.gz", workflow)
@@ -107,13 +108,16 @@ class WorkflowTest(unittest.TestCase):
                 "release-windows/endstone_spark.dll",
                 "release-windows/endstone_spark.pdb",
                 "release-linux/endstone_spark.so",
+                "release-levilamina/levilamina_spark.dll",
+                "release-levilamina/levilamina_spark.pdb",
+                "release-levilamina/manifest.json",
             ],
         )
 
     def test_windows_version_resource_is_configure_time_generated(self):
-        cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
-        resource = (ROOT / "src" / "version.rc.in").read_text(encoding="utf-8")
-        self.assertIn("configure_file(src/version.rc.in", cmake)
+        cmake = (ROOT / "cmake" / "Endstone.cmake").read_text(encoding="utf-8")
+        resource = (ROOT / "src" / "platform" / "endstone" / "version.rc.in").read_text(encoding="utf-8")
+        self.assertIn("configure_file(src/platform/endstone/version.rc.in", cmake)
         self.assertIn('target_sources(spark PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated/version.rc")', cmake)
         self.assertIn("@PROJECT_VERSION_MAJOR@", resource)
         self.assertIn("@PROJECT_VERSION_MINOR@", resource)
@@ -122,11 +126,11 @@ class WorkflowTest(unittest.TestCase):
         self.assertIn('VALUE "ProductVersion", "@PROJECT_VERSION@.0\\0"', resource)
         self.assertNotIn("0.5.3", resource)
 
-    def test_cmake_uses_pinned_official_dependency_defaults(self):
-        cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+    def test_cmake_uses_official_dependency_defaults(self):
+        cmake = (ROOT / "cmake" / "Endstone.cmake").read_text(encoding="utf-8")
         expected = {
             "ENDSTONE_SPARK_ENDSTONE_GIT_REPOSITORY": "https://github.com/EndstoneMC/endstone.git",
-            "ENDSTONE_SPARK_ENDSTONE_GIT_TAG": "v0.11.11",
+            "ENDSTONE_SPARK_ENDSTONE_GIT_TAG": "v0.11",
             "ENDSTONE_SPARK_PAPI_GIT_REPOSITORY": "https://github.com/EndstoneMC/papi.git",
             "ENDSTONE_SPARK_PAPI_GIT_TAG": "v0.1.0",
         }

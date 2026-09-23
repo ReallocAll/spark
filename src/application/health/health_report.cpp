@@ -9,7 +9,7 @@
 #include "core/stats/system_stats.h"
 #include "core/util/format.h"
 #include "proto/sampler_data.h"
-#include "spark_constants.h"
+#include "core/spark_constants.h"
 
 namespace spark {
 
@@ -181,6 +181,8 @@ HealthData captureHealthData(StatisticsService &statistics, ProfileMetadataProvi
     data.metrics = context.metrics;
     data.plugins = context.plugins;
     data.server_configurations = context.server_configurations;
+    data.platform_name = context.platform_name;
+    data.platform_brand = context.platform_brand;
     data.window_stats = context.window_stats;
     if (!context.bds_executable_sha256.empty()) {
         data.extra_platform_metadata["BDS executable SHA-256"] = "\"" + context.bds_executable_sha256 + "\"";

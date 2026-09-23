@@ -11,8 +11,8 @@
 #include "core/util/monotonic_time.h"
 #include "net/bytebin.h"
 #include "net/gzip.h"
-#include "profiling_window.h"
-#include "spark_constants.h"
+#include "core/profiler/profiling_window.h"
+#include "core/spark_constants.h"
 
 namespace spark {
 

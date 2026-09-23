@@ -125,9 +125,13 @@ void SparkApplication::onTick(double mspt)
     }
     if (statistics_.onTick(mspt)) {
         statistics_.recordPlayerCount(metadata_provider_.playerCount());
-        const WorldGaugeValues gauges = metadata_provider_.worldGauges();
-        statistics_.recordWorldGauges(gauges.entities, gauges.tile_entities, gauges.chunks,
-                                      gauges.tile_entities_present);
+        if (metadata_provider_.worldGaugesAvailable()) {
+            const WorldGaugeValues gauges = metadata_provider_.worldGauges();
+            if (metadata_provider_.worldGaugesAvailable()) {
+                statistics_.recordWorldGauges(gauges.entities, gauges.tile_entities, gauges.chunks,
+                                              gauges.tile_entities_present);
+            }
+        }
     }
     const MonitoringDue monitoring_due = monitoring_schedule_.poll(monotonicUnixMillis());
     if (monitoring_due.ping) {
@@ -217,7 +221,8 @@ void SparkApplication::recoverPreviousSessionImpl()
 
     RecoveredProfile profile;
     try {
-        profile = RecoveryPlayer::replay(recovery_dir_);
+        const PlatformIdentity identity = metadata_provider_.platformIdentity();
+        profile = RecoveryPlayer::replay(recovery_dir_, identity.platform_name, identity.platform_brand);
     }
     catch (const std::exception &e) {
         quarantineRecovery(std::string("replay exception: ") + e.what());

@@ -61,7 +61,7 @@
 #include "net/profile_file.h"
 #include "proto/sampler_data.h"
 #include "selftest_internal.h"
-#include "spark_constants.h"
+#include "core/spark_constants.h"
 
 int main(int argc, char **argv)
 {

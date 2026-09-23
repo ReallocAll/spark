@@ -8,7 +8,7 @@
 
 #include "core/stats/metrics_history.h"
 #include "core/stats/system_stats.h"
-#include "profiling_window.h"
+#include "core/profiler/profiling_window.h"
 
 namespace spark {
 

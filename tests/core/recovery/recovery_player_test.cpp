@@ -5,7 +5,9 @@
 #include <iostream>
 #include <limits>
 #include <string>
+#include <string_view>
 #include <thread>
+#include <utility>
 
 #include "core/recovery/journal_reader.h"
 #include "core/recovery/recovery_player.h"
@@ -17,6 +19,79 @@
 
 using namespace spark;                // NOLINT(google-build-using-namespace)
 using namespace spark::journal_test;  // NOLINT(google-build-using-namespace)
+
+struct RecoveredMetadataFields {
+    std::string creator_name;
+    std::string comment;
+    std::string platform_name;
+    std::string platform_brand;
+    std::string engine_version;
+    std::int64_t start_time_ms = 0;
+};
+
+namespace {
+
+RecoveredMetadataFields readRecoveredMetadata(std::string_view profile)
+{
+    RecoveredMetadataFields fields;
+    ProtoReader data(profile);
+    int field = 0;
+    int wire = 0;
+    while (data.nextField(field, wire)) {
+        if (field == 1 && wire == 2) {
+            ProtoReader metadata = data.readMessage();
+            while (metadata.nextField(field, wire)) {
+                if (field == 1 && wire == 2) {
+                    ProtoReader creator = metadata.readMessage();
+                    while (creator.nextField(field, wire)) {
+                        if (field == 2 && wire == 2) {
+                            fields.creator_name = std::string(creator.readString());
+                        }
+                        else {
+                            creator.skip(wire);
+                        }
+                    }
+                    assert(creator.valid());
+                }
+                else if (field == 2 && wire == 0) {
+                    fields.start_time_ms = metadata.readInt64();
+                }
+                else if (field == 6 && wire == 2) {
+                    fields.comment = std::string(metadata.readString());
+                }
+                else if (field == 7 && wire == 2) {
+                    ProtoReader platform = metadata.readMessage();
+                    while (platform.nextField(field, wire)) {
+                        if (field == 2 && wire == 2) {
+                            fields.platform_name = std::string(platform.readString());
+                        }
+                        else if (field == 8 && wire == 2) {
+                            fields.platform_brand = std::string(platform.readString());
+                        }
+                        else {
+                            platform.skip(wire);
+                        }
+                    }
+                    assert(platform.valid());
+                }
+                else if (field == 17 && wire == 2) {
+                    fields.engine_version = std::string(metadata.readString());
+                }
+                else {
+                    metadata.skip(wire);
+                }
+            }
+            assert(metadata.valid());
+        }
+        else {
+            data.skip(wire);
+        }
+    }
+    assert(data.valid());
+    return fields;
+}
+
+}  // namespace
 
 void testRecoveryGrouping()
 {
@@ -331,6 +406,24 @@ void testRecoveryPlayerReplay()
     assert(result.tick_count == 2);
     assert(!result.has_clean_end);
     assert(!result.serialized_proto.empty());
+
+    const auto default_metadata = readRecoveredMetadata(result.serialized_proto);
+    assert(default_metadata.creator_name == "Console");
+    assert(default_metadata.comment == "replay test [recovered from crash journal]");
+    assert(default_metadata.platform_name == "Endstone");
+    assert(default_metadata.platform_brand == "Endstone");
+    assert(default_metadata.engine_version.find("spark for Bedrock ") == 0);
+    assert(default_metadata.start_time_ms == result.session_start_ms);
+
+    const auto levilamina = RecoveryPlayer::replay(cfg.directory, "LeviLamina", "LeviLamina");
+    assert(levilamina.valid);
+    const auto levilamina_metadata = readRecoveredMetadata(levilamina.serialized_proto);
+    assert(levilamina_metadata.platform_name == "LeviLamina");
+    assert(levilamina_metadata.platform_brand == "LeviLamina");
+    assert(levilamina_metadata.creator_name == default_metadata.creator_name);
+    assert(levilamina_metadata.comment == default_metadata.comment);
+    assert(levilamina_metadata.engine_version == default_metadata.engine_version);
+    assert(levilamina_metadata.start_time_ms == default_metadata.start_time_ms);
     std::cout << "testRecoveryPlayerReplay: PASS (proto size=" << result.serialized_proto.size() << ")\n";
 }
 

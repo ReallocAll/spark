@@ -7,7 +7,7 @@ AllowShortFunctionsOnASingleLine: Inline
 AllowShortLambdasOnASingleLine: Inline
 AlwaysBreakTemplateDeclarations: Yes
 BreakBeforeBraces: Stroustrup
-IncludeBlocks: Regroup
+IncludeBlocks: Preserve
 IncludeCategories:
   - Regex: '^<[a-zA-Z0-9_]+\.h>' # C system headers
     Priority: 1
@@ -28,4 +28,5 @@ IncludeCategories:
 InsertBraces: true
 InsertNewlineAtEOF: true
 MaxEmptyLinesToKeep: 1
+SortIncludes: Never
 SpacesBeforeTrailingComments: 2

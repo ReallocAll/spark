@@ -20,6 +20,8 @@ inline void gatherPlatformServerMetadata(ProfileMetadataProvider &provider, Expo
     metadata.uptime_ms = context.uptime_ms;
     metadata.plugins = std::move(context.plugins);
     metadata.server_configurations = std::move(context.server_configurations);
+    metadata.platform_name = std::move(context.platform_name);
+    metadata.platform_brand = std::move(context.platform_brand);
 
     provider.gatherServerMetadata(metadata, now_ms);
 
@@ -31,6 +33,8 @@ inline void gatherPlatformServerMetadata(ProfileMetadataProvider &provider, Expo
     context.uptime_ms = metadata.uptime_ms;
     context.plugins = std::move(metadata.plugins);
     context.server_configurations = std::move(metadata.server_configurations);
+    context.platform_name = std::move(metadata.platform_name);
+    context.platform_brand = std::move(metadata.platform_brand);
 }
 
 }  // namespace spark

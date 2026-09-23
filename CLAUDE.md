@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Endstone Spark is a native statistical profiler plugin for Minecraft Bedrock Dedicated Server (BDS). It samples native execution and allocation call stacks on Windows and Linux, aggregates them into spark-compatible profiles, and uploads them to or opens them with the standard spark viewer.
+spark for Bedrock is a native statistical profiler for Minecraft Bedrock Dedicated Server (BDS), with host adapters for Endstone on Windows/Linux and a LeviLamina Windows x64 module. It samples native execution and allocation call stacks, aggregates them into spark-compatible profiles, and uploads them to or opens them with the standard spark viewer. The LeviLamina target is source-built for BDS 1.26.20.x / LeviLamina 26.20.7. The public SDK bootstrap supports source builds; published LL binaries are available from the latest Release.
 
 The plugin must remain safe inside a long-running server process. Sampling and allocator-hook paths have stricter constraints than ordinary plugin code: they must be bounded, avoid blocking, and defer symbolization, aggregation, compression, and network I/O to safe background or export-time code.
 
@@ -50,6 +50,32 @@ cmake --build build
 ```
 
 On Windows, run the commands from an environment where clang-cl can find the MSVC toolchain and Windows SDK.
+
+### Public LeviLamina build inputs
+
+The pinned public LeviLamina inputs can be staged outside the repository with
+`tools/levilamina/prepare-sdk.ps1`. The bootstrap verifies archive sizes and
+SHA256 hashes before extraction, rejects unsafe archive entries, and does not
+download BDS. Run its self-test and then the preparation step:
+
+```powershell
+$llRoot = Join-Path $env:TEMP ('spark-ll-levilamina-' + [Guid]::NewGuid().ToString('N'))
+pwsh -NoProfile -File tools/levilamina/prepare-sdk.ps1 -SelfTest -OutputRoot $llRoot
+pwsh -NoProfile -File tools/levilamina/prepare-sdk.ps1 -OutputRoot $llRoot
+$receipt = Get-Content -Raw -LiteralPath (Join-Path $llRoot 'setup-receipt.json') | ConvertFrom-Json
+$sdk = $receipt.paths.sdk_root
+$runtimeDll = $receipt.paths.runtime_dll
+$runtimePdb = $receipt.paths.runtime_pdb
+$runtimeData = $receipt.paths.runtime_data
+$prelink = $receipt.paths.prelink
+$symbolProvider = $receipt.paths.symbolprovider_source
+```
+
+Use those receipt paths with the LeviLamina CMake options described in
+`docs/building.md`. The build workflow runs the same bootstrap on
+`windows-latest` with clang-cl 20, builds all configured targets, runs the full
+CTest suite, and uploads `levilamina_spark.dll`, `levilamina_spark.pdb`, and
+`manifest.json` as the LL build artifact.
 
 ## Testing
 
@@ -145,11 +171,13 @@ Leave successfully symbolicated frames and non-BDS modules untouched
 
 ### Source Structure
 
-- `src/plugin.cpp` - Endstone plugin lifecycle and command dispatch (thin bootstrap)
+- `src/platform/endstone/plugin.cpp` - Endstone plugin lifecycle and command dispatch (thin bootstrap)
+- `src/platform/levilamina/` - LeviLamina Windows x64 module, application bridge, and host adapters
 - `src/application/` - platform-independent business orchestration: command registry, profiler service, profile exporter, health, activity, and tick-monitor commands, platform capability interfaces
 - `src/core/` - platform-independent services: profiler, statistics, command parsing, config (TOML), recovery journal, activity log, WebSocket/crypto, server-properties metadata, utilities
 - `src/native/` - native backend: execution sampler, symbol guesser, allocation hooks, and Python shadow-stack primitives
-- `src/platform/endstone/` - thin Endstone platform adapters: command sender, thread dispatcher, metadata provider (including world gauges and ping), result notifier
+- `src/platform/endstone/` - thin Endstone platform adapters: command sender, thread dispatcher, metadata provider (including host-available world gauges and ping), result notifier
+- `src/platform/levilamina/` - single-DLL LeviLamina module, adapters, native-mod metadata, aggregate ping, uptime, TPS/MSPT and health data, plus validated world/region/chunk metadata with entity-type and entity/loaded-chunk gauges for the three vanilla dimensions; tile/block-entity counts and gamerules remain unavailable
 - `src/proto/` - spark protobuf serialization
 - `src/net/` - gzip compression, bytebin upload, WebSocket transport, and local profile persistence
 - `proto/` - upstream spark protocol references
@@ -165,7 +193,7 @@ Leave successfully symbolicated frames and non-BDS modules untouched
 4. **Symbolization:** Normal platform symbols have priority. Unresolved frames in the BDS main executable may receive conservative runtime guesses from unwind metadata, RTTI, vtables, thunks, and decoded string references. Guesses retain the RVA and identify their evidence source.
 5. **Statistics service:** Maintains bounded rolling TPS, MSPT, CPU, player-count, and world-gauge histories independently of an active profile.
 6. **Application layer:** Platform-independent business orchestration in `src/application/`. `SparkApplication` owns all services and dispatches ticks and commands. `ProfilerService` manages profiler sessions, background profiling, live viewer connections, and exports. Three focused capability interfaces (`MainThreadDispatcher`, `ProfileMetadataProvider`, `ResultNotifier`) abstract platform dependencies without a god-Platform.
-7. **Platform adapters:** `src/platform/endstone/` provides thin Endstone implementations of the capability interfaces and `CommandSender`. `plugin.cpp` remains a thin bootstrap responsible for registration and lifecycle wiring.
+7. **Platform adapters:** `src/platform/endstone/` provides thin Endstone implementations of the capability interfaces and `CommandSender`; `src/platform/levilamina/` provides the Windows x64 module, bridge, world access, and LeviLamina implementations. `src/platform/endstone/plugin.cpp` remains the Endstone bootstrap responsible for registration and lifecycle wiring.
 8. **Crash recovery:** `RecoveryWriter` journals module, thread, sample, and tick records to segmented files via a bounded lock-free queue. On startup, `RecoveryPlayer` replays an unclean supported session and exports a recovered profile.
 9. **Stall watchdog:** `StallWatchdog` runs on an independent thread, monitoring the main-thread heartbeat. It journals stall-begin and stall-end events without calling Endstone APIs or stopping the profiler.
 10. **Live viewer:** `ViewerSocket` manages a WebSocket connection to the spark live viewer, uploading initial sampler data and pushing payload IDs on window rotation. A dedicated worker thread moves gzip and HTTP upload off the main thread.
@@ -202,7 +230,7 @@ Conan supplies cpptrace, concurrentqueue, zlib, expected-lite, libcurl, tomlplus
 - Release versions follow Semantic Versioning.
 - `.github/workflows/release.yml` can be dispatched from `main` with a version or triggered by pushing a `vX.Y.Z` tag. A release requires the selected ref, `main`, and `develop` to point to the same commit.
 - Manual release dispatch defaults `dry_run` to `true`; set it explicitly to `false` for a real release. Non-dry-run dispatches must run from `main`, while a tag push performs a real release automatically.
-- The release workflow updates `CMakeLists.txt`, `src/spark_constants.h`, `src/plugin.cpp`, and `CHANGELOG.md`; creates the release commit and tag; builds both platform artifacts; and uploads them to the GitHub release.
+- The release workflow updates `CMakeLists.txt`, `src/core/spark_constants.h`, `src/platform/endstone/plugin.cpp`, and `CHANGELOG.md`; creates the release commit and tag; builds the Endstone and LeviLamina artifacts; and uploads them to the GitHub release.
 - Do not manually duplicate version changes that the release workflow owns.
 
 ## Git Conventions

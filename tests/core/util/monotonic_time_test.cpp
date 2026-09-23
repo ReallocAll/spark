@@ -4,7 +4,7 @@
 #include <limits>
 
 #include "core/util/monotonic_time.h"
-#include "profiling_window.h"
+#include "core/profiler/profiling_window.h"
 
 namespace {
 

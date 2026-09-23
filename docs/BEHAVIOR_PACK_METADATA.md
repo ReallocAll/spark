@@ -16,6 +16,15 @@ Endstone does not currently expose the active behavior-pack stack through its pu
 
 Only manifests containing a behavior module (`data` or `script`) are eligible. Installed but inactive packs are not exported. Missing or malformed manifests are skipped independently so one broken pack does not suppress other valid active packs.
 
+## LeviLamina source
+
+LeviLamina uses the same selected-pack discovery rules from the server root. It
+reads the active world's `world_behavior_packs.json`, resolves the selected
+references against the world, server, and development behavior-pack directories,
+and exports the manifest name, description, source, and `builtin` flag. The LL
+adapter applies the same behavior-module filter and skips malformed or inactive
+packs independently.
+
 ## Resource-pack separation
 
 Resource packs are deliberately excluded. Spark does not read `world_resource_packs.json`, does not scan `resource_packs`, and rejects resource-only manifests even if they are misplaced beneath a behavior-pack directory. Bedrock resource packs must not be represented as upstream `WorldStatistics.DataPack` entries.

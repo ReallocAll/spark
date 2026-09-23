@@ -69,7 +69,7 @@ struct ProfilerOptions {
     std::uint32_t allocation_aggregator_delay_ms_for_testing = 0;
 };
 
-// Server facts needed only at export time (read from Endstone on the main thread).
+// Server facts needed only at export time (read from the platform adapter on the main thread).
 struct ExportContext {
     std::string endstone_version;
     std::string minecraft_version;
@@ -92,6 +92,8 @@ struct ExportContext {
     std::map<std::string, NetworkInterfaceSnapshot> net_snapshots;
     // Pre-serialized SocketChannelInfo proto for live viewer (empty for normal exports).
     std::string socket_channel_info_proto;
+    std::string platform_name = "Endstone";
+    std::string platform_brand = "Endstone";
 };
 
 // Owns either the execution sampler or the platform allocation sampler and turns

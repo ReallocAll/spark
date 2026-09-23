@@ -5,7 +5,7 @@
 
 #include "native/sampler/sampler.h"
 #include "native/sampler/thread_info.h"
-#include "profiling_window.h"
+#include "core/profiler/profiling_window.h"
 
 namespace spark {
 

@@ -52,7 +52,7 @@
 #include "native/alloc/linux_owned_thread.h"
 #include "native/alloc/stable_shard_snapshot.h"
 #include "native/sampler/thread_info.h"
-#include "profiling_window.h"
+#include "core/profiler/profiling_window.h"
 
 namespace spark {
 namespace {

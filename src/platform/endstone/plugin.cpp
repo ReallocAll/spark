@@ -28,7 +28,7 @@
 #include "platform/endstone/adapters.h"
 #include "platform/endstone/papi_integration.h"
 #include "platform/endstone/python_attribution.h"
-#include "spark_constants.h"
+#include "core/spark_constants.h"
 
 namespace {
 
@@ -320,9 +320,9 @@ private:
 #endif
 };
 
-ENDSTONE_PLUGIN("spark", "0.5.3", SparkPlugin)
+ENDSTONE_PLUGIN("spark", "0.6.0", SparkPlugin)
 {
-    description = "spark profiler for Endstone - find what's slowing your server down.";
+    description = "A performance profiler for Bedrock Dedicated Server.";
     authors = {"ReallocAll <ReallocAll@outlook.com>"};
     prefix = "Spark";
     load = endstone::PluginLoadOrder::PostWorld;

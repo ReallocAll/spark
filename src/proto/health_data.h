@@ -31,6 +31,8 @@ struct HealthData {
     std::map<std::string, std::string> extra_platform_metadata;
     std::map<std::int32_t, WindowStats> window_stats;
     std::optional<SocketChannelInfo> channel_info;
+    std::string platform_name = "Endstone";
+    std::string platform_brand = "Endstone";
 };
 
 // Serialize a spark `HealthData` protobuf message (uncompressed bytes).

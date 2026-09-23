@@ -27,9 +27,9 @@
 #include "native/sampler/sampler.h"
 #include "native/sampler/types.h"
 #include "native/symbol/symbolicate.h"
-#include "profiling_window.h"
+#include "core/profiler/profiling_window.h"
 #include "proto/sampler_data.h"
-#include "spark_constants.h"
+#include "core/spark_constants.h"
 
 namespace spark {
 
@@ -76,7 +76,8 @@ std::uint64_t moduleBaseForPath(const std::string &path)
 
 }  // namespace
 
-RecoveredProfile RecoveryPlayer::replay(const std::filesystem::path &directory)
+RecoveredProfile RecoveryPlayer::replay(const std::filesystem::path &directory, std::string platform_name,
+                                        std::string platform_brand)
 {
     RecoveredProfile result;
 
@@ -414,7 +415,9 @@ RecoveredProfile RecoveryPlayer::replay(const std::filesystem::path &directory)
     meta.interval = sc.present ? static_cast<std::int32_t>(sc.interval_us) : 4000;
     meta.mode = sc.present && sc.profile_type == 1 ? ProfileMode::Allocation : ProfileMode::Execution;
     meta.number_of_ticks = static_cast<std::int32_t>(result.tick_count);
-    meta.engine_version = std::string("endstone-spark ") + kVersion + " (crash recovery)";
+    meta.platform_name = std::move(platform_name);
+    meta.platform_brand = std::move(platform_brand);
+    meta.engine_version = std::string("spark for Bedrock ") + kVersion + " (crash recovery)";
     meta.creator_name = sc.present ? sc.creator_name : "crash recovery";
     meta.creator_is_player = sc.present && sc.creator_is_player;
     meta.creator_unique_id = sc.present && sc.creator_is_player ? sc.creator_unique_id : std::string{};

@@ -3,7 +3,7 @@
 #include "proto/metrics_proto.h"
 #include "proto/proto_writer.h"
 #include "proto/statistics_proto.h"
-#include "spark_constants.h"
+#include "core/spark_constants.h"
 
 namespace spark {
 
@@ -34,13 +34,13 @@ std::string buildHealthData(const HealthData &data)
             std::string platform_metadata;
             ProtoWriter platform_writer(platform_metadata);
             platform_writer.varint(1, 0);  // type = SERVER
-            platform_writer.string(2, "Endstone");
+            platform_writer.string(2, data.platform_name.empty() ? "Endstone" : data.platform_name);
             platform_writer.string(3, data.endstone_version);
             if (!data.minecraft_version.empty()) {
                 platform_writer.string(4, data.minecraft_version);
             }
             platform_writer.int32(7, kSparkFormatVersion);
-            platform_writer.string(8, "Endstone");
+            platform_writer.string(8, data.platform_brand.empty() ? "Endstone" : data.platform_brand);
             metadata_writer.message(2, platform_metadata);
         }
 

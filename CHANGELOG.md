@@ -1,11 +1,47 @@
 # Changelog
 
-All notable changes to endstone-spark are documented in this file.
+All notable changes to spark for Bedrock are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased][Unreleased]
+
+### Added
+
+- Preserve the active host identity when saving profiles recovered from a crash journal.
+
+- Add a Windows x64 LeviLamina 26.20.x host target with a permission-gated
+  `/spark` command, shared configuration, TPS/MSPT and health statistics,
+  background profiling, local execution-profile saves, and clean server
+  shutdown.
+
+- Build the LeviLamina target as a single `levilamina_spark.dll` with its
+  matching PDB and manifest, while retaining the existing LL host adapters and
+  shared profiler services.
+
+- Add LL-managed quiescent unload, load, reload, and reactivate for the single
+  LeviLamina module, including cleanup of world and chunk subscriptions before
+  physical unload.
+
+- Expose LeviLamina native-mod metadata and aggregate player ping.
+
+- Port the Endstone v0.11.4 world, region, and chunk metadata path to LeviLamina
+  for the three vanilla dimensions, including entity-type data plus entity and
+  loaded-chunk gauges, and reuse behavior-pack discovery. Tile/block-entity counts
+  and gamerules remain unavailable.
+
+### Fixed
+
+- Complete LeviLamina cleanup during automatic server shutdown to prevent a
+  process-exit crash, while retaining server-thread checks for runtime reloads.
+
+- Avoid reporting zero world counts when a host metadata read becomes unavailable.
+
+- Prevent completed and cancelled LeviLamina main-thread tasks from accumulating
+  in dispatcher bookkeeping during long-running server sessions.
+
+## [0.6.0][0.6.0] - 2026-09-17
 
 ### Added
 
@@ -66,6 +102,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   same display name.
 - Export Python filename leaves and code identifiers without server-owner
   directory paths while retaining available line information.
+- Strip absolute source directories from native compiler-generated lambda names
+  in exported profiles while retaining the source filename and location.
 - Harden live-viewer and health-dashboard connection lifecycle, reconnects,
   trusted-client validation, malformed input handling, and bounded send/receive
   queues.
@@ -545,7 +583,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `dladdr` symbolization (module + RVA fallback for stripped frames).
 - Windows backend: `SuspendThread` + `StackWalk64` capture with PDB symbolization.
 
-[Unreleased]: https://github.com/EndstoneMC/spark/compare/v0.5.3...HEAD
+[Unreleased]: https://github.com/EndstoneMC/spark/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/EndstoneMC/spark/compare/v0.5.3...v0.6.0
 [0.5.3]: https://github.com/EndstoneMC/spark/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/EndstoneMC/spark/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/EndstoneMC/spark/compare/v0.5.0...v0.5.1

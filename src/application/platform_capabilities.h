@@ -31,18 +31,26 @@ struct WorldGaugeValues {
     bool tile_entities_present = false;
 };
 
+struct PlatformIdentity {
+    std::string platform_name = "Endstone";
+    std::string platform_brand = "Endstone";
+};
+
 // Gathers server and world metadata for profile export context and provides
-// runtime server stats for health reports. The Endstone adapter implements
-// this by querying the Endstone Server API.
+// runtime server stats for health reports. Platform adapters implement
+// this by querying their server APIs.
 class ProfileMetadataProvider {
 public:
     virtual ~ProfileMetadataProvider() = default;
+    virtual PlatformIdentity platformIdentity() const { return {}; }
     virtual void gatherServerMetadata(ServerMetadata &metadata, std::int64_t now_ms) = 0;
     virtual void gatherWorldMetadata(WorldInfo &world, std::string_view minecraft_version) = 0;
     virtual std::vector<NativePluginSource> nativePluginSources() { return {}; }
     // Runtime queries used by /spark health (not export-specific).
     virtual std::int64_t serverUptimeSeconds() = 0;
     virtual std::int64_t playerCount() = 0;
+    // Returns whether this host can provide meaningful world gauges.
+    virtual bool worldGaugesAvailable() { return true; }
     // Returns rolling world gauges. tile_entities_present stays false until a
     // complete low-frequency block-actor reconciliation has succeeded.
     virtual WorldGaugeValues worldGauges() { return {}; }

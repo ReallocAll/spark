@@ -1,4 +1,4 @@
-#include "profiling_window.h"
+#include "core/profiler/profiling_window.h"
 
 #include <chrono>
 #include <cstdint>

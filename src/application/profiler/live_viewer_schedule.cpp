@@ -2,7 +2,7 @@
 
 #include <limits>
 
-#include "profiling_window.h"
+#include "core/profiler/profiling_window.h"
 
 namespace spark {
 

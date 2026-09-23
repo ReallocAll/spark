@@ -3,7 +3,7 @@
 #include <limits>
 
 #include "application/profiler/live_viewer_schedule.h"
-#include "profiling_window.h"
+#include "core/profiler/profiling_window.h"
 
 namespace {
 
