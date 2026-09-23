@@ -1,5 +1,7 @@
 #include "platform/levilamina/callback_state.h"
 
+#include <algorithm>
+#include <iterator>
 #include <utility>
 
 namespace spark::levilamina {
@@ -22,6 +24,7 @@ struct CallbackState::WorkSlot {
     explicit WorkSlot(std::function<void()> body) : body(std::move(body)) {}
 
     Status status = Status::Pending;
+    std::size_t pending_index = 0;
     std::function<void()> body;
 };
 
@@ -225,6 +228,7 @@ bool CallbackState::post(std::function<void()> body)
         std::lock_guard lock(mutex_);
         if (phase_ == Phase::Open && submitter_ && *submitter_) {
             pending_.push_back(slot);
+            slot->pending_index = pending_.size() - 1;
             ++pending_work_slots_;
             reserveActiveLocked(1);
             submitter = submitter_;
@@ -376,12 +380,19 @@ std::vector<std::function<void()>> CallbackState::takePendingPayloads()
     std::vector<std::function<void()>> payloads;
     std::lock_guard lock(mutex_);
     payloads.reserve(static_cast<std::size_t>(pending_work_slots_));
-    for (auto const &slot : pending_) {
+    while (!pending_.empty()) {
+        auto slot = pending_.back();
         if (slot->status == WorkSlot::Status::Pending) {
-            static_cast<void>(cancelSlotLocked(slot, payloads.emplace_back()));
+            auto &payload = payloads.emplace_back();
+            if (!cancelSlotLocked(slot, payload)) {
+                payloads.pop_back();
+                removePendingSlotLocked(slot);
+            }
+        }
+        else {
+            removePendingSlotLocked(slot);
         }
     }
-    pending_.clear();
     condition_.notify_all();
     return payloads;
 }
@@ -526,6 +537,7 @@ void CallbackState::invokeSlot(std::shared_ptr<WorkSlot> const &slot)
         else {
             slot->status = WorkSlot::Status::Claimed;
             --pending_work_slots_;
+            removePendingSlotLocked(slot);
             ++active_bodies_;
             body = std::move(slot->body);
             condition_.notify_all();
@@ -763,6 +775,27 @@ void CallbackState::destroyFatalHandler(std::shared_ptr<FatalHandler> &handler, 
     destroy_scope.release();
 }
 
+void CallbackState::removePendingSlotLocked(std::shared_ptr<WorkSlot> const &slot) noexcept
+{
+    auto index = slot->pending_index;
+    if (index >= pending_.size() || pending_[index].get() != slot.get()) {
+        const auto found = std::find_if(pending_.begin(), pending_.end(),
+                                        [&slot](auto const &candidate) { return candidate.get() == slot.get(); });
+        if (found == pending_.end()) {
+            return;
+        }
+        index = static_cast<std::size_t>(std::distance(pending_.begin(), found));
+    }
+
+    const auto last_index = pending_.size() - 1;
+    if (index != last_index) {
+        pending_[index] = std::move(pending_[last_index]);
+        pending_[index]->pending_index = index;
+    }
+    pending_.pop_back();
+    slot->pending_index = pending_.size();
+}
+
 bool CallbackState::cancelSlotLocked(std::shared_ptr<WorkSlot> const &slot, std::function<void()> &payload)
 {
     if (slot->status != WorkSlot::Status::Pending) {
@@ -772,6 +805,7 @@ bool CallbackState::cancelSlotLocked(std::shared_ptr<WorkSlot> const &slot, std:
     --pending_work_slots_;
     ++active_bodies_;
     payload = std::move(slot->body);
+    removePendingSlotLocked(slot);
     condition_.notify_all();
     return true;
 }

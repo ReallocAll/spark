@@ -38,6 +38,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Avoid reporting zero world counts when a host metadata read becomes unavailable.
 
+- Prevent completed and cancelled LeviLamina main-thread tasks from accumulating
+  in dispatcher bookkeeping during long-running server sessions.
+
 ## [0.6.0][0.6.0] - 2026-09-17
 
 ### Added

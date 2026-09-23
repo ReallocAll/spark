@@ -122,6 +122,8 @@ public:
     [[nodiscard]] std::uint64_t pendingWorkSlots() const;
 
 private:
+    friend struct CallbackStateTestAccess;
+
     struct WorkSlot;
 
     class ActivityScope {
@@ -146,6 +148,7 @@ private:
     };
 
     void invokeSlot(std::shared_ptr<WorkSlot> const &slot);
+    void removePendingSlotLocked(std::shared_ptr<WorkSlot> const &slot) noexcept;
     [[nodiscard]] bool cancelSlotLocked(std::shared_ptr<WorkSlot> const &slot, std::function<void()> &payload);
     [[nodiscard]] ActivityScope adoptActive(std::size_t count) noexcept;
     void releaseActive(std::size_t count) noexcept;

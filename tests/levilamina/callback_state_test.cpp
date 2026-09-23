@@ -13,9 +13,22 @@
 
 #include "platform/levilamina/callback_state.h"
 
+namespace spark::levilamina {
+
+struct CallbackStateTestAccess {
+    static std::size_t retainedWorkSlots(CallbackState const &state)
+    {
+        std::lock_guard lock(state.mutex_);
+        return state.pending_.size();
+    }
+};
+
+}  // namespace spark::levilamina
+
 namespace {
 
 using spark::levilamina::CallbackState;
+using spark::levilamina::CallbackStateTestAccess;
 
 constexpr auto kWait = std::chrono::seconds{2};
 constexpr auto kShortWait = std::chrono::milliseconds{100};
@@ -175,6 +188,80 @@ void testPostCloseExactlyOnceAndLateWrapper()
     harness.state->markClosed();
     require(harness.state->phase() == CallbackState::Phase::Closed, "state did not close");
     require(!harness.state->post([&] { ++runs; }), "post succeeded after close");
+}
+
+void testClaimedPostSlotsAreReleased()
+{
+    Harness harness;
+    std::atomic_int runs{0};
+    for (int i = 0; i < 64; ++i) {
+        require(harness.state->post([&] { ++runs; }), "post failed");
+        auto work = harness.take();
+        work();
+        work = {};
+        require(CallbackStateTestAccess::retainedWorkSlots(*harness.state) == 0, "claimed work slot remained retained");
+    }
+    require(runs.load() == 64, "claimed post body did not run each time");
+    require(harness.state->waitQuiescent(std::chrono::steady_clock::now() + kWait), "claimed posts did not quiesce");
+    require(harness.state->beginClosing() == CallbackState::CloseClaim::Owner, "close after claimed posts failed");
+    harness.state->markClosed();
+
+    auto inline_state = std::make_shared<CallbackState>();
+    inline_state->setSubmitter([](std::function<void()> work) { work(); });
+    for (int i = 0; i < 64; ++i) {
+        require(inline_state->post([] {}), "inline post failed");
+        require(CallbackStateTestAccess::retainedWorkSlots(*inline_state) == 0,
+                "inline claimed work slot remained retained");
+    }
+    require(inline_state->waitQuiescent(std::chrono::steady_clock::now() + kWait), "inline posts did not quiesce");
+    require(inline_state->beginClosing() == CallbackState::CloseClaim::Owner, "close after inline posts failed");
+    inline_state->markClosed();
+}
+
+void testOutOfOrderClaimsKeepPendingSlotsConsistent()
+{
+    Harness harness;
+    std::vector<std::function<void()>> work;
+    for (int i = 0; i < 3; ++i) {
+        require(harness.state->post([] {}), "post failed");
+        work.push_back(harness.take());
+    }
+
+    work[1]();
+    work[1] = {};
+    require(harness.state->pendingWorkSlots() == 2, "middle claim changed the pending count incorrectly");
+    work[0]();
+    work[0] = {};
+    require(harness.state->pendingWorkSlots() == 1, "swapped claim changed the pending count incorrectly");
+    work[2]();
+    work[2] = {};
+    require(CallbackStateTestAccess::retainedWorkSlots(*harness.state) == 0,
+            "out of order claims retained completed work slots");
+    require(harness.state->waitQuiescent(std::chrono::steady_clock::now() + kWait),
+            "out of order posts did not quiesce");
+    require(harness.state->beginClosing() == CallbackState::CloseClaim::Owner,
+            "close after out of order claims failed");
+    harness.state->markClosed();
+}
+
+void testCancelledPostSlotsAreReleased()
+{
+    Harness harness;
+    auto destroyed = std::make_shared<std::atomic_bool>(false);
+    auto payload = std::make_shared<DestructionProbe>(destroyed);
+    require(harness.state->post([payload] {}), "post failed");
+    payload.reset();
+    auto work = harness.take();
+    require(harness.state->beginClosing() == CallbackState::CloseClaim::Owner, "close before cancellation failed");
+    work();
+    work = {};
+    require(destroyed->load(std::memory_order_acquire), "cancelled post payload was not destroyed");
+    require(CallbackStateTestAccess::retainedWorkSlots(*harness.state) == 0, "cancelled work slot remained retained");
+    auto pending = harness.state->takePendingPayloads();
+    require(pending.empty(), "cancelled work slot remained available for shutdown");
+    harness.state->destroyPendingPayloads(pending);
+    require(harness.state->waitQuiescent(std::chrono::steady_clock::now() + kWait), "cancelled post did not quiesce");
+    harness.state->markClosed();
 }
 
 void testRunningBodyAndPayloadDestruction()
@@ -422,6 +509,7 @@ void testSubmissionFailureCleanup()
     payload.reset();
     require(destroyed->load(std::memory_order_acquire), "failed submission payload was not destroyed");
     require(state->pendingWorkSlots() == 0, "failed submission left a pending slot");
+    require(CallbackStateTestAccess::retainedWorkSlots(*state) == 0, "failed submission retained a work slot");
     require(state->activeBodies() == 0, "failed submission left active accounting");
     auto pending = state->takePendingPayloads();
     require(pending.empty(), "failed submission left payloads to cancel");
@@ -469,6 +557,9 @@ int wmain(int argc, wchar_t **)
         testInlineAdmissionAndCleanup();
         testInlineBlockedBodyPreventsQuiescence();
         testPostCloseExactlyOnceAndLateWrapper();
+        testClaimedPostSlotsAreReleased();
+        testOutOfOrderClaimsKeepPendingSlotsConsistent();
+        testCancelledPostSlotsAreReleased();
         testRunningBodyAndPayloadDestruction();
         testThrowingBodyAndConcurrentClose();
         testProducerSelfWaitRejection();
