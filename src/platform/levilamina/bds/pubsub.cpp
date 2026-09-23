@@ -2,8 +2,7 @@
 
 namespace spark::levilamina::bds::pubsub {
 
-// Keep this translation unit so the private ABI view has a stable compiled
-// home when the host target is linked with the generated Bedrock import lib.
+// Keep compiled ConnectorView instantiations in this translation unit.
 template class ConnectorView<ChunkLoadedSignature>;
 template class ConnectorView<ChunkDiscardedSignature>;
 template class ConnectorView<DimensionCreatedSignature>;

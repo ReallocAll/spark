@@ -32,9 +32,7 @@ class LevelChunk;
 
 namespace spark::levilamina::bds::pubsub {
 
-// The LL SDK intentionally leaves Connector empty because its methods are
-// imported from the Bedrock runtime. This private view preserves the
-// Endstone/Bedrock connector ABI without redefining the imported type.
+// Private ABI view for the imported connector methods.
 template <typename Signature>
 class ConnectorView {
 public:

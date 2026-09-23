@@ -87,9 +87,9 @@ the spark viewer. To keep the raw `.sparkprofile` locally instead, use:
 /spark profiler start --timeout 30 --save-to-file
 ```
 
-The local file is written below `plugins/spark/profiles/`; drag it onto
-<https://spark.lucko.me/>. If an upload fails, spark also preserves the raw
-profile locally. The [command reference](docs/commands.md) covers allocation
+Spark writes the local file under the plugin data directory in `profiles/`;
+drag it onto <https://spark.lucko.me/>. If an upload fails, spark also preserves
+the raw profile locally. The [command reference](docs/commands.md) covers allocation
 profiles, thread selection, filtering, live viewing, and health reports.
 
 ## Common tasks

@@ -92,16 +92,13 @@ public:
 
     [[nodiscard]] ::Level *level() const noexcept { return level_; }
 
-    // Called by the dimension-created callback and by the initial enumeration.
-    // The borrowed Dimension reference is consumed before this function returns.
+    // Retains eligible dimensions weakly; the borrowed reference does not escape.
     [[nodiscard]] DimensionRetention retainDimension(::Dimension &dimension) noexcept;
 
-    // Captures one complete, main-thread snapshot. No BDS reference leaves this
-    // call; weak dimensions and chunks are locked only for the current scan.
+    // Captures a main-thread snapshot without retaining BDS references beyond the scan.
     [[nodiscard]] bool scan(std::string_view level_name_hint, ScanResult &result) noexcept;
 
-    // Converts a live chunk callback argument into the stable key used by the
-    // shared mutex-protected gauge state.
+    // Builds a stable gauge-state key from a live chunk callback argument.
     [[nodiscard]] ChunkKeyResult chunkKeyStatus(::LevelChunk const &chunk, WorldGaugeChunkKey &key) const noexcept;
     [[nodiscard]] bool chunkKey(::LevelChunk const &chunk, WorldGaugeChunkKey &key) const noexcept
     {

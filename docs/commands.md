@@ -42,7 +42,8 @@ loaded; retry the operation after the active session has become quiescent.
 | `activity` | `activitylog`, `log` | Show recent profile and health activity |
 | `tickmonitor` | `tickmonitoring` | Report unusually long ticks |
 
-Unknown or empty input prints help. Subcommands and flags are case-insensitive.
+Unknown or empty input prints help. Command aliases and flags are case-insensitive.
+Profiler actions are case-insensitive; health subcommands use lowercase.
 
 ## Profiling
 
@@ -73,9 +74,9 @@ without `--timeout`, a session runs until `stop` or `cancel`.
 | `--timeout <seconds>` | Stop and export automatically after a whole number of seconds. The value must be greater than `10`. |
 | `--only-ticks-over <ms>` | Keep samples only from ticks longer than this positive whole number of milliseconds. |
 | `--comment <text>` | Attach a note to the exported profile. Quote text containing spaces. |
-| `--save-to-file` | Save a `.sparkprofile` below `plugins/spark/profiles/` instead of uploading it. |
+| `--save-to-file` | Save a `.sparkprofile` below the plugin data directory's `profiles/` instead of uploading it. |
 | `--thread <name>` | Select a case-insensitive exact thread name. Repeat to select several names. |
-| `--thread *` | Select every BDS process thread and keep separate roots. This cannot be combined with another `--thread` or `--regex`. |
+| `--thread *` | Select all process threads. This cannot be combined with another `--thread` or `--regex`. |
 | `--regex` | Treat each `--thread` value as a case-insensitive full-match regular expression. At least one pattern is required. |
 | `--not-combined` | Export each sampled thread as its own viewer root. |
 | `--combine-all` | Merge all sampled threads into one viewer root. |
@@ -87,6 +88,9 @@ without `--timeout`, a session runs until `stop` or `cancel`.
 profiles include all covered process threads when no thread selector is given.
 Thread selection is applied by the safe aggregation stage, so allocator hooks do
 not run regular expressions or query thread names.
+
+Numeric flags are interpreted by magnitude, so a leading minus sign does not
+make an interval, timeout, or tick threshold negative.
 
 ### Live viewer
 

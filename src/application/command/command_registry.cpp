@@ -102,7 +102,7 @@ void CommandRegistry::sendHelp(CommandSender &sender) const
         sender.sendMessage(kColorGray + "Thread grouping: --not-combined (separate), --combine-all (merge all)");
         sender.sendMessage(kColorGray + "Execution only: --ignore-sleeping");
         sender.sendMessage(kColorGray + "Flags: --interval <ms|bytes>, --timeout <seconds>, --only-ticks-over <ms>");
-        sender.sendMessage(kColorGray + "       --save-to-file (plugins/spark/profiles), --comment <text>");
+        sender.sendMessage(kColorGray + "       --save-to-file (plugin data directory/profiles), --comment <text>");
     }
     if (can_use("ping")) {
         sender.sendMessage(kColorGray + "Ping: --player <username>");

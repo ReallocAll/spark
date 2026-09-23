@@ -57,9 +57,7 @@ private:
     bool connected_ = false;
 };
 
-// Tracks callback closures that have already crossed the host admission gate.
-// This is separate from CallbackState::activeBodies(): a host may have entered
-// a subscribed closure before it can call invokeInline().
+// Tracks host-admitted closures before they enter CallbackState.
 class WorldCallbackAdmission final {
 public:
     class Lease final {
@@ -179,12 +177,10 @@ public:
     LeviLaminaWorldGaugeProvider(LeviLaminaWorldGaugeProvider const &) = delete;
     LeviLaminaWorldGaugeProvider &operator=(LeviLaminaWorldGaugeProvider const &) = delete;
 
-    // Must be called on the admitted BDS server thread. Subscriptions are
-    // connected before the first successful snapshot is accepted.
+    // Call on the admitted server thread; subscriptions precede the first snapshot.
     [[nodiscard]] bool initialize(::Level &level);
 
-    // Must run after the shared CallbackState has stopped admitting new host
-    // callbacks. disconnect() is deliberately synchronous.
+    // Call after CallbackState stops admitting callbacks; disconnect is synchronous.
     [[nodiscard]] bool close(std::chrono::steady_clock::time_point deadline) noexcept;
 
     [[nodiscard]] bool initialized() const noexcept { return initialized_; }
