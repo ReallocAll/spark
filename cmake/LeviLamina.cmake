@@ -362,6 +362,29 @@ endif ()
 add_test(NAME spark_levilamina_command_lifecycle_test COMMAND spark_levilamina_command_lifecycle_test)
 set_tests_properties(spark_levilamina_command_lifecycle_test PROPERTIES TIMEOUT 30)
 
+add_executable(spark_levilamina_shutdown_policy_test
+        tests/levilamina/shutdown_policy_test.cpp
+        src/platform/levilamina/cleanup_deadline_guard.cpp)
+target_include_directories(spark_levilamina_shutdown_policy_test PRIVATE
+        "${_spark_ll_server_include}"
+        "${_spark_ll_common_include}"
+        ${_spark_ll_dependency_includes}
+        "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_compile_definitions(spark_levilamina_shutdown_policy_test PRIVATE LL_PLAT_S)
+set_target_properties(spark_levilamina_shutdown_policy_test PROPERTIES
+        CXX_STANDARD 20
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+        MSVC_RUNTIME_LIBRARY "MultiThreadedDLL"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+        ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+        PDB_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+if (CMAKE_CXX_COMPILER_ID MATCHES "Clang|MSVC")
+    target_compile_options(spark_levilamina_shutdown_policy_test PRIVATE /utf-8 /permissive- /EHsc /Zc:__cplusplus)
+endif ()
+add_test(NAME spark_levilamina_shutdown_policy_test COMMAND spark_levilamina_shutdown_policy_test)
+set_tests_properties(spark_levilamina_shutdown_policy_test PROPERTIES TIMEOUT 30)
+
 add_executable(spark_levilamina_publication_boundary_test
         tests/levilamina/publication_boundary_test.cpp
         src/platform/levilamina/command_lifecycle.cpp

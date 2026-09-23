@@ -26,6 +26,7 @@
 #include "ll/api/mod/NativeMod.h"
 #include "ll/api/mod/RegisterHelper.h"
 #include "ll/api/service/Bedrock.h"
+#include "ll/api/service/GamingStatus.h"
 #include "ll/api/thread/ServerThreadExecutor.h"
 #include "mc/server/commands/Command.h"
 #include "mc/server/commands/CommandOrigin.h"
@@ -271,43 +272,14 @@ public:
     }
 };
 
-class SparkMod final {
-public:
-    bool load();
-    bool enable();
-    bool disable();
-    bool unload();
+#include "spark_mod_decl.inc"
 
-private:
-    using Executor = ll::thread::ServerThreadExecutor;
-    using CallbackState = spark::levilamina::CallbackState;
-    using CleanupDeadlineGuard = spark::levilamina::CleanupDeadlineGuard;
+ll::GamingStatus SparkMod::gamingStatus()
+{
+    return ll::getGamingStatus();
+}
 
-    [[nodiscard]] ll::io::Logger &logger() const noexcept;
-    [[nodiscard]] bool registerCommand();
-    [[nodiscard]] bool confirmCommandRegistryCleanup();
-    [[nodiscard]] bool runAllocatorProbe();
-    [[nodiscard]] bool closeResources(bool require_server_thread);
-    [[nodiscard]] bool admitRuntimeClose() const;
-    void resetSessionState() noexcept;
-    void reportException(char const *operation, std::exception_ptr exception) const noexcept;
-
-    std::weak_ptr<ll::mod::NativeMod> owner_;
-    std::weak_ptr<ll::io::Logger> logger_;
-    std::shared_ptr<CallbackState> callback_state_;
-    std::unique_ptr<CleanupDeadlineGuard> cleanup_guard_;
-    std::shared_ptr<spark::levilamina::StartupClock> startup_clock_;
-    std::shared_ptr<CommandLifetimeGuard> command_lifetime_;
-    std::shared_ptr<CommandContext> command_context_;
-    std::shared_ptr<HostSession> host_session_;
-    std::shared_ptr<Executor> executor_;
-    ll::event::ListenerPtr tick_listener_;
-    std::shared_ptr<std::atomic_bool> tick_warning_once_;
-    std::atomic_bool enabled_{false};
-    bool loaded_ = false;
-    bool command_registered_ = false;
-    PublicationBoundary publication_boundary_;
-};
+#include "spark_mod_disable.inc"
 
 ll::io::Logger &SparkMod::logger() const noexcept
 {
@@ -834,19 +806,6 @@ bool SparkMod::closeResources(bool require_server_thread)
         tick_warning_once_.reset();
         cleanup_guard_.reset();
         return true;
-    }
-    catch (...) {
-        CleanupDeadlineGuard::terminateOnTimeout();
-    }
-}
-
-bool SparkMod::disable()
-{
-    if (!enabled_.load(std::memory_order_acquire)) {
-        return true;
-    }
-    try {
-        return closeResources(true);
     }
     catch (...) {
         CleanupDeadlineGuard::terminateOnTimeout();

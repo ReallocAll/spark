@@ -33,6 +33,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Complete LeviLamina cleanup during automatic server shutdown to prevent a
+  process-exit crash, while retaining server-thread checks for runtime reloads.
+
 - Avoid reporting zero world counts when a host metadata read becomes unavailable.
 
 ## [0.6.0][0.6.0] - 2026-09-17
