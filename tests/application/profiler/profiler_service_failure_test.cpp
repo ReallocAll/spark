@@ -41,10 +41,7 @@ struct ProfilerServiceTestAccess {
         return service.session_type_ == ProfilerService::SessionType::AutoForeground;
     }
 
-    static void ageAutoTrigger(ProfilerService &service)
-    {
-        service.auto_profiler_threshold_since_ms_ = 1;
-    }
+    static void ageAutoTrigger(ProfilerService &service) { service.auto_profiler_threshold_since_ms_ = 1; }
 
     static int activeInterval(const ProfilerService &service) { return service.profiler_.options().interval_ms; }
     static std::int64_t activeTimeout(const ProfilerService &service)
@@ -225,7 +222,6 @@ void test_export_metadata_exception_restores_background()
     run.store(false, std::memory_order_release);
     worker.join();
 }
-
 
 void test_foreground_cancel_restores_background_but_background_cancel_suppresses_it()
 {
