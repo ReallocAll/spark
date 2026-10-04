@@ -125,8 +125,7 @@ private:
     bool writeFile(std::FILE *file, const void *data, std::size_t size);
     bool syncFile(std::FILE *file);
     bool closeFile(std::FILE *file);
-    bool renameFile(const std::filesystem::path &from, const std::filesystem::path &to, std::error_code &ec,
-                    bool replace_existing = false);
+    bool renameFile(const std::filesystem::path &from, const std::filesystem::path &to, std::error_code &ec);
     void producerDone() noexcept;
     void reportJournalDegradation(std::string_view cause) noexcept;
     void markWorkerExited() noexcept;
