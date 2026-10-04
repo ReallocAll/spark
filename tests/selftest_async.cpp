@@ -139,7 +139,8 @@ bool verifyBackgroundCommandValidation(std::uint64_t worker_tid)
     service.cmdCancel(sender);
     service.onTick(50.0);
     if (!service.running() || !service.isBackgroundRunning()) {
-        std::fprintf(stderr, "background validation: cancelled foreground profile did not restore background profiling\n");
+        std::fprintf(stderr,
+                     "background validation: cancelled foreground profile did not restore background profiling\n");
         return false;
     }
 
