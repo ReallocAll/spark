@@ -371,8 +371,8 @@ void test_failed_auto_start_does_not_consume_cooldown()
     auto_config.interval_ms = 2;
     auto_config.cooldown_seconds = 300;
 
-    spark::ProfilerService service(statistics, {}, {}, {}, {}, {}, false, 10, "by-pool", "default", trusted,
-                                   dispatcher, metadata, notifier, auto_config);
+    spark::ProfilerService service(statistics, {}, {}, {}, {}, {}, false, 10, "by-pool", "default", trusted, dispatcher,
+                                   metadata, notifier, auto_config);
     service.setMainThreadId(worker_tid.load(std::memory_order_acquire));
 
     spark::ProfilerServiceTestAccess::ageAutoTrigger(service);
