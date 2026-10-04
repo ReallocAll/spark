@@ -48,8 +48,6 @@ void ProfilerService::cmdStart(CommandSender &sender, const Arguments &args)
         return;
     }
 
-    const bool had_background_session = profiler_.running() && session_type_ == SessionType::Background;
-    const bool previous_background_suppressed = background_suppressed_;
     if (profiler_.running()) {
         if (session_type_ != SessionType::Background) {
             cmdInfo(sender);
@@ -82,7 +80,6 @@ void ProfilerService::cmdStart(CommandSender &sender, const Arguments &args)
     catch (const std::exception &error) {
         session_type_ = SessionType::None;
         background_started_ = false;
-        background_suppressed_ = had_background_session ? false : previous_background_suppressed;
         background_retry_delay_s_ = 0;
         next_background_retry_ms_ = 0;
         sender.sendErrorMessage("Couldn't start the profiler: metadata collection failed ({})", error.what());
@@ -91,7 +88,6 @@ void ProfilerService::cmdStart(CommandSender &sender, const Arguments &args)
     catch (...) {
         session_type_ = SessionType::None;
         background_started_ = false;
-        background_suppressed_ = had_background_session ? false : previous_background_suppressed;
         background_retry_delay_s_ = 0;
         next_background_retry_ms_ = 0;
         sender.sendErrorMessage("Couldn't start the profiler: metadata collection failed");
@@ -118,7 +114,6 @@ void ProfilerService::cmdStart(CommandSender &sender, const Arguments &args)
         }
         session_type_ = SessionType::None;
         background_started_ = false;
-        background_suppressed_ = had_background_session ? false : previous_background_suppressed;
         background_retry_delay_s_ = 0;
         next_background_retry_ms_ = 0;
         sender.sendErrorMessage("Couldn't start the profiler: {}", error);
@@ -128,8 +123,8 @@ void ProfilerService::cmdStart(CommandSender &sender, const Arguments &args)
     start_sender_name_ = sender.getName();
     start_sender_is_player_ = sender.isPlayer();
     start_sender_unique_id_ = start_sender_is_player_ ? sender.getUniqueId() : std::string{};
-    session_type_ = SessionType::Foreground;
-    background_suppressed_ = background_enabled_;
+    session_type_ = SessionType::ManualForeground;
+    background_started_ = false;
 
     if (timeout > 0 && !armProfilerTimeout(timeout)) {
         resetProfilerTimeout();
@@ -137,8 +132,6 @@ void ProfilerService::cmdStart(CommandSender &sender, const Arguments &args)
         const bool cancelled = profiler_.cancel(cancel_error);
         session_type_ = SessionType::None;
         background_started_ = false;
-        background_suppressed_ = had_background_session ? false : previous_background_suppressed;
-        restart_background_after_export_ = false;
         if (!cancelled && !cancel_error.empty()) {
             sender.sendErrorMessage("Couldn't start the profiler: timeout setup failed ({}); cleanup failed: {}",
                                     timeout, cancel_error);
@@ -213,6 +206,12 @@ void ProfilerService::cmdStop(CommandSender &sender, const Arguments &args)
             sender.sendMessage("Unable to discard the failed session safely: {}", cleanup_error);
             return;
         }
+        const SessionType stopped_session = session_type_;
+        session_type_ = SessionType::None;
+        background_started_ = false;
+        if (stopped_session == SessionType::AutoForeground) {
+            beginAutoProfilerCooldown();
+        }
         sender.sendMessage("{}Allocation profiler status: FAILED", kColorRed);
         sender.sendMessage("Incomplete profile data was discarded: {}", backend_error);
         sender.sendMessage("The allocation profiler backend is ready for a new session.");
@@ -227,9 +226,6 @@ void ProfilerService::cmdStop(CommandSender &sender, const Arguments &args)
     sender.sendMessage("{}Stopping the profiler and finalizing results, please wait...", kColorGold);
     resetProfilerTimeout();
     closeViewerSocket();
-    if (background_enabled_) {
-        restart_background_after_export_ = true;
-    }
     const bool sender_is_player = sender.isPlayer();
     finishProfiler(sender.getName(), sender_is_player, sender_is_player ? sender.getUniqueId() : std::string{}, save,
                    comment);
@@ -282,6 +278,9 @@ void ProfilerService::cmdInfo(CommandSender &sender)
         sender.sendMessage("It was started automatically when spark enabled and has been "
                            "running in the background for {}.",
                            spark::formatDuration(ran));
+    }
+    else if (!allocation && session_type_ == SessionType::AutoForeground) {
+        sender.sendMessage("It was started automatically after sustained high MSPT.");
     }
     if (allocation) {
         if (profiler_.options().alloc_live_only) {
@@ -366,6 +365,7 @@ void ProfilerService::cmdCancel(CommandSender &sender)
     }
     std::string backend_error;
     const bool failed = profiler_.backendFailure(backend_error);
+    const SessionType cancelled_session = session_type_;
     resetProfilerTimeout();
     std::string error;
     if (!profiler_.cancel(error)) {
@@ -374,7 +374,14 @@ void ProfilerService::cmdCancel(CommandSender &sender)
     }
     session_type_ = SessionType::None;
     background_started_ = false;
-    background_suppressed_ = background_enabled_;
+    if (cancelled_session == SessionType::Background) {
+        // Cancelling the background session is an explicit user pause. Foreground
+        // cancellation is only a temporary interruption and must not suppress it.
+        background_suppressed_ = background_enabled_;
+    }
+    else if (cancelled_session == SessionType::AutoForeground) {
+        beginAutoProfilerCooldown();
+    }
     closeViewerSocket();
     if (failed) {
         sender.sendMessage("{}Failed allocation profile data was discarded: {}", kColorRed, backend_error);
