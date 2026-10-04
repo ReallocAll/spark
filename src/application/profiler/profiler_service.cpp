@@ -37,8 +37,8 @@ ProfilerService::ProfilerService(StatisticsService &statistics, std::string bds_
       exporter_(std::move(profile_storage_dir), bytebin_url, viewer_url), background_enabled_(background_enabled),
       background_interval_(background_interval), background_thread_grouper_(std::move(background_thread_grouper)),
       background_thread_dumper_(std::move(background_thread_dumper)), auto_profiler_(std::move(auto_profiler)),
-      bytebin_url_(std::move(bytebin_url)),
-      viewer_url_(std::move(viewer_url)), bytesocks_host_(std::move(bytesocks_host)), trusted_viewers_(trusted_viewers)
+      bytebin_url_(std::move(bytebin_url)), viewer_url_(std::move(viewer_url)),
+      bytesocks_host_(std::move(bytesocks_host)), trusted_viewers_(trusted_viewers)
 {
     viewer_open_ = std::make_unique<ProfilerOpenOrchestrator>(
         profiler_, statistics_, bds_executable_sha256_, bytebin_url_, viewer_url_, bytesocks_host_, trusted_viewers_,
@@ -206,7 +206,6 @@ bool ProfilerService::armProfilerTimeout(std::int64_t timeout_seconds) noexcept
     });
 }
 
-
 void ProfilerService::notifyAutoProfiler(const std::string &message) noexcept
 {
     try {
@@ -249,8 +248,9 @@ bool ProfilerService::startAutoProfilerSession() noexcept
     const bool timer_stopped = resetProfilerTimeoutUntil(replacement_deadline);
     const bool viewer_stopped = !viewer_open_ || viewer_open_->retireUntil(replacement_deadline);
     if (!timer_stopped || !viewer_stopped) {
-        notifyAutoProfiler(!timer_stopped ? "Automatic MSPT profiler deferred: previous profiler timer is still stopping."
-                                         : "Automatic MSPT profiler deferred: previous live viewer is still closing.");
+        notifyAutoProfiler(
+            !timer_stopped ? "Automatic MSPT profiler deferred: previous profiler timer is still stopping."
+                           : "Automatic MSPT profiler deferred: previous live viewer is still closing.");
         beginAutoProfilerCooldown();
         return false;
     }
@@ -358,8 +358,8 @@ bool ProfilerService::processAutoProfilerTrigger(double mspt) noexcept
         auto_profiler_threshold_since_ms_ = 0;
         return false;
     }
-    if (!std::isfinite(auto_profiler_.mspt_threshold) || auto_profiler_.mspt_threshold <= 0.0 ||
-        !std::isfinite(mspt) || mspt < auto_profiler_.mspt_threshold) {
+    if (!std::isfinite(auto_profiler_.mspt_threshold) || auto_profiler_.mspt_threshold <= 0.0 || !std::isfinite(mspt) ||
+        mspt < auto_profiler_.mspt_threshold) {
         auto_profiler_threshold_since_ms_ = 0;
         return false;
     }
