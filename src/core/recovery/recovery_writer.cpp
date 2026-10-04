@@ -381,29 +381,13 @@ bool RecoveryWriter::closeFile(std::FILE *file)
     return allowed && closed;
 }
 
-bool RecoveryWriter::renameFile(const std::filesystem::path &from, const std::filesystem::path &to,
-                                std::error_code &ec, bool replace_existing)
+bool RecoveryWriter::renameFile(const std::filesystem::path &from, const std::filesystem::path &to, std::error_code &ec)
 {
     if (!allowIo(IoOperation::Rename)) {
         ec = std::make_error_code(std::errc::io_error);
         return false;
     }
-#ifdef _WIN32
-    if (replace_existing) {
-        if (MoveFileExW(from.c_str(), to.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) == 0) {
-            ec = std::error_code(static_cast<int>(GetLastError()), std::system_category());
-        }
-        else {
-            ec.clear();
-        }
-    }
-    else {
-        std::filesystem::rename(from, to, ec);
-    }
-#else
-    (void)replace_existing;
     std::filesystem::rename(from, to, ec);
-#endif
     if (!ec) {
         allowIo(IoOperation::RenameComplete);
     }
@@ -570,7 +554,7 @@ bool RecoveryWriter::writeMetadataSnapshot()
     }
 
     std::error_code ec;
-    if (!renameFile(tmp_path, final_path, ec, true)) {
+    if (!renameFile(tmp_path, final_path, ec)) {
         std::filesystem::remove(tmp_path, ec);
         return false;
     }
