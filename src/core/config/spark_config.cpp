@@ -399,9 +399,8 @@ bool SparkConfig::load()
         .auto_profiler_enabled = result["autoProfiler"].value<bool>().value_or(auto_profiler_enabled),
         .auto_profiler_mspt_threshold =
             numericConfigValue(result, "autoProfilerMsptThreshold").value_or(auto_profiler_mspt_threshold),
-        .auto_profiler_trigger_duration_seconds =
-            result["autoProfilerTriggerDuration"].value<std::int64_t>().value_or(
-                auto_profiler_trigger_duration_seconds),
+        .auto_profiler_trigger_duration_seconds = result["autoProfilerTriggerDuration"].value<std::int64_t>().value_or(
+            auto_profiler_trigger_duration_seconds),
         .auto_profiler_duration_seconds =
             result["autoProfilerDuration"].value<std::int64_t>().value_or(auto_profiler_duration_seconds),
         .auto_profiler_interval = result["autoProfilerInterval"].value<std::int64_t>().value_or(auto_profiler_interval),
