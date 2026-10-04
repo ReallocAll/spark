@@ -400,11 +400,11 @@ bool SparkConfig::load()
         .auto_profiler_mspt_threshold =
             numericConfigValue(result, "autoProfilerMsptThreshold").value_or(auto_profiler_mspt_threshold),
         .auto_profiler_trigger_duration_seconds =
-            result["autoProfilerTriggerDuration"].value<std::int64_t>().value_or(auto_profiler_trigger_duration_seconds),
+            result["autoProfilerTriggerDuration"].value<std::int64_t>().value_or(
+                auto_profiler_trigger_duration_seconds),
         .auto_profiler_duration_seconds =
             result["autoProfilerDuration"].value<std::int64_t>().value_or(auto_profiler_duration_seconds),
-        .auto_profiler_interval =
-            result["autoProfilerInterval"].value<std::int64_t>().value_or(auto_profiler_interval),
+        .auto_profiler_interval = result["autoProfilerInterval"].value<std::int64_t>().value_or(auto_profiler_interval),
         .auto_profiler_cooldown_seconds =
             result["autoProfilerCooldown"].value<std::int64_t>().value_or(auto_profiler_cooldown_seconds),
         .auto_profiler_thread_grouper =
@@ -428,14 +428,11 @@ bool SparkConfig::load()
         invalid_type("bytesocksHost", std::string{}) || invalid_type("backgroundProfiler", bool{}) ||
         invalid_type("backgroundProfilerThreadGrouper", std::string{}) ||
         invalid_type("backgroundProfilerThreadDumper", std::string{}) || invalid_type("autoProfiler", bool{}) ||
-        invalid_number("autoProfilerMsptThreshold") ||
-        invalid_type("autoProfilerTriggerDuration", std::int64_t{}) ||
-        invalid_type("autoProfilerDuration", std::int64_t{}) ||
-        invalid_type("autoProfilerInterval", std::int64_t{}) ||
+        invalid_number("autoProfilerMsptThreshold") || invalid_type("autoProfilerTriggerDuration", std::int64_t{}) ||
+        invalid_type("autoProfilerDuration", std::int64_t{}) || invalid_type("autoProfilerInterval", std::int64_t{}) ||
         invalid_type("autoProfilerCooldown", std::int64_t{}) ||
         invalid_type("autoProfilerThreadGrouper", std::string{}) ||
-        invalid_type("autoProfilerThreadDumper", std::string{}) ||
-        invalid_type("allocationRateMetrics", bool{}) ||
+        invalid_type("autoProfilerThreadDumper", std::string{}) || invalid_type("allocationRateMetrics", bool{}) ||
         invalid_type("serverPropertiesAdditionalKeys", std::string{}) ||
         invalid_type("disableResponseBroadcast", bool{}) ||
         invalid_type("backgroundProfilerInterval", std::int64_t{})) {
