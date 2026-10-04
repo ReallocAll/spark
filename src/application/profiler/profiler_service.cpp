@@ -266,7 +266,6 @@ bool ProfilerService::startAutoProfilerSession() noexcept
                 background_started_ = false;
             }
             notifyAutoProfiler("Automatic MSPT profiler could not replace the background profiler: " + cancel_error);
-            beginAutoProfilerCooldown();
             return false;
         }
         session_type_ = SessionType::None;
@@ -283,7 +282,6 @@ bool ProfilerService::startAutoProfilerSession() noexcept
         else {
             notifyAutoProfiler("Automatic MSPT profiler deferred: previous live viewer is still closing.");
         }
-        beginAutoProfilerCooldown();
         return false;
     }
     resetProfilerTimeout();
@@ -294,12 +292,10 @@ bool ProfilerService::startAutoProfilerSession() noexcept
     }
     catch (const std::exception &error) {
         notifyAutoProfiler(std::string("Automatic MSPT profiler could not collect metadata: ") + error.what());
-        beginAutoProfilerCooldown();
         return false;
     }
     catch (...) {
         notifyAutoProfiler("Automatic MSPT profiler could not collect metadata.");
-        beginAutoProfilerCooldown();
         return false;
     }
 
@@ -329,7 +325,6 @@ bool ProfilerService::startAutoProfilerSession() noexcept
     // main thread a second bounded-stop path.
     if (!armProfilerTimeout(options.timeout_seconds)) {
         notifyAutoProfiler("Automatic MSPT profiler could not arm its bounded timeout.");
-        beginAutoProfilerCooldown();
         return false;
     }
 
@@ -359,7 +354,6 @@ bool ProfilerService::startAutoProfilerSession() noexcept
         }
         session_type_ = SessionType::None;
         background_started_ = false;
-        beginAutoProfilerCooldown();
         notifyAutoProfiler("Automatic MSPT profiler could not start: " + error);
         return false;
     }
