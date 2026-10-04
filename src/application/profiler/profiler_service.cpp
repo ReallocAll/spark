@@ -264,7 +264,6 @@ bool ProfilerService::startAutoProfilerSession() noexcept
             if (!profiler_.running()) {
                 session_type_ = SessionType::None;
                 background_started_ = false;
-                closeViewerSocket();
             }
             notifyAutoProfiler("Automatic MSPT profiler could not replace the background profiler: " + cancel_error);
             beginAutoProfilerCooldown();

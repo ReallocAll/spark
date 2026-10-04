@@ -72,9 +72,13 @@ void ProfilerService::cmdStart(CommandSender &sender, const Arguments &args)
                 }
                 session_type_ = SessionType::None;
                 background_started_ = false;
-                closeViewerSocket();
             }
-            sender.sendErrorMessage("Couldn't stop the existing profiler safely: {}", cancel_error);
+            if (interrupted_session == SessionType::Background) {
+                sender.sendErrorMessage("Couldn't stop the background profiler safely: {}", cancel_error);
+            }
+            else {
+                sender.sendErrorMessage("Couldn't stop the automatic MSPT profiler safely: {}", cancel_error);
+            }
             return;
         }
         if (interrupted_session == SessionType::AutoForeground) {
