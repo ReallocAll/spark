@@ -248,8 +248,9 @@ bool ProfilerService::startAutoProfilerSession() noexcept
     const bool timer_stopped = resetProfilerTimeoutUntil(replacement_deadline);
     const bool viewer_stopped = !viewer_open_ || viewer_open_->retireUntil(replacement_deadline);
     if (!timer_stopped || !viewer_stopped) {
-        notifyAutoProfiler(!timer_stopped ? "Automatic MSPT profiler deferred: previous profiler timer is still stopping."
-                                          : "Automatic MSPT profiler deferred: previous live viewer is still closing.");
+        notifyAutoProfiler(!timer_stopped
+                         ? "Automatic MSPT profiler deferred: previous profiler timer is still stopping."
+                         : "Automatic MSPT profiler deferred: previous live viewer is still closing.");
         beginAutoProfilerCooldown();
         return false;
     }
