@@ -195,6 +195,7 @@ private:
     void requestProfilerTimeoutStop() noexcept;
     bool resetProfilerTimeoutUntil(std::chrono::steady_clock::time_point deadline) noexcept;
     bool armProfilerTimeout(std::int64_t timeout_seconds) noexcept;
+    void restoreProfilerTimeoutAfterFailedStop() noexcept;
     ExportContext captureLiveContext(std::int64_t now_ms);
     std::string buildLiveSamplerData(const ExportContext &context);
     bool viewerOpenPending() const { return viewer_open_ && viewer_open_->viewerOpenPending(); }

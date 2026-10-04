@@ -63,6 +63,7 @@ void ProfilerService::cmdStart(CommandSender &sender, const Arguments &args)
         resetProfilerTimeout();
         std::string cancel_error;
         if (!profiler_.cancel(cancel_error)) {
+            restoreProfilerTimeoutAfterFailedStop();
             sender.sendErrorMessage("Couldn't stop the existing profiler safely: {}", cancel_error);
             return;
         }
@@ -139,6 +140,9 @@ void ProfilerService::cmdStart(CommandSender &sender, const Arguments &args)
         resetProfilerTimeout();
         std::string cancel_error;
         const bool cancelled = profiler_.cancel(cancel_error);
+        if (!cancelled) {
+            restoreProfilerTimeoutAfterFailedStop();
+        }
         session_type_ = SessionType::None;
         background_started_ = false;
         if (!cancelled && !cancel_error.empty()) {
@@ -378,6 +382,7 @@ void ProfilerService::cmdCancel(CommandSender &sender)
     resetProfilerTimeout();
     std::string error;
     if (!profiler_.cancel(error)) {
+        restoreProfilerTimeoutAfterFailedStop();
         sender.sendMessage("{}Unable to cancel the profiler safely: {}", kColorRed, error);
         return;
     }

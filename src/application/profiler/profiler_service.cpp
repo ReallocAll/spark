@@ -206,6 +206,31 @@ bool ProfilerService::armProfilerTimeout(std::int64_t timeout_seconds) noexcept
     });
 }
 
+void ProfilerService::restoreProfilerTimeoutAfterFailedStop() noexcept
+{
+    if (!profiler_.running()) {
+        return;
+    }
+
+    const std::int64_t auto_end_ms = profiler_.autoEndTimeMs();
+    if (auto_end_ms <= 0) {
+        return;
+    }
+
+    const std::int64_t now_ms = nowMs();
+    const std::int64_t remaining_ms = auto_end_ms > now_ms ? auto_end_ms - now_ms : 0;
+    const std::int64_t remaining_seconds = remaining_ms / 1000;
+    if (remaining_seconds > 0 && armProfilerTimeout(remaining_seconds)) {
+        return;
+    }
+
+    // The independent timeout is part of the bounded-profile guarantee. If it
+    // cannot be restored without extending the original deadline, stop sampling
+    // immediately and publish a completion for the next main-thread tick.
+    profiler_.requestStop();
+    timeout_completion_pending_.store(timeout_generation_.load(std::memory_order_acquire), std::memory_order_release);
+}
+
 void ProfilerService::notifyAutoProfiler(const std::string &message) noexcept
 {
     try {
@@ -319,9 +344,13 @@ bool ProfilerService::startAutoProfilerSession() noexcept
         resetProfilerTimeout();
         if (profiler_.running()) {
             try {
-                profiler_.cancel();
+                std::string cleanup_error;
+                if (!profiler_.cancel(cleanup_error)) {
+                    restoreProfilerTimeoutAfterFailedStop();
+                }
             }
             catch (...) {  // NOLINT(bugprone-empty-catch): startup cleanup is best effort.
+                restoreProfilerTimeoutAfterFailedStop();
             }
         }
         session_type_ = SessionType::None;
@@ -422,6 +451,9 @@ void ProfilerService::finishProfiler(const std::string &sender_name, bool sender
             std::string resume_error;
             profiler_.resumePersistentAllocationCounting(resume_error);
             finish_without_export();
+        }
+        else {
+            restoreProfilerTimeoutAfterFailedStop();
         }
         if (backend_failed) {
             notify_best_effort(sender_name,
