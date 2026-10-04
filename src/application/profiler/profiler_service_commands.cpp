@@ -63,7 +63,17 @@ void ProfilerService::cmdStart(CommandSender &sender, const Arguments &args)
         resetProfilerTimeout();
         std::string cancel_error;
         if (!profiler_.cancel(cancel_error)) {
-            restoreProfilerTimeoutAfterFailedStop();
+            if (profiler_.running()) {
+                restoreProfilerTimeoutAfterFailedStop();
+            }
+            else {
+                if (interrupted_session == SessionType::AutoForeground) {
+                    beginAutoProfilerCooldown();
+                }
+                session_type_ = SessionType::None;
+                background_started_ = false;
+                closeViewerSocket();
+            }
             sender.sendErrorMessage("Couldn't stop the existing profiler safely: {}", cancel_error);
             return;
         }
@@ -379,24 +389,33 @@ void ProfilerService::cmdCancel(CommandSender &sender)
     std::string backend_error;
     const bool failed = profiler_.backendFailure(backend_error);
     const SessionType cancelled_session = session_type_;
+    const auto settle_cancelled_session = [this, cancelled_session]() noexcept {
+        session_type_ = SessionType::None;
+        background_started_ = false;
+        if (cancelled_session == SessionType::Background) {
+            // Cancelling the background session is an explicit user pause. Foreground
+            // cancellation is only a temporary interruption and must not suppress it.
+            background_suppressed_ = background_enabled_;
+        }
+        else if (cancelled_session == SessionType::AutoForeground) {
+            beginAutoProfilerCooldown();
+        }
+        closeViewerSocket();
+    };
+
     resetProfilerTimeout();
     std::string error;
     if (!profiler_.cancel(error)) {
-        restoreProfilerTimeoutAfterFailedStop();
+        if (profiler_.running()) {
+            restoreProfilerTimeoutAfterFailedStop();
+        }
+        else {
+            settle_cancelled_session();
+        }
         sender.sendMessage("{}Unable to cancel the profiler safely: {}", kColorRed, error);
         return;
     }
-    session_type_ = SessionType::None;
-    background_started_ = false;
-    if (cancelled_session == SessionType::Background) {
-        // Cancelling the background session is an explicit user pause. Foreground
-        // cancellation is only a temporary interruption and must not suppress it.
-        background_suppressed_ = background_enabled_;
-    }
-    else if (cancelled_session == SessionType::AutoForeground) {
-        beginAutoProfilerCooldown();
-    }
-    closeViewerSocket();
+    settle_cancelled_session();
     if (failed) {
         sender.sendMessage("{}Failed allocation profile data was discarded: {}", kColorRed, backend_error);
         sender.sendMessage("The allocation profiler backend is ready for a new session.");

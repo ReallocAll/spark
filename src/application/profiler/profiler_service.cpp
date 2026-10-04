@@ -261,6 +261,11 @@ bool ProfilerService::startAutoProfilerSession() noexcept
         resetProfilerTimeout();
         std::string cancel_error;
         if (!profiler_.cancel(cancel_error)) {
+            if (!profiler_.running()) {
+                session_type_ = SessionType::None;
+                background_started_ = false;
+                closeViewerSocket();
+            }
             notifyAutoProfiler("Automatic MSPT profiler could not replace the background profiler: " + cancel_error);
             beginAutoProfilerCooldown();
             return false;
