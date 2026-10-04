@@ -49,16 +49,25 @@ void ProfilerService::cmdStart(CommandSender &sender, const Arguments &args)
     }
 
     if (profiler_.running()) {
-        if (session_type_ != SessionType::Background) {
+        const SessionType interrupted_session = session_type_;
+        if (interrupted_session == SessionType::ManualForeground || interrupted_session == SessionType::None) {
             cmdInfo(sender);
             return;
         }
-        sender.sendMessage("Stopping the background profiler before starting... please wait");
+        if (interrupted_session == SessionType::Background) {
+            sender.sendMessage("Stopping the background profiler before starting... please wait");
+        }
+        else {
+            sender.sendMessage("Stopping the automatic MSPT profiler before starting... please wait");
+        }
         resetProfilerTimeout();
         std::string cancel_error;
         if (!profiler_.cancel(cancel_error)) {
-            sender.sendErrorMessage("Couldn't stop the background profiler safely: {}", cancel_error);
+            sender.sendErrorMessage("Couldn't stop the existing profiler safely: {}", cancel_error);
             return;
+        }
+        if (interrupted_session == SessionType::AutoForeground) {
+            beginAutoProfilerCooldown();
         }
         session_type_ = SessionType::None;
         background_started_ = false;
